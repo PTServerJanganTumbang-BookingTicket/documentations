@@ -1,4 +1,4 @@
-# Meeting Agenda — Rusuh Booking Tiket
+# Meeting Agenda — Rusuh Booking Tiket First Clarification
 ## Requirement Clarification — PO & Team
 **Date:** 2026-10-14  
 **Format:** Setiap pertanyaan memiliki opsi atau concern teknis — perlu keputusan dari PO/klien, bukan asumsi sepihak dari vendor.
@@ -13,34 +13,25 @@
 
 *Konteks proyek dan constraint teknis — set the stage sebelum masuk detail.*
 
-**UA-1.** 🟡 "Standard Development" itu hanya codebase, atau mencakup SDLC + project management? Perusahaan mana yang dimaksud (JST atau Telkomsel)?
+**UA-1.** 🟡 Penerapan Development sesuai "Standard" itu hanya codebase, atau mencakup SDLC + project management? Perusahaan mana yang dimaksud (PT Server Jangan Tumbang atau Telkomsel)?
 > **→ Keputusan yang dibutuhkan:** definisi deliverable dan konteks perusahaan.
 
 **UA-2.** 🔴 TechRadar — apakah teknologi, framework, tools, dan library di FE/BE/Mobile dibebaskan, atau ada constraint dari klien?
 > **→ Keputusan yang dibutuhkan:** ada mandatory tech stack atau bebas?
 
-**UA-3.** 🔴 Berapa concurrent booking session yang perlu didukung? Ada angka target atau scale by server spec?
-> **→ Keputusan yang dibutuhkan:** angka target load.
-
-**UA-4.** 🔴 Bagaimana definisi "PHP" (tidak menepati janji / di-ghosting)? Berlaku di fase antrian, atau saat sudah masuk detail booking?
+**UA-3.** 🔴 Bagaimana definisi "PHP" (app kita tidak menepati janji)? Berlaku di fase antrian, atau saat sudah masuk detail booking?
 > *Ini salah satu pertanyaan paling penting secara arsitektur — jangan lewat.*
 > **→ Keputusan yang dibutuhkan:** definisi PHP dan di fase mana berlakunya.
 
-**UA-5.** 🔴 Worst case kalau server crash atau service mati di tengah transaksi — recovery apa yang diharapkan?
+**UA-4.** 🔴 Worst case kalau server crash atau service mati di tengah transaksi — recovery apa yang diharapkan?
 > *Concern: ada tradeoff antara at-least-once (mungkin double booking) vs at-most-once (mungkin lost booking). Ini keputusan bisnis.*
 > **→ Keputusan yang dibutuhkan:** recovery behavior yang diharapkan.
-
-**UA-6.** 🟡 "Booking" yang dinilai itu keseluruhan journey (antre → pilih tiket → bayar), atau spesifik use case booking saja?
-> **→ Keputusan yang dibutuhkan:** scope exact yang dinilai.
 
 **UA-7.** 🔴 Karena payment gateway third-party out of scope, mekanisme pembayaran yang direkomendasikan seperti apa? User input nominal sesuai harga, ada mock flow, atau ada cara lain?
 > **→ Keputusan yang dibutuhkan:** mekanisme mock payment yang acceptable.
 
 **UA-8.** 🔴 Email service menggunakan real provider (SendGrid, SES, dll) atau mock/console log cukup untuk assessment?
 > **→ Keputusan yang dibutuhkan:** real email atau mock acceptable.
-
-**UA-9.** 🔴 Bagaimana cara seed test data untuk event dan tiket? SQL script, API endpoint, atau hardcoded?
-> **→ Keputusan yang dibutuhkan:** mekanisme seed data yang acceptable.
 
 **UA-10.** 🟡 Kalau backend bermasalah, apa yang boleh ditampilkan ke user? Ada ketentuan dari NFR-01?
 > *Concern: "halaman fallback statis" bisa dari CDN atau service worker. Tapi pesan yang ditampilkan dan apakah boleh ada retry mechanism perlu keputusan.*
