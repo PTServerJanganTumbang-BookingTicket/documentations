@@ -1,0 +1,124 @@
+# Update terhadap Requirement di Tender Rusuh Booking Ticket
+
+**Tanggal Update**: Oktober 2026  
+**Dokumen Referensi**: Tender Rusuh Booking Ticket.pdf  
+**Disusun oleh**: Tim SJT
+
+---
+
+## 1. Latar Belakang
+
+Setelah melakukan klarifikasi dengan CEO, CTO, dan Principal, terdapat beberapa perubahan pada
+dokumen requirement yang perlu dicatat dan disosialisasikan kepada seluruh tim teknis. Perubahan
+ini bersifat resmi dan menggantikan poin-poin terkait pada dokumen asli tender.
+
+Klarifikasi dilakukan atas dasar penilaian ulang terhadap pengalaman pengguna, kebutuhan
+aksesibilitas platform, dan strategi pencegahan scalping yang lebih efektif secara teknis.
+
+---
+
+## 2. Perubahan Login / Autentikasi
+
+### Status Sebelumnya
+
+Dokumen requirement asli tidak mendefinisikan requirement login secara eksplisit, namun
+beberapa business rule (terutama BR-07) secara implisit mengasumsikan adanya identitas
+customer yang terikat pada akun sebelum bergabung ke antrian.
+
+### Keputusan Baru
+
+Tim SJT telah menyampaikan analisis mengenai **pros dan cons** dari skema user tidak wajib
+melakukan login, dan dari CEO telah mengkonfirmasi bahwa:
+
+> **Requirement login bersifat opsional.** Customer dapat bergabung ke antrian dan melakukan
+> pembelian tiket tanpa harus memiliki atau masuk ke akun terlebih dahulu.
+
+### Perbandingan Skema
+
+| Aspek | Login Wajib | Login Opsional (Keputusan Baru) |
+|---|---|---|
+| Friction masuk antrian | Tinggi — harus registrasi/login dulu | Rendah — langsung masuk antrian |
+| Enforcement NIK | Di akun (sebelum antrian) | Di transaksi (saat booking) |
+| Pencegahan multi-antrian | Via satu akun = satu slot | Via validasi NIK saat booking tiket |
+| Risiko scalping | Lebih rendah (identitas terikat) | Ditangani lewat aturan NIK per tiket |
+| Pengalaman pengguna | Lebih terbatas | Lebih inklusif dan cepat |
+
+### Catatan Teknis
+
+Dengan login opsional, pencegahan scalping berpindah dari layer **antrian** ke layer
+**transaksi tiket**. Mekanisme NIK (Nomor Induk Kependudukan) menjadi satu-satunya kontrol
+yang mengikat, dan divalidasi pada saat customer memilih tiket — bukan pada saat bergabung
+antrian. Detail aturan NIK dijabarkan pada perubahan BR-01 dan BR-02 di bawah.
+
+---
+
+## 3. Perubahan Business Rules
+
+### 3.1 BR-01 — Kuota Maksimal Pembelian Tiket
+
+| | Sebelum | Sesudah |
+|---|---|---|
+| **Rumusan** | Maksimal pembelian 3 tiket per **NIK** per event (akumulasi seluruh kategori). Bila NIK tidak digunakan, kuota 3 dihitung per sesi pembelian. | Maksimal pembelian **3 tiket per 1 transaksi (antrian)** sebuah event. |
+| **Basis pembatasan** | NIK lintas sesi dan perangkat | Per transaksi / per slot antrian |
+| **Fallback jika tidak ada NIK** | Per sesi | Tidak relevan — dibatasi per transaksi |
+
+**Penjelasan perubahan:**
+
+Aturan lama mengikat kuota ke NIK secara kumulatif lintas sesi, yang membutuhkan
+persistensi state NIK di database dan validasi lintas transaksi. Aturan baru menyederhanakan
+ini: satu slot antrian boleh membeli maksimal 3 tiket dalam satu transaksi, tanpa melihat
+berapa transaksi lain yang pernah dilakukan oleh NIK yang sama. Kontrol per-NIK kini
+ditangani oleh BR-02 yang diperbarui (satu NIK per satu seat).
+
+---
+
+### 3.2 BR-02 — Pembatasan NIK per Tiket
+
+| | Sebelum | Sesudah |
+|---|---|---|
+| **Rumusan** | Satu NIK yang sama tidak dapat melampaui **3 tiket** pada event yang sama, meskipun melalui sesi/perangkat berbeda. | Satu NIK dialokasikan hanya pada **satu tiket / seat** pada suatu event yang sama. |
+| **Batas per NIK** | 3 tiket per event | 1 tiket per event |
+| **Scope validasi** | Kumulatif lintas sesi | Per tiket pada saat pendaftaran NIK |
+
+**Penjelasan perubahan:**
+
+Aturan baru justru **lebih ketat** dalam hal per-NIK: satu NIK hanya boleh mengisi satu
+kursi di satu event yang sama. Ini berarti dalam satu transaksi yang membeli 3 tiket,
+ketiga tiket tersebut membutuhkan tiga NIK yang **berbeda**. Customer yang membeli untuk
+keluarga atau rombongan harus mendaftarkan NIK masing-masing anggota.
+
+Ini secara efektif memblokir scalper, karena memborong banyak tiket membutuhkan NIK
+yang valid dan unik untuk setiap kursi — bukan hanya satu NIK untuk beberapa tiket.
+
+---
+
+### 3.3 BR-07 — Dihapus
+
+| | Sebelum | Sesudah |
+|---|---|---|
+| **Rumusan** | Satu customer hanya memegang satu slot aktif pada satu waktu untuk event yang sama. | **Dihapus.** |
+| **Status** | Aktif | Tidak berlaku lagi |
+
+**Alasan penghapusan:**
+
+Dengan login yang kini opsional dan kuota yang dikendalikan per-NIK per-tiket (BR-02 baru),
+pembatasan satu-slot-per-customer tidak lagi relevan dan justru menghambat pengalaman
+pengguna. Setiap user kini **berkesempatan untuk mendaftar antrian sebanyak mungkin**.
+
+Batasan efektif tetap ada melalui mekanisme berikut:
+- **Tiket dibatasi** oleh aturan 1 NIK per tiket (BR-02)
+- **NIK yang sama tidak bisa didaftarkan lebih dari satu kali** untuk suatu event yang sama
+- Seorang user yang memiliki lebih dari satu slot aktif tetap tidak bisa mendapatkan lebih
+  banyak tiket, karena setiap tiket membutuhkan NIK unik yang berbeda
+
+---
+
+## 4. Ringkasan Perubahan
+
+| Poin | Jenis Perubahan | Ringkasan |
+|---|---|---|
+| Login | **Diubah** | Dari implisit wajib → opsional (dikonfirmasi CEO) |
+| BR-01 | **Diubah** | Kuota 3 tiket: dari per-NIK kumulatif → per transaksi |
+| BR-02 | **Diubah** | Kuota NIK: dari 3 tiket per NIK → 1 NIK per tiket/seat |
+| BR-07 | **Dihapus** | Satu slot aktif per customer tidak lagi berlaku |
+
