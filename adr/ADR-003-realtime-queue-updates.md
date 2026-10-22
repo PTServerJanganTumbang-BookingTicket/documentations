@@ -1,7 +1,7 @@
 # ADR-003: Mekanisme Pengiriman Update Posisi Antrian ke Client
 
-**Status**: In Review  
-**Tanggal**: 2026  
+**Status**: Accepted  
+**Tanggal**: 2026-10-22  
 **Decider**: Frontend & Backend Team
 
 ---
@@ -13,15 +13,15 @@ pertanyaan berikutnya adalah **bagaimana server mengirimkan update `now_serving`
 secara real-time**. Ini adalah keputusan yang berdampak langsung pada pengalaman pengguna
 di Virtual Waiting Room dan kemampuan sistem memenuhi requirement latensi.
 
-Requirement yang mendorong keputusan ini:
+### Requirements
 
 | ID     | Requirement                                                                 |
 | ------ | --------------------------------------------------------------------------- |
 | FR-07  | Posisi antrian diperbarui otomatis setiap antrian di depan berkurang        |
 | FR-08  | Customer otomatis dipindahkan ke Detail Ticket Page saat gilirannya tiba    |
 | FR-10  | Posisi antrian tetap konsisten saat customer me-refresh halaman             |
-| NFR-05 | Sistem mampu menangani minimal 1000 request per detik                       |
-| NFR-06 | Pembaruan posisi antrian memiliki latensi rendah (p95 < 1 detik)            |
+| NFR-03 | Menangani flash crowd 200.000-300.000 user concurrent                       |
+| NFR-06 | Pembaruan posisi antrian memiliki latensi rendah (p95 < 1 detik untuk posisi ≤100) |
 
 Dari ADR-002, kita sudah memutuskan bahwa server menyebarkan nilai `now_serving` yang
 **identik untuk semua customer**, dan client menghitung posisinya sendiri
@@ -32,377 +32,261 @@ dikirimkan ke client**.
 
 ## Opsi yang Dipertimbangkan
 
-### Opsi A: Long Polling
-
-Client membuka HTTP request, server menahan respons sampai ada perubahan atau timeout.
-
-```
-Client ──GET /queue/serving──▶ Server
-       (menunggu 30 detik...)
-       ◀─────────────────────── { "now_serving": 31500 }
-Client ──GET /queue/serving──▶ Server
-       (menunggu 30 detik...)
-       ...
-```
-
-**Kekuatan:**
-- Universal browser support, termasuk browser lama
-- Bekerja melalui semua proxy dan firewall
-- Fallback yang mudah diimplementasikan
-
-**Kelemahan:**
-- Latensi inherent 1-3 detik (bergantung interval polling)
-- Tidak dapat memenuhi p95 < 1 detik secara efisien (NFR-06)
-- Reconnect logic harus diimplementasikan manual
-- Connection cycling meningkatkan beban server
-
-### Opsi B: WebSocket
-
-Koneksi bidirectional yang persisten antara client dan server.
-
-**Kekuatan:**
-- Latensi terendah (~0ms push)
-- Bidirectional — client bisa mengirim data ke server
-
-**Kelemahan:**
-- Overkill untuk use case read-only (waiting room hanya menerima update, tidak mengirim)
-- Lebih kompleks: upgrade handshake, ping/pong keep-alive, manual reconnect
-- Mungkin memerlukan konfigurasi proxy/load balancer khusus
-- Overhead implementasi tidak sebanding dengan manfaat
-
-### Opsi C: Server-Sent Events (SSE) — Dipilih
+### Opsi A: Server-Sent Events (SSE)
 
 Koneksi unidirectional persisten menggunakan HTTP standar. Server mendorong event ke client.
 
-```
-Client ──EventSource('/queue/stream')──▶ Server
-       ◀── event: stats
-       ◀── data: {"now_serving": 31500, "throughput": 12}
-       ◀── event: stats
-       ◀── data: {"now_serving": 31501, "throughput": 12}
-       ...
-```
-
 **Kekuatan:**
-- Built-in reconnect di browser (`EventSource` API otomatis reconnect saat koneksi putus)
+- Built-in reconnect di browser (`EventSource` API)
 - Latensi mendekati nol (~0ms push)
-- Menggunakan HTTP/1.1 standar — tidak perlu konfigurasi khusus
-- CDN-friendly: payload `now_serving` identik untuk semua customer, dapat di-cache di edge
-- Lebih sederhana dari WebSocket karena unidirectional
+- Beban komputasi O(1) — broadcast satu nilai global
 
 **Kelemahan:**
-- Unidirectional only (tidak masalah untuk use case ini)
-- Tidak support di Internet Explorer (acceptable — IE sudah EOL)
+- **Tidak dapat memanfaatkan CDN edge caching** — SSE adalah stream persisten
+- 300.000 koneksi persisten langsung ke origin
+- Biaya always-on tinggi (~$475/bulan untuk 300k capacity)
+- Mobile carrier dapat memutus koneksi idle
+
+### Opsi B: WebSocket
+
+Koneksi bidirectional persisten.
+
+**Kekuatan:**
+- Latensi terendah
+- Bidirectional communication
+
+**Kelemahan:**
+- Overkill untuk use case read-only
+- Kompleksitas lebih tinggi dari SSE
+- Sama seperti SSE: tidak CDN-cacheable, koneksi persisten mahal
+
+### Opsi C: Adaptive Polling — **Dipilih**
+
+Client melakukan HTTP polling dengan interval yang menyesuaikan berdasarkan posisi antrian.
+
+**Kekuatan:**
+- **CDN-cacheable** — response `now_serving` identik dapat di-cache di edge
+- Scale to zero saat tidak ada event
+- Universal browser support
+- Failure blast radius rendah
+
+**Kelemahan:**
+- Latensi inherent (1-10 detik tergantung tier)
+- Request volume tinggi (tapi di-absorb CDN)
+
+---
+
+## Analisis Biaya: 300.000 Concurrent Users
+
+### Distribusi User dan Polling Interval
+
+| Tier | Posisi | Interval | Est. Users | Requests/sec |
+|------|--------|----------|------------|--------------|
+| 1 | 1-10 | 1s | 1.000 | 1.000 |
+| 2 | 11-100 | 2s | 7.000 | 3.500 |
+| 3 | 101-1.000 | 5s | 40.000 | 8.000 |
+| 4 | >1.000 | 10s | 250.000 | 25.000 |
+| **Total** | | | **298.000** | **37.500 req/s** |
+
+### CDN Cache Effectiveness
+
+```
+now_serving = nilai IDENTIK untuk semua users
+Cache TTL: 1 detik
+
+Total requests ke CDN: 37.500/sec
+CDN cache hit rate: ~97% (1 miss per TTL per edge location)
+Requests ke origin: ~1.125/sec (30 edge locations × 37.5 req/TTL)
+```
+
+### Perbandingan Biaya per Event (2 jam flash crowd)
+
+| Komponen | SSE | Adaptive Polling |
+|----------|-----|------------------|
+| Compute (Fargate/Lambda) | ~$1.16 | ~$0.84 |
+| API Gateway | — | ~$47 |
+| CDN Requests | — | ~$247 |
+| Data Transfer | ~$13 | ~$5 |
+| ALB | ~$0.17 | — |
+| **Total per event** | **~$14** | **~$300** |
+
+### Perbandingan Biaya Bulanan
+
+| Skenario | SSE | Adaptive Polling |
+|----------|-----|------------------|
+| Always-on capacity | ~$475/bulan | ~$0 |
+| 1 event/bulan | ~$489 | ~$300 |
+| 2 events/bulan | ~$503 | ~$600 |
+| 4 events/bulan | ~$531 | ~$1.200 |
+
+**Breakeven: ~1.6 events/bulan**
+
+### Perbandingan Non-Biaya
+
+| Aspek | SSE | Adaptive Polling |
+|-------|-----|------------------|
+| Latensi update | ~0ms | 1-10s (by tier) |
+| p95 < 1s (tier 1-10) | ✅ | ✅ (1s interval) |
+| p95 < 1s (tier >100) | ✅ | ❌ (2-10s) |
+| CDN leverage | ❌ | ✅ |
+| Scale to zero | ❌ | ✅ |
+| Mobile compatibility | ⚠️ (timeout risk) | ✅ |
+| Complexity | Medium | Low |
+| Failure blast radius | High | Low |
 
 ---
 
 ## Keputusan
 
-**Server-Sent Events (SSE)** dengan model broadcast dipilih sebagai mekanisme pengiriman
-update posisi antrian ke client.
+**Adaptive Polling** dipilih sebagai mekanisme pengiriman update posisi antrian.
 
 ---
 
 ## Alasan
 
-### 1. Unidirectional sesuai dengan use case
+### 1. CDN-Cacheable = Massive Cost Reduction di Scale
 
-Waiting room bersifat read-only dari perspektif client — server mendorong update posisi,
-client tidak pernah mengirim data. Kapabilitas bidirectional WebSocket tidak dibutuhkan
-dan hanya menambah kompleksitas tanpa nilai tambah.
+Pada 300.000 users, SSE membutuhkan 300k koneksi persisten ke origin. Dengan polling,
+CDN meng-absorb ~97% requests karena `now_serving` identik untuk semua users.
 
-### 2. Built-in reconnect memenuhi FR-10
+### 2. Scale to Zero untuk Assessment Scope
 
-API `EventSource` browser secara native melakukan reconnect saat koneksi terputus. Ini
-memenuhi FR-10 (posisi konsisten saat refresh) tanpa kode tambahan. Long Polling dan
-WebSocket memerlukan implementasi reconnect manual.
+Untuk tech assessment dengan frekuensi event rendah (<2/bulan), polling **jauh lebih
+murah** karena tidak ada biaya always-on. SSE membutuhkan ~$475/bulan capacity stand-by.
 
-### 3. Model broadcast memungkinkan CDN caching dan beban server O(1)
+### 3. Latensi Acceptable untuk Posisi Jauh
 
-Dari ADR-002, server menyebarkan `now_serving` yang identik untuk semua customer.
-Dengan SSE, payload ini dapat di-cache di CDN edge nodes dengan TTL 1-2 detik.
+NFR-06 mensyaratkan p95 < 1 detik untuk **posisi ≤100** (tier 1-2). Tier ini menggunakan
+interval 1-2 detik, memenuhi requirement. User di posisi >1000 tidak membutuhkan
+update per-detik — 10 detik cukup karena mereka masih jauh dari giliran.
 
-**Perhitungan cache hit rate:**
-```
-Asumsi:
-- 50.000 customer aktif
-- Polling interval rata-rata: 10 detik
-- CDN cache TTL: 2 detik
+### 4. Operational Simplicity
 
-Request rate ke CDN: 50.000 / 10 = 5.000 request/detik
-Cache refresh rate: 1 / 2 = 0.5 request/detik ke origin
-Cache hit rate: (5.000 - 0.5) / 5.000 = 99.99%
+- Tidak perlu manage persistent connections
+- Tidak perlu sticky sessions atau Redis Pub/Sub untuk SSE fanout
+- Standard HTTP request/response — semua tooling dan monitoring sudah mature
+- Failure di satu request tidak cascade ke user lain
 
-Hasil:
-- Tanpa CDN:  5.000 request/detik ke origin
-- Dengan CDN: ~1 request/2 detik ke origin (penurunan 10.000x)
-```
+### 5. Mobile-Friendly
 
-Per-user position (model ZSET) tidak dapat di-cache karena setiap customer mendapat
-nilai berbeda.
-
-### 4. Memenuhi NFR-06 (p95 < 1 detik)
-
-Push-based delivery mencapai latensi mendekati nol. Long Polling memiliki latensi
-inherent dari interval polling yang sulit memenuhi p95 < 1 detik secara efisien.
-
-**Perhitungan latensi Long Polling:**
-- Interval polling tipikal: 3-10 detik (trade-off antara freshness vs server load)
-- Dengan interval 3 detik, worst-case latency = 3 detik (perubahan terjadi tepat setelah poll)
-- Average latency = interval / 2 = 1.5 detik
-- Untuk mencapai p95 < 1 detik, interval harus < 2 detik → 30+ request/menit/customer
-- Pada 50.000 customer: 25.000+ request/detik ke origin — tidak praktis
-
-**Latensi SSE:**
-- Event dikirim segera saat `now_serving` berubah
-- Network latency only (~50-200ms typical)
-- p95 < 1 detik tercapai secara natural
-
-### 5. Kompleksitas lebih rendah dari WebSocket
-
-Tidak ada upgrade handshake, tidak perlu ping/pong keep-alive, tidak perlu logic
-reconnect manual — semua ditangani oleh browser dan HTTP standar.
-
-### Mengapa Bukan Long Polling?
-
-| Aspek                  | Long Polling        | SSE                  |
-| ---------------------- | ------------------- | -------------------- |
-| Latensi                | 1-3 detik           | ~0ms (push)          |
-| p95 < 1 detik          | Sulit dicapai       | ✅ Mudah dicapai     |
-| Reconnect              | Manual              | ✅ Built-in browser  |
-| CDN caching            | Tidak efektif*      | ✅ Efektif           |
-| Connection overhead    | Tinggi (cycling)    | Rendah (persistent)  |
-
-*Long Polling + CDN tidak efektif karena: (1) cache response = data stale, atau
-(2) bypass cache = tidak ada manfaat CDN.
-
-#### Mengapa Long Polling Tidak Dapat Memenuhi p95 < 1 Detik
-
-**Definisi p95 latency:** 95% dari semua update posisi harus sampai ke client dalam
-waktu < 1 detik sejak perubahan terjadi di server.
-
-**Model Long Polling:**
-```
-Timeline server: ───────●───────────────●───────────────●─────▶
-                     change₁          change₂          change₃
-                     (t=0)            (t=5s)           (t=12s)
-
-Timeline client (poll interval 3s):
-    poll₁──────────poll₂──────────poll₃──────────poll₄──────────▶
-    (t=0)          (t=3)          (t=6)          (t=9)
-
-    Kapan client TAHU tentang change₁?
-    - change₁ terjadi di t=0
-    - poll₂ di t=3 → client tahu di t=3
-    - Latency = 3 detik ❌
-```
-
-**Analisis matematis:**
-
-Dengan polling interval `I` detik, waktu tunggu hingga client mengetahui perubahan
-berdistribusi **uniform** antara 0 dan I detik (tergantung kapan perubahan terjadi
-relatif terhadap poll berikutnya).
-
-```
-Distribusi latency (uniform):
-- Minimum: 0 detik (perubahan tepat sebelum poll)
-- Maximum: I detik (perubahan tepat setelah poll)
-- Average: I/2 detik
-- p95: 0.95 × I detik
-
-Untuk mencapai p95 < 1 detik:
-  0.95 × I < 1
-  I < 1.05 detik
-
-Artinya polling interval harus < 1.05 detik (~1 poll/detik/customer)
-```
-
-**Implikasi polling interval < 1 detik:**
-
-```
-Asumsi: 50.000 customer aktif, interval 1 detik
-
-Request rate: 50.000 request/detik ke server
-Per menit: 3.000.000 request
-Per jam: 180.000.000 request
-
-Bandingkan dengan SSE:
-- 50.000 koneksi persistent
-- Update broadcast: 1 event × 50.000 delivery (via held connections)
-- Tidak ada request overhead — data di-push langsung
-```
-
-**Mengapa ini tidak praktis:**
-
-| Aspek | Polling (1s interval) | SSE |
-|-------|----------------------|-----|
-| Request rate | 50.000/detik | ~0 (connections held) |
-| Server CPU | Tinggi (handle requests) | Rendah (hold + broadcast) |
-| Network overhead | Tinggi (HTTP headers setiap request) | Rendah (event stream) |
-| Load balancer cost | Tinggi (request counting) | Rendah (connection counting) |
-| CDN benefit | ❌ Tidak bisa cache (TTL harus < 1s) | ✅ Bisa cache broadcast |
-
-**Alternatif: Long Polling dengan "hold until change"**
-
-Variasi long polling di mana server menahan response sampai ada perubahan:
-
-```
-Client ──GET /position──▶ Server (holds request)
-                          ... menunggu perubahan ...
-       ◀─────────────────── { now_serving: 31501 } (saat ada perubahan)
-Client ──GET /position──▶ Server (holds request)
-       ...
-```
-
-Masalah dengan pendekatan ini:
-1. **Timeout handling kompleks** — harus handle server/proxy/client timeout
-2. **Tidak scalable** — server menahan 50.000 pending requests
-3. **Tidak seperti SSE** — tidak ada built-in reconnect, tidak ada event typing
-4. **Resource usage** — setiap pending request = thread/goroutine blocked
-
-Pada dasarnya, "hold until change" long polling **adalah SSE dengan implementasi
-manual dan tanpa keuntungan protokol bawaan**. Jika butuh real-time push, SSE
-adalah abstraksi yang tepat.
-
-**Kesimpulan:**
-
-Long Polling dapat memenuhi p95 < 1 detik secara teoritis (dengan interval < 1s),
-tetapi **tidak praktis** karena:
-1. 50.000 request/detik membebani server dan network
-2. CDN tidak dapat membantu (TTL harus sangat pendek)
-3. Biaya infrastructure meningkat signifikan
-4. SSE mencapai hasil yang sama dengan resource jauh lebih efisien
-
-### Mengapa Bukan WebSocket?
-
-| Aspek                  | WebSocket           | SSE                  |
-| ---------------------- | ------------------- | -------------------- |
-| Directionality         | Bidirectional       | Unidirectional       |
-| Use case fit           | Overkill            | ✅ Tepat             |
-| Reconnect              | Manual              | ✅ Built-in          |
-| Kompleksitas           | Tinggi              | Rendah               |
-| Proxy compatibility    | Mungkin perlu setup | ✅ HTTP standar      |
+Mobile carriers sering memutus koneksi idle (NAT timeout 30-120s). SSE membutuhkan
+heartbeat dan reconnect logic. Polling naturally resistant terhadap network interruptions.
 
 ---
 
 ## Detail Teknis
 
-### Tipe Event
+### Polling Tiers
 
-| Event      | Payload                                            | Penerima       | Cacheable |
-| ---------- | -------------------------------------------------- | -------------- | --------- |
-| `stats`    | `{now_serving, throughput, timestamp}`             | Semua customer | ✅ Ya     |
-| `promoted` | `{access_token}`                                   | Satu customer  | ❌ Tidak  |
+| Posisi | Interval | Rationale |
+|--------|----------|-----------|
+| 1-10 | 1 detik | Near-admission, UX critical |
+| 11-100 | 2 detik | Soon to enter, responsive feel |
+| 101-1.000 | 5 detik | Moderate wait, balance cost/UX |
+| >1.000 | 10 detik | Long wait, cost efficiency |
 
-### Format Event SSE
+### Endpoint
 
 ```
-event: stats
-data: {"now_serving": 31500, "throughput": 12, "timestamp": 1698912000}
+GET /queue/status?event_id={event_id}
 
-event: promoted
-data: {"access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."}
+Response:
+{
+  "now_serving": 31500,
+  "throughput": 12,        // users/menit (untuk ETA calculation)
+  "server_time": 1698912000,
+  "cache_ttl": 1
+}
+
+Headers:
+Cache-Control: public, max-age=1
 ```
 
-### Perhitungan Posisi di Client
+### Client Implementation
 
 ```javascript
-// Client menyimpan ticket_no dari response POST /queue/join (tidak pernah berubah)
-const myTicketNo = localStorage.getItem('ticket_no'); // e.g., 48217
+const POLL_INTERVALS = {
+  CRITICAL: 1000,   // posisi 1-10
+  SOON: 2000,       // posisi 11-100
+  MODERATE: 5000,   // posisi 101-1000
+  FAR: 10000        // posisi >1000
+};
 
-// Setiap menerima event 'stats'
-eventSource.addEventListener('stats', (e) => {
-  const { now_serving, throughput } = JSON.parse(e.data);
-  const posisi = myTicketNo - now_serving;
-  const etaMenit = posisi / throughput;
-  updateUI(posisi, etaMenit);
-});
+function getInterval(position) {
+  if (position <= 10) return POLL_INTERVALS.CRITICAL;
+  if (position <= 100) return POLL_INTERVALS.SOON;
+  if (position <= 1000) return POLL_INTERVALS.MODERATE;
+  return POLL_INTERVALS.FAR;
+}
 
-// Saat menerima event 'promoted' — redirect ke halaman booking
-eventSource.addEventListener('promoted', (e) => {
-  const { access_token } = JSON.parse(e.data);
-  window.location.href = `/booking?token=${access_token}`;
-});
+async function pollQueue() {
+  const myTicketNo = localStorage.getItem('ticket_no');
+  
+  const response = await fetch(`/queue/status?event_id=${eventId}`);
+  const { now_serving, throughput, server_time } = await response.json();
+  
+  const position = myTicketNo - now_serving;
+  const etaMinutes = position / throughput;
+  
+  updateUI(position, etaMinutes);
+  
+  if (position <= 0) {
+    // Giliran tiba — claim token
+    await claimAccessToken();
+    return;
+  }
+  
+  // Schedule next poll with adaptive interval
+  const interval = getInterval(position);
+  setTimeout(pollQueue, interval);
+}
+```
+
+### Claim Token (saat giliran tiba)
+
+```
+POST /queue/claim-token
+Authorization: Bearer {queue_token}
+
+Response (success):
+{
+  "access_token": "eyJ...",
+  "expires_at": 1698912300,
+  "redirect_url": "/booking"
+}
+
+Response (slot penuh):
+{
+  "error": "NO_SLOT_AVAILABLE",
+  "retry_after": 5
+}
 ```
 
 ### Arsitektur
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                           CDN Edge                                  │
-│   Cache: event stats (TTL 1-2 detik, identik untuk semua customer)  │
+│                         CloudFront CDN                              │
+│   • Cache /queue/status dengan TTL 1 detik                          │
+│   • 97% hit rate → origin hanya terima ~1.125 req/sec               │
 └─────────────────────────────────────────────────────────────────────┘
-                              ▲
-                              │ SSE stream
                               │
+                              │ ~3% cache miss
+                              ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                         SSE Server                                  │
-│  - Broadcast event 'stats' setiap 1-2 detik                         │
-│  - Kirim event 'promoted' ke customer tertentu via Redis Pub/Sub    │
+│                      API Gateway + Lambda                           │
+│   • GET /queue/status — read now_serving dari Redis                 │
+│   • POST /queue/claim-token — atomic slot acquisition               │
 └─────────────────────────────────────────────────────────────────────┘
-                              ▲
-                              │ Redis Pub/Sub
                               │
+                              ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                        Queue Service                                │
-│  - Menyimpan state antrian di Redis (ADR-001)                       │
-│  - Publish update stats                                             │
-│  - Publish event promotion per customer                             │
+│                        ElastiCache Redis                            │
+│   • now_serving counter per event                                   │
+│   • Slot tracking (active bookings)                                 │
+│   • queue_token validation                                          │
 └─────────────────────────────────────────────────────────────────────┘
 ```
-
-### Flow Bergabung Antrian (Bagaimana Client Mendapat ticket_no)
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│ 1. User klik "Masuk Antrian"                                        │
-│         │                                                           │
-│         ▼                                                           │
-│ 2. Frontend: POST /queue/join                                       │
-│    Body: { event_id, device_fingerprint }                           │
-│         │                                                           │
-│         ▼                                                           │
-│ 3. Backend:                                                         │
-│    - INCR queue:{event_id}:issued → menghasilkan ticket_no          │
-│    - Buat signed queue_token (JWT berisi ticket_no + event_id)      │
-│    - Return: { ticket_no: 48217, queue_token: "eyJ..." }            │
-│         │                                                           │
-│         ▼                                                           │
-│ 4. Frontend menyimpan di localStorage:                              │
-│    - ticket_no (untuk perhitungan posisi di UI)                     │
-│    - queue_token (untuk autentikasi SSE)                            │
-│         │                                                           │
-│         ▼                                                           │
-│ 5. Frontend connect: EventSource('/queue/stream?token=eyJ...')      │
-└─────────────────────────────────────────────────────────────────────┘
-```
-
----
-
-## Aksi Implementasi
-
-### Backend
-
-| Aksi                      | Deskripsi                                                      | Endpoint/Komponen        |
-| ------------------------- | -------------------------------------------------------------- | ------------------------ |
-| Endpoint join antrian     | Terima request join, assign ticket_no, return signed token     | `POST /queue/join`       |
-| Endpoint SSE stream       | Return `text/event-stream`, validasi queue_token               | `GET /queue/stream`      |
-| Broadcast stats loop      | Publish `now_serving`, `throughput` setiap 1-2 detik           | Background goroutine     |
-| Promotion per customer    | Kirim event `promoted` dengan `access_token` saat giliran tiba | Redis Pub/Sub channel    |
-| Heartbeat                 | Kirim `:keepalive` comment setiap 30 detik untuk cegah timeout | SSE handler              |
-| Endpoint status antrian   | Validasi queue_token, return posisi saat ini (untuk reconnect) | `GET /queue/status`      |
-
-### Frontend
-
-| Aksi                      | Deskripsi                                                      | Komponen                 |
-| ------------------------- | -------------------------------------------------------------- | ------------------------ |
-| Join antrian              | Call `POST /queue/join`, simpan response di localStorage       | Handler tombol join      |
-| Connect SSE               | `new EventSource('/queue/stream?token=...')`                   | Halaman waiting room     |
-| Handle event `stats`      | Hitung `posisi = ticket_no - now_serving`, update UI           | SSE event listener       |
-| Handle event `promoted`   | Redirect ke `/booking?token=access_token`                      | SSE event listener       |
-| Validasi reconnect        | Saat reconnect, call `GET /queue/status` untuk verifikasi      | EventSource `onopen`     |
-| UI status koneksi         | Tampilkan indikator "Menghubungkan kembali..." jika putus      | Komponen status          |
-| Persist across refresh    | Baca ticket_no/queue_token dari localStorage saat page load    | Inisialisasi halaman     |
 
 ---
 
@@ -410,48 +294,70 @@ eventSource.addEventListener('promoted', (e) => {
 
 ### Positif
 
-- Memenuhi semua functional requirement (FR-07, FR-08, FR-10)
-- Mencapai p95 < 1 detik (NFR-06) dengan delivery berbasis push
-- Implementasi sederhana dengan API browser native
-- CDN-friendly broadcast mengurangi beban origin server
-- Automatic reconnection meningkatkan reliability
+- Biaya rendah untuk assessment scope (scale to zero)
+- CDN absorbs 97% traffic pada 300k scale
+- Operational simplicity — standard HTTP, no persistent connections
+- Mobile-friendly — no NAT timeout issues
+- Failure isolation — satu request gagal tidak affect user lain
 
 ### Negatif
 
-- Menahan satu koneksi TCP per client (acceptable di skala yang diharapkan)
-- Tidak support Internet Explorer (acceptable — IE sudah EOL)
-- Membutuhkan sticky sessions atau Redis Pub/Sub untuk deployment multi-instance
+- Latensi 1-10 detik (tidak real-time seperti SSE)
+- User di posisi jauh mungkin merasa update "lambat"
+- CDN request cost tinggi pada frequent events (~$247/event untuk 300k users)
 
 ### Risiko & Mitigasi
 
-| Risiko                                             | Likelihood | Impact | Mitigasi                                                              |
-| -------------------------------------------------- | ---------- | ------ | --------------------------------------------------------------------- |
-| Mobile carrier memutus koneksi SSE yang idle       | Medium     | Medium | Kirim heartbeat setiap 30 detik; client auto-reconnect                |
-| Server instance failure memutus semua koneksi      | Low        | High   | Multiple instance di belakang load balancer; client auto-reconnect    |
-| CDN tidak support SSE streaming                    | Low        | Medium | Verifikasi CDN support SSE; fallback ke direct origin jika diperlukan |
+| Risiko | Likelihood | Impact | Mitigasi |
+|--------|------------|--------|----------|
+| CDN cache miss spike | Low | Medium | Multiple edge locations, stale-while-revalidate |
+| User frustration (update lambat) | Medium | Low | Show "last updated X seconds ago" di UI |
+| Thundering herd saat cache expire | Low | Medium | Jittered polling start, staggered TTL |
+| Origin overload saat CDN down | Low | High | Origin rate limiting, circuit breaker |
 
-**Catatan tentang mobile carrier timeout:**
-Mobile carrier (terutama di jaringan 3G/4G) sering menerapkan NAT timeout 30-120 detik
-untuk koneksi idle guna menghemat resource. Koneksi TCP yang tidak mengirim data dalam
-periode ini dapat diputus secara diam-diam tanpa notifikasi ke client maupun server.
-Heartbeat interval 30 detik dipilih sebagai nilai konservatif di bawah batas minimum
-umum. Referensi: RFC 5765 (SIP Outbound) merekomendasikan keep-alive ≤29 detik untuk
-NAT traversal; praktik serupa berlaku untuk long-lived HTTP connections.
+---
+
+## Alternatif yang Dipertimbangkan
+
+### Hybrid: SSE untuk Tier 1-10, Polling untuk sisanya
+
+**Dipertimbangkan** tetapi **ditolak** karena:
+- Kompleksitas dua transport mechanism
+- Tier 1-10 hanya ~1.000 users — polling 1s sudah cukup responsive
+- Marginal UX improvement tidak worth complexity
+
+### SSE dengan Always-On Capacity
+
+**Dipertimbangkan** tetapi **ditolak** untuk assessment scope karena:
+- Biaya ~$475/bulan untuk capacity stand-by
+- Cocok jika ≥2 major events/bulan
+- Dapat dipertimbangkan untuk production dengan traffic tinggi
+
+---
+
+## Catatan untuk Production
+
+Jika sistem berevolusi ke production dengan ≥2 major events/bulan, **SSE layak
+dipertimbangkan ulang** karena:
+
+1. Biaya per-event SSE lebih rendah (~$14 vs ~$300)
+2. Latensi real-time meningkatkan UX
+3. Complexity trade-off lebih acceptable dengan tim yang lebih besar
+
+Keputusan ini dapat di-revisit di ADR terpisah saat requirement berubah.
 
 ---
 
 ## Referensi
 
 ### Dokumen Internal
-- `Tender Rusuh Booking Ticket.pdf` — FR-07, FR-08, FR-10, NFR-05, NFR-06
+- `Tender Rusuh Booking Ticket.pdf` — FR-07, FR-08, FR-10, NFR-06
 - ADR-001 — Teknologi Antrian untuk Virtual Waiting Room
 - ADR-002 — Mekanisme Penentuan Posisi Antrian per Customer
+- `2026-10-21-meeting-notes-queue-algorithm.md` — Keputusan adaptive polling
 
-### Spesifikasi Web
-- [MDN: Server-Sent Events](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events) — Dokumentasi API EventSource
-- [HTML Living Standard: Server-sent events](https://html.spec.whatwg.org/multipage/server-sent-events.html) — Spesifikasi formal SSE termasuk reconnection behavior
-- [MDN: EventSource.readyState](https://developer.mozilla.org/en-US/docs/Web/API/EventSource/readyState) — State management dan auto-reconnect
-
-### Network & Mobile
-- [RFC 5765: Session Initiation Protocol (SIP) Outbound](https://datatracker.ietf.org/doc/html/rfc5765) — Section 3.5.1 merekomendasikan keep-alive ≤29 detik untuk NAT traversal
-- [Cloudflare: Server-Sent Events](https://developers.cloudflare.com/workers/examples/websockets/#server-sent-events-sse) — CDN SSE support reference
+### AWS Pricing (ap-southeast-1, Oktober 2026)
+- CloudFront: $0.0090 per 10k HTTPS requests, $0.085/GB transfer
+- Lambda: $0.20 per 1M requests, $0.0000166667 per GB-second
+- API Gateway: $3.50 per 1M requests
+- Fargate: $0.04048 per vCPU-hour, $0.004445 per GB-hour
