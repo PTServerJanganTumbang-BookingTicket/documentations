@@ -43,6 +43,7 @@ menangani lonjakan trafik ekstrem (flash crowd) saat penjualan tiket dibuka.
 | FR-13 | Detail Ticket | Customer dapat membeli maksimal **3 tiket per transaksi** | MUST |
 | FR-14 | Detail Ticket | Menolak pemilihan jumlah yang melebihi stok atau batas 3 | MUST |
 | FR-15 | Detail Ticket | Memvalidasi format NIK (16 digit) untuk **setiap tiket** | MUST |
+| FR-15a | Detail Ticket | Memvalidasi NIK ke Dukcapil API (nama, status aktif) | MUST |
 | FR-16 | Detail Ticket | Saat lanjut ke pembayaran, stok tiket di-hold | MUST |
 | FR-17 | Detail Ticket | Menampilkan countdown TTL Booking (5 menit) | MUST |
 | FR-18 | Detail Ticket | TTL habis → booking batal, hold dilepas, slot ke antrian berikutnya | MUST |
@@ -194,7 +195,6 @@ canEnter = (freeSlots > 0) AND (availableTickets > 0)
 - Pembuatan/manajemen event oleh admin (back-office)
 - Implementasi internal mitra pembayaran (via payment gateway pihak ketiga)
 - Program loyalti, diskon, dan voucher
-- Validasi NIK ke Dukcapil (skip untuk POC)
 - Sistem gate check-in di lokasi event
 
 ---
@@ -250,7 +250,7 @@ canEnter = (freeSlots > 0) AND (availableTickets > 0)
 - Data event (jadwal, kategori, harga, kapasitas) tersedia dari sistem back-office
 - Customer memiliki email valid untuk pengiriman e-tiket
 - Mitra pembayaran menyediakan mekanisme callback status
-- Validasi NIK ke Dukcapil di-skip untuk POC (dilakukan manual di gate event)
+- Validasi NIK dilakukan via Dukcapil API (nama dan status aktif)
 - Target skala: 200.000 concurrent users pada flash crowd
 
 ---

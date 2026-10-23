@@ -513,7 +513,95 @@ Authorization: Bearer {access_token}
 
 ---
 
-### 4.2 Create Booking
+### 4.2 Validate NIK
+
+Validasi NIK ke Dukcapil sebelum submit booking. UI: dipanggil saat input NIK blur atau sebelum "Lanjut ke Pembayaran".
+
+**Endpoint**: `POST /nik/validate`
+
+**Headers**:
+```
+Authorization: Bearer {access_token}
+```
+
+**Request**:
+```json
+{
+  "nik": "3171xxxxxxxxxx22"
+}
+```
+
+**Response** (200 - Valid):
+```json
+{
+  "success": true,
+  "data": {
+    "nik": "3171xxxxxxxxxx22",
+    "valid": true,
+    "name": "JOHN DOE",
+    "status": "ACTIVE"
+  }
+}
+```
+
+**Response** (200 - Invalid):
+```json
+{
+  "success": true,
+  "data": {
+    "nik": "0000000000000000",
+    "valid": false,
+    "reason": "NIK_NOT_FOUND"
+  }
+}
+```
+
+**Response** (200 - Inactive):
+```json
+{
+  "success": true,
+  "data": {
+    "nik": "3171xxxxxxxxxx99",
+    "valid": false,
+    "reason": "NIK_INACTIVE",
+    "name": "JANE DOE"
+  }
+}
+```
+
+**Validation Errors** (400):
+```json
+{
+  "success": false,
+  "error": "VALIDATION_ERROR",
+  "details": [
+    { "field": "nik", "message": "NIK must be exactly 16 digits" }
+  ]
+}
+```
+
+**Rate Limited** (429):
+```json
+{
+  "success": false,
+  "error": "TOO_MANY_REQUESTS",
+  "message": "Please wait before validating another NIK",
+  "retry_after": 5
+}
+```
+
+**Reason Values**:
+| Reason | Description |
+|--------|-------------|
+| `NIK_NOT_FOUND` | NIK tidak terdaftar di Dukcapil |
+| `NIK_INACTIVE` | NIK terdaftar tapi status tidak aktif |
+| `DUKCAPIL_ERROR` | Gagal menghubungi Dukcapil (fallback ke format-only validation) |
+
+**Requirement Coverage**: FR-15a (validasi NIK ke Dukcapil)
+
+---
+
+### 4.3 Create Booking
 
 Submit pemilihan tiket. UI: "Lanjut ke Pembayaran" button.
 
@@ -532,16 +620,20 @@ Authorization: Bearer {access_token}
     {
       "category_id": "cat_vip",
       "nik": "3171xxxxxxxxxx22",
+      "nik_name": "JOHN DOE",
       "email": "buyer@example.com"
     },
     {
       "category_id": "cat_vip",
       "nik": "3171xxxxxxxxxx33",
+      "nik_name": "JANE DOE",
       "email": "friend@example.com"
     }
   ]
 }
 ```
+
+> **Note**: `nik_name` adalah nama dari hasil validasi NIK (endpoint 4.2). Backend akan re-validate NIK dan reject jika nama tidak match.
 
 **Response** (201):
 ```json
@@ -560,12 +652,14 @@ Authorization: Bearer {access_token}
       {
         "category": "VIP",
         "price": 1500000,
-        "nik_masked": "3171********xx22"
+        "nik_masked": "3171********xx22",
+        "holder_name": "JOHN DOE"
       },
       {
         "category": "VIP",
         "price": 1500000,
-        "nik_masked": "3171********xx33"
+        "nik_masked": "3171********xx33",
+        "holder_name": "JANE DOE"
       }
     ],
     "summary": {
@@ -591,6 +685,39 @@ Authorization: Bearer {access_token}
   "details": [
     { "field": "tickets[0].nik", "message": "NIK must be exactly 16 digits" },
     { "field": "tickets", "message": "Maximum 3 tickets per order" }
+  ]
+}
+```
+
+**Response** (400 - NIK Invalid):
+```json
+{
+  "success": false,
+  "error": "NIK_VALIDATION_FAILED",
+  "message": "NIK validation failed",
+  "details": [
+    { 
+      "index": 0, 
+      "nik_masked": "3171********xx22", 
+      "reason": "NIK_NOT_FOUND" 
+    }
+  ]
+}
+```
+
+**Response** (400 - NIK Name Mismatch):
+```json
+{
+  "success": false,
+  "error": "NIK_NAME_MISMATCH",
+  "message": "NIK name does not match",
+  "details": [
+    { 
+      "index": 0, 
+      "nik_masked": "3171********xx22",
+      "expected_name": "JOHN DOE",
+      "actual_name": "JOHNNY DOE"
+    }
   ]
 }
 ```
@@ -622,7 +749,7 @@ Authorization: Bearer {access_token}
 
 ---
 
-### 4.3 Get Booking Detail
+### 4.4 Get Booking Detail
 
 Detail booking untuk Payment Page dan Success Page.
 
@@ -963,7 +1090,6 @@ Authorization: Bearer {access_token}
       "venue": "GBK, Jakarta"
     },
     "category": "VIP",
-    "seat": "A-15",
     "holder": {
       "nik_masked": "3171********xx22"
     },
@@ -974,7 +1100,7 @@ Authorization: Bearer {access_token}
 }
 ```
 
-**Requirement Coverage**: FR-27 (QR code, nomor bangku, NIK pemegang)
+**Requirement Coverage**: FR-27 (QR code, NIK pemegang)
 
 ---
 
@@ -1016,6 +1142,7 @@ Authorization: Bearer {access_token}
 | FR-13 | `POST /bookings` (max 3) | ✅ Covered |
 | FR-14 | Validation error response | ✅ Covered |
 | FR-15 | NIK validation (16 digit) | ✅ Covered |
+| FR-15a | NIK validation (Dukcapil) | ✅ Covered (`POST /nik/validate`) |
 | FR-16 | `POST /bookings` (creates hold) | ✅ Covered |
 | FR-17 | Session TTL in response | ✅ Covered |
 | FR-18 | Booking expires → TTL logic | ⚠️ Backend logic (not API visible) |
@@ -1083,6 +1210,11 @@ Authorization: Bearer {access_token}
 |------|-------------|
 | `VALIDATION_ERROR` | Input validation failed |
 | `NIK_ALREADY_USED` | NIK sudah digunakan untuk event ini |
+| `NIK_NOT_FOUND` | NIK tidak terdaftar di Dukcapil |
+| `NIK_INACTIVE` | NIK terdaftar tapi status tidak aktif |
+| `NIK_VALIDATION_FAILED` | Validasi NIK ke Dukcapil gagal |
+| `NIK_NAME_MISMATCH` | Nama NIK tidak cocok dengan input |
+| `DUKCAPIL_ERROR` | Gagal menghubungi Dukcapil API |
 | `INSUFFICIENT_STOCK` | Stok tiket tidak mencukupi |
 | `TICKETS_UNAVAILABLE` | Tiket sudah habis |
 | `SLOTS_FULL` | Slot booking penuh |
