@@ -1,9 +1,9 @@
 # Rusuh Booking Tiket — API Contracts
 
-**Versi**: 1.0  
+**Versi**: 1.1  
 **Tanggal**: Oktober 2026  
 **Status**: Draft  
-**Base URL**: 
+**Base URL**: `https://api.rusuh.id/v1`
 
 ---
 
@@ -15,7 +15,30 @@
 4. [Booking](#4-booking)
 5. [Payment](#5-payment)
 6. [User](#6-user)
-7. [Common Response Codes](#7-common-response-codes)
+7. [Common Response Structure](#7-common-response-structure)
+
+---
+
+## Response Structure
+
+Semua endpoint menggunakan format response yang konsisten:
+
+```json
+{
+  "meta": {
+    "code": 200,
+    "message": "Success"
+  },
+  "data": { ... }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `meta.code` | int | HTTP status code |
+| `meta.message` | string | Human-readable message (single message) |
+| `meta.pagination` | object | Pagination info (only on list endpoints) |
+| `data` | object/array | Response payload |
 
 ---
 
@@ -37,19 +60,23 @@ Mengirim link login ke email. UI: "Send Login Link" button.
 **Response** (200):
 ```json
 {
-  "success": true,
-  "message": "Login link sent to your email",
-  "expires_in": 900
+  "meta": {
+    "code": 200,
+    "message": "Login link sent to your email"
+  }
 }
 ```
 
 **Response** (429 - Rate Limited):
 ```json
 {
-  "success": false,
-  "error": "TOO_MANY_REQUESTS",
-  "message": "Please wait before requesting another link",
-  "retry_after": 60
+  "meta": {
+    "code": 429,
+    "message": "Please wait before requesting another link"
+  },
+  "data": {
+    "retry_after": 60
+  }
 }
 ```
 
@@ -73,9 +100,10 @@ UI: "Resend Login Link" button di "Check your inbox" screen.
 **Response** (200):
 ```json
 {
-  "success": true,
-  "message": "New login link sent",
-  "expires_in": 900
+  "meta": {
+    "code": 200,
+    "message": "New login link sent"
+  }
 }
 ```
 
@@ -85,24 +113,40 @@ UI: "Resend Login Link" button di "Check your inbox" screen.
 
 Verifikasi token dari link email. Redirect target dari email link.
 
-**Endpoint**: `GET /auth/verify?token={token}`
+**Endpoint**: `GET /auth/verify`
+
+**Cookies**:
+```
+magic_token={token}
+```
+
+**Cookies**:
+```
+access_token={access_token}
+```
 
 **Response** (200):
 ```json
 {
-  "success": true,
-  "access_token": "eyJhbG...",
-  "refresh_token": "eyJhbG...",
-  "user": {
-    "id": "usr_123",
-    "email": "you@example.com",
-    "nik": "3171xxxxxxxxxx22"
+  "meta": {
+    "code": 200,
+    "message": "Login successful"
   },
-  "redirect_context": {
-    "type": "booking",
-    "event_id": "evt_konser_a",
-    "booking_id": "RB-00912",
-    "message": "Booking context restored"
+  "data": {
+    "access_token": "eyJhbG...",
+    "refresh_token": "eyJhbG...",
+    "expires_in": 300,
+    "user": {
+      "id": "usr_123",
+      "email": "you@example.com",
+      "nik": "3171xxxxxxxxxx22"
+    },
+    "redirect_context": {
+      "type": "booking",
+      "event_id": "evt_konser_a",
+      "booking_id": "RB-00912",
+      "message": "Booking context restored"
+    }
   }
 }
 ```
@@ -121,27 +165,32 @@ Buat akun baru dengan email dan NIK.
 ```json
 {
   "email": "alex@example.com",
-  "nik": "0000000000000000"
+  "nik": "0000000000000000",
+  "name": "ALEX"
 }
 ```
 
 **Response** (200):
 ```json
 {
-  "success": true,
-  "message": "Verification link sent to your email",
-  "user_id": "usr_456"
+  "meta": {
+    "code": 200,
+    "message": "Verification link sent to your email"
+  },
+  "data": {
+    "user_id": "usr_456"
+  }
 }
 ```
 
 **Validation Errors** (400):
 ```json
 {
-  "success": false,
-  "error": "VALIDATION_ERROR",
-  "details": [
-    { "field": "nik", "message": "NIK must be exactly 16 digits" }
-  ]
+  "meta": {
+    "code": 400,
+    "message": "NIK must be exactly 16 digits"
+  },
+  "data": {}
 }
 ```
 
@@ -161,13 +210,22 @@ Menampilkan daftar event. UI: Home Page "Daftar Event".
 | Param | Type | Required | Description |
 |-------|------|----------|-------------|
 | `filter` | string | No | `all`, `available`, `upcoming` |
-| `page` | int | No | Default: 1 |
 | `limit` | int | No | Default: 10, Max: 50 |
+| `offset` | int | No | Default: 0 |
 
 **Response** (200):
 ```json
 {
-  "success": true,
+  "meta": {
+    "code": 200,
+    "message": "Success",
+    "pagination": {
+      "totalData": 2,
+      "totalPage": 1,
+      "limit": 10,
+      "offset": 0
+    }
+  },
   "data": [
     {
       "id": "evt_konser_a",
@@ -200,30 +258,8 @@ Menampilkan daftar event. UI: Home Page "Daftar Event".
       "queue_length": 0,
       "min_price": null,
       "max_price": null
-    },
-    {
-      "id": "evt_konser_c",
-      "name": "Konser C — Surabaya",
-      "category": "LIVE MUSIC",
-      "location": {
-        "venue": "GOR",
-        "city": "Surabaya"
-      },
-      "date": "2027-02-02",
-      "image_url": "https://cdn.rusuh.id/events/konser-c.jpg",
-      "status": "AVAILABLE",
-      "has_queue": false,
-      "queue_length": 0,
-      "min_price": 500000,
-      "max_price": 1500000
     }
-  ],
-  "pagination": {
-    "page": 1,
-    "limit": 10,
-    "total": 3,
-    "has_next": false
-  }
+  ]
 }
 ```
 
@@ -247,7 +283,10 @@ Detail event untuk sidebar info dan breadcrumb.
 **Response** (200):
 ```json
 {
-  "success": true,
+  "meta": {
+    "code": 200,
+    "message": "Success"
+  },
   "data": {
     "id": "evt_konser_a",
     "name": "Konser A — Jakarta",
@@ -309,14 +348,16 @@ User bergabung ke antrian. Dipanggil saat klik "Beli Tiket" pada event dengan an
 **Response** (200):
 ```json
 {
-  "success": true,
+  "meta": {
+    "code": 200,
+    "message": "Successfully joined queue"
+  },
   "data": {
-    "queue_token": "qt_xyz789",
     "ticket_no": 32748,
     "now_serving": 31500,
     "position": 1248,
     "estimated_wait_minutes": 4,
-    "sse_url": "/queue/stream?token=qt_xyz789",
+    "sse_url": "/queue/stream",
     "event": {
       "id": "evt_konser_a",
       "name": "Konser A — Jakarta"
@@ -325,17 +366,24 @@ User bergabung ke antrian. Dipanggil saat klik "Beli Tiket" pada event dengan an
 }
 ```
 
-**Response** (409 - Already in Queue):
+> Server sets cookie on join:
+> ```
+> Set-Cookie: queue_token=qt_xyz789; HttpOnly; Secure; SameSite=Strict; Max-Age=7200
+> ```
+
+**Response** (200 - Already in Queue / Rejoined):
 ```json
 {
-  "success": true,
+  "meta": {
+    "code": 200,
+    "message": "Rejoined existing queue position"
+  },
   "data": {
-    "queue_token": "qt_xyz789",
     "ticket_no": 32748,
     "now_serving": 31520,
     "position": 1228,
     "estimated_wait_minutes": 4,
-    "sse_url": "/queue/stream?token=qt_xyz789",
+    "sse_url": "/queue/stream",
     "rejoined": true
   }
 }
@@ -351,10 +399,10 @@ Server-Sent Events stream untuk update posisi real-time. Client connect setelah 
 
 **Endpoint**: `GET /queue/stream`
 
-**Query Parameters**:
-| Param | Type | Required | Description |
-|-------|------|----------|-------------|
-| `token` | string | Yes | Queue token dari join response |
+**Cookies**:
+```
+queue_token=qt_xyz789
+```
 
 **Headers**:
 ```
@@ -404,19 +452,22 @@ Dipanggil saat `position = 0`. Mendapatkan token untuk masuk Detail Ticket Page.
 
 **Endpoint**: `POST /queue/claim-token`
 
-**Headers**:
+**Cookies**:
 ```
-X-Queue-Token: qt_xyz789
+queue_token=qt_xyz789
 ```
 
 **Response** (200):
 ```json
 {
-  "success": true,
+  "meta": {
+    "code": 200,
+    "message": "Access token granted"
+  },
   "data": {
     "access_token": "at_abc123",
+    "expires_in": 300,
     "expires_at": "2026-10-23T13:15:00Z",
-    "ttl_seconds": 300,
     "redirect_url": "/events/evt_konser_a/tickets"
   }
 }
@@ -425,19 +476,24 @@ X-Queue-Token: qt_xyz789
 **Response** (410 - Tickets Gone):
 ```json
 {
-  "success": false,
-  "error": "TICKETS_UNAVAILABLE",
-  "message": "Maaf, tiket sudah habis"
+  "meta": {
+    "code": 410,
+    "message": "Maaf, tiket sudah habis"
+  },
+  "data": {}
 }
 ```
 
 **Response** (429 - Slots Full):
 ```json
 {
-  "success": false,
-  "error": "SLOTS_FULL",
-  "message": "Slot penuh, silakan tunggu",
-  "retry_after": 5
+  "meta": {
+    "code": 429,
+    "message": "Slot penuh, silakan tunggu"
+  },
+  "data": {
+    "retry_after": 5
+  }
 }
 ```
 
@@ -461,7 +517,10 @@ Authorization: Bearer {access_token}
 **Response** (200):
 ```json
 {
-  "success": true,
+  "meta": {
+    "code": 200,
+    "message": "Success"
+  },
   "data": {
     "event": {
       "id": "evt_konser_a",
@@ -534,7 +593,10 @@ Authorization: Bearer {access_token}
 **Response** (200 - Valid):
 ```json
 {
-  "success": true,
+  "meta": {
+    "code": 200,
+    "message": "NIK is valid"
+  },
   "data": {
     "nik": "3171xxxxxxxxxx22",
     "valid": true,
@@ -547,7 +609,10 @@ Authorization: Bearer {access_token}
 **Response** (200 - Invalid):
 ```json
 {
-  "success": true,
+  "meta": {
+    "code": 200,
+    "message": "NIK not found"
+  },
   "data": {
     "nik": "0000000000000000",
     "valid": false,
@@ -559,7 +624,10 @@ Authorization: Bearer {access_token}
 **Response** (200 - Inactive):
 ```json
 {
-  "success": true,
+  "meta": {
+    "code": 200,
+    "message": "NIK is inactive"
+  },
   "data": {
     "nik": "3171xxxxxxxxxx99",
     "valid": false,
@@ -572,21 +640,24 @@ Authorization: Bearer {access_token}
 **Validation Errors** (400):
 ```json
 {
-  "success": false,
-  "error": "VALIDATION_ERROR",
-  "details": [
-    { "field": "nik", "message": "NIK must be exactly 16 digits" }
-  ]
+  "meta": {
+    "code": 400,
+    "message": "NIK must be exactly 16 digits"
+  },
+  "data": {}
 }
 ```
 
 **Rate Limited** (429):
 ```json
 {
-  "success": false,
-  "error": "TOO_MANY_REQUESTS",
-  "message": "Please wait before validating another NIK",
-  "retry_after": 5
+  "meta": {
+    "code": 429,
+    "message": "Please wait before validating another NIK"
+  },
+  "data": {
+    "retry_after": 5
+  }
 }
 ```
 
@@ -638,7 +709,10 @@ Authorization: Bearer {access_token}
 **Response** (201):
 ```json
 {
-  "success": true,
+  "meta": {
+    "code": 201,
+    "message": "Booking created successfully"
+  },
   "data": {
     "booking_id": "RB-00912",
     "status": "PENDING_PAYMENT",
@@ -680,68 +754,58 @@ Authorization: Bearer {access_token}
 **Validation Errors** (400):
 ```json
 {
-  "success": false,
-  "error": "VALIDATION_ERROR",
-  "details": [
-    { "field": "tickets[0].nik", "message": "NIK must be exactly 16 digits" },
-    { "field": "tickets", "message": "Maximum 3 tickets per order" }
-  ]
+  "meta": {
+    "code": 400,
+    "message": "Maximum 3 tickets per order"
+  },
+  "data": {}
 }
 ```
 
 **Response** (400 - NIK Invalid):
 ```json
 {
-  "success": false,
-  "error": "NIK_VALIDATION_FAILED",
-  "message": "NIK validation failed",
-  "details": [
-    { 
-      "index": 0, 
-      "nik_masked": "3171********xx22", 
-      "reason": "NIK_NOT_FOUND" 
-    }
-  ]
+  "meta": {
+    "code": 400,
+    "message": "NIK 3171********xx22 tidak terdaftar di Dukcapil"
+  },
+  "data": {}
 }
 ```
 
 **Response** (400 - NIK Name Mismatch):
 ```json
 {
-  "success": false,
-  "error": "NIK_NAME_MISMATCH",
-  "message": "NIK name does not match",
-  "details": [
-    { 
-      "index": 0, 
-      "nik_masked": "3171********xx22",
-      "expected_name": "JOHN DOE",
-      "actual_name": "JOHNNY DOE"
-    }
-  ]
+  "meta": {
+    "code": 400,
+    "message": "NIK 3171********xx22: nama tidak cocok"
+  },
+  "data": {}
 }
 ```
 
 **Response** (409 - NIK Already Used):
 ```json
 {
-  "success": false,
-  "error": "NIK_ALREADY_USED",
-  "message": "NIK 3171xxxxxxxxxx22 sudah digunakan untuk event ini",
-  "details": [
-    { "nik_masked": "3171********xx22", "index": 0 }
-  ]
+  "meta": {
+    "code": 409,
+    "message": "NIK 3171xxxxxxxxxx22 sudah digunakan untuk event ini"
+  },
+  "data": {}
 }
 ```
 
 **Response** (409 - Insufficient Stock):
 ```json
 {
-  "success": false,
-  "error": "INSUFFICIENT_STOCK",
-  "message": "Stok VIP tidak mencukupi",
-  "available": 1,
-  "requested": 2
+  "meta": {
+    "code": 409,
+    "message": "Stok VIP tidak mencukupi"
+  },
+  "data": {
+    "available": 1,
+    "requested": 2
+  }
 }
 ```
 
@@ -763,7 +827,10 @@ Authorization: Bearer {access_token}
 **Response** (200 - Pending Payment):
 ```json
 {
-  "success": true,
+  "meta": {
+    "code": 200,
+    "message": "Success"
+  },
   "data": {
     "booking_id": "RB-00912",
     "status": "PENDING_PAYMENT",
@@ -798,7 +865,10 @@ Authorization: Bearer {access_token}
 **Response** (200 - Paid):
 ```json
 {
-  "success": true,
+  "meta": {
+    "code": 200,
+    "message": "Success"
+  },
   "data": {
     "booking_id": "RB-00912",
     "status": "PAID",
@@ -848,7 +918,10 @@ Authorization: Bearer {access_token}
 **Response** (200):
 ```json
 {
-  "success": true,
+  "meta": {
+    "code": 200,
+    "message": "Success"
+  },
   "data": {
     "methods": [
       {
@@ -902,7 +975,10 @@ Authorization: Bearer {access_token}
 **Response** (200):
 ```json
 {
-  "success": true,
+  "meta": {
+    "code": 200,
+    "message": "Payment initiated"
+  },
   "data": {
     "payment_id": "pay_123",
     "status": "PENDING",
@@ -941,7 +1017,10 @@ Authorization: Bearer {access_token}
 **Response** (200 - Pending):
 ```json
 {
-  "success": true,
+  "meta": {
+    "code": 200,
+    "message": "Payment pending"
+  },
   "data": {
     "status": "PENDING",
     "server_time": "2026-10-23T13:22:00Z",
@@ -953,7 +1032,10 @@ Authorization: Bearer {access_token}
 **Response** (200 - Paid):
 ```json
 {
-  "success": true,
+  "meta": {
+    "code": 200,
+    "message": "Payment successful"
+  },
   "data": {
     "status": "PAID",
     "paid_at": "2026-10-23T13:23:00Z",
@@ -965,11 +1047,13 @@ Authorization: Bearer {access_token}
 **Response** (200 - Expired):
 ```json
 {
-  "success": true,
+  "meta": {
+    "code": 200,
+    "message": "Payment expired"
+  },
   "data": {
     "status": "EXPIRED",
-    "expired_at": "2026-10-23T13:25:00Z",
-    "message": "Waktu pembayaran habis. Booking dibatalkan."
+    "expired_at": "2026-10-23T13:25:00Z"
   }
 }
 ```
@@ -1005,8 +1089,11 @@ X-Callback-Signature: sha256=...
 **Response** (200):
 ```json
 {
-  "success": true,
-  "message": "Callback processed"
+  "meta": {
+    "code": 200,
+    "message": "Callback processed"
+  },
+  "data": {}
 }
 ```
 
@@ -1033,12 +1120,22 @@ Authorization: Bearer {access_token}
 | Param | Type | Required | Description |
 |-------|------|----------|-------------|
 | `status` | string | No | `upcoming`, `past`, `all` |
-| `page` | int | No | Default: 1 |
+| `limit` | int | No | Default: 10 |
+| `offset` | int | No | Default: 0 |
 
 **Response** (200):
 ```json
 {
-  "success": true,
+  "meta": {
+    "code": 200,
+    "message": "Success",
+    "pagination": {
+      "totalData": 1,
+      "totalPage": 1,
+      "limit": 10,
+      "offset": 0
+    }
+  },
   "data": [
     {
       "ticket_id": "TKT-001",
@@ -1055,12 +1152,7 @@ Authorization: Bearer {access_token}
       "status": "VALID",
       "eticket_url": "/tickets/TKT-001/eticket"
     }
-  ],
-  "pagination": {
-    "page": 1,
-    "total": 1,
-    "has_next": false
-  }
+  ]
 }
 ```
 
@@ -1080,7 +1172,10 @@ Authorization: Bearer {access_token}
 **Response** (200):
 ```json
 {
-  "success": true,
+  "meta": {
+    "code": 200,
+    "message": "Success"
+  },
   "data": {
     "ticket_id": "TKT-001",
     "event": {
@@ -1104,7 +1199,51 @@ Authorization: Bearer {access_token}
 
 ---
 
-## 7. Common Response Codes
+## 7. Common Response Structure
+
+### Success Response
+
+```json
+{
+  "meta": {
+    "code": 200,
+    "message": "Success"
+  },
+  "data": { ... }
+}
+```
+
+### Success Response with Pagination
+
+```json
+{
+  "meta": {
+    "code": 200,
+    "message": "Success",
+    "pagination": {
+      "totalData": 10,
+      "totalPage": 1,
+      "limit": 10,
+      "offset": 0
+    }
+  },
+  "data": [ ... ]
+}
+```
+
+### Error Response
+
+```json
+{
+  "meta": {
+    "code": 400,
+    "message": "NIK must be exactly 16 digits"
+  },
+  "data": {}
+}
+```
+
+### HTTP Status Codes
 
 | Code | Meaning | When |
 |------|---------|------|
@@ -1133,10 +1272,10 @@ Authorization: Bearer {access_token}
 | FR-04 | `POST /events/{id}/queue/join` | ✅ Covered |
 | FR-05 | `GET /events/{id}` + direct to tickets | ✅ Covered (has_queue flag) |
 | FR-06 | Queue join response + status | ✅ Covered |
-| FR-07 | `GET /queue/status` | ✅ Covered |
+| FR-07 | `GET /queue/stream` (SSE) | ✅ Covered |
 | FR-08 | `POST /queue/claim-token` | ✅ Covered |
 | FR-09 | Queue join response (estimated_wait) | ✅ Covered |
-| FR-10 | Re-join returns same ticket_no | ✅ Covered (409 rejoined) |
+| FR-10 | Re-join returns same ticket_no | ✅ Covered (rejoined flag) |
 | FR-11 | `GET /events/{id}` | ✅ Covered |
 | FR-12 | `GET /events/{id}/tickets` | ✅ Covered |
 | FR-13 | `POST /bookings` (max 3) | ✅ Covered |
@@ -1147,7 +1286,7 @@ Authorization: Bearer {access_token}
 | FR-17 | Session TTL in response | ✅ Covered |
 | FR-18 | Booking expires → TTL logic | ⚠️ Backend logic (not API visible) |
 | FR-19 | `server_time` in responses | ✅ Covered |
-| FR-20 | `GET /bookings/{id}/payment-methods` | ✅ Covered |
+| FR-20 | `GET /payments/{id}/methods` | ✅ Covered |
 | FR-21 | Payment TTL in response | ✅ Covered |
 | FR-22 | Payment PAID status | ✅ Covered |
 | FR-23 | Payment EXPIRED status | ✅ Covered |
@@ -1162,45 +1301,20 @@ Authorization: Bearer {access_token}
 | FR-32 | Multi-language | 🔲 Header `Accept-Language` (to add) |
 | FR-33..35 | Dashboard metrics | 🔲 Admin API (separate doc) |
 
-### UI-API Mapping
-
-| UI Screen | Endpoints Used |
-|-----------|---------------|
-| Home Page | `GET /events` |
-| Waiting Room | `POST /events/{id}/queue/join`, `GET /queue/status`, `POST /queue/claim-token` |
-| Detail Ticket | `GET /events/{id}/tickets`, `POST /bookings` |
-| Payment | `GET /bookings/{id}`, `GET /payments/{id}/methods`, `POST /payments/{id}`, `GET /payments/{id}/status` |
-| Success | `GET /bookings/{id}`, `GET /tickets/{id}/eticket` |
-| Login | `POST /auth/magic-link`, `POST /auth/magic-link/resend`, `GET /auth/verify` |
-| Register | `POST /auth/register` |
-| My Tickets | `GET /users/me/tickets`, `GET /tickets/{id}/eticket` |
-
-### Findings dari UI Review
-
-| Finding | Severity | Notes |
-|---------|----------|-------|
-| ✅ NIK per tiket | OK | UI shows "NIK Tiket 1", "NIK Tiket 2" — matches BR-02 |
-| ✅ Max 3 tiket | OK | UI shows "Maks. 3 tiket per pesanan" — matches BR-01 |
-| ✅ Countdown timer | OK | UI shows 04:47 / 09:42 countdown — matches FR-17, FR-21 |
-| ✅ Re-entrant flow | OK | "You're logged in" shows "Booking context restored" — matches BR-09 |
-| ✅ Order ID | OK | "Order #RB-00912" visible — matches booking_id format |
-| ✅ Payment methods | OK | VA, E-Wallet, Transfer Bank shown — matches FR-20 |
-| ⚠️ Category sold out | Minor | UI shows "Habis" badge but +/- buttons still visible (should be disabled) |
-| ⚠️ NIK input count | Minor | UI shows 2 NIK inputs for 2 tickets — dynamic form needed |
-
 ---
 
 ## 9. Security Considerations
 
 | Aspect | Implementation |
 |--------|----------------|
-| Queue Token | Short-lived, validated server-side, required for SSE stream |
-| Access Token | JWT, 5 min TTL, required for booking/payment |
+| Queue Token | `queue_token` cookie (HttpOnly, Secure), set via `Set-Cookie` on queue join |
+| Access Token | JWT, returned in response body; client stores and sends via `Authorization: Bearer` |
+| Refresh Token | Returned in response body on login; client stores securely (Keychain/Keystore/memory) |
 | NIK | Masked in responses (3171********xx22), stored encrypted |
 | Payment | Via payment gateway (PCI-DSS compliant), no card data stored |
 | Rate Limiting | Per IP on queue join, per user on auth |
-| CSRF | Origin validation on state-changing endpoints |
-| SSE Auth | Queue token validated on stream connection |
+| CSRF | `SameSite=Strict` on queue cookie; Origin validation on state-changing endpoints |
+| SSE Auth | `queue_token` cookie validated on stream connection |
 
 ---
 
@@ -1237,12 +1351,6 @@ Authorization: Bearer {access_token}
 | Heartbeat | 30 detik |
 | Reconnect | Auto dengan `Last-Event-ID` |
 
-**Keuntungan SSE untuk Queue:**
-- Update instan tanpa polling overhead
-- Server push `now_serving` identik ke semua client
-- Efisien untuk 300k concurrent connections
-- Built-in reconnection support
-
 ### Payment Status: Polling
 
 | Aspect | Value |
@@ -1250,9 +1358,3 @@ Authorization: Bearer {access_token}
 | Transport | REST polling (`GET /payments/{id}/status`) |
 | Interval | 3-5 detik |
 | Duration | Max 10 menit (TTL pembayaran) |
-
-**Alasan Polling untuk Payment:**
-- Bounded duration (max 10 menit)
-- Limited concurrent users (hanya yang di payment page)
-- Simpler implementation, no persistent connection needed
-- Payment gateway webhook sebagai source of truth
