@@ -1,9 +1,15 @@
 # Rusuh Booking Tiket — API Contracts
 
-**Versi**: 1.1  
-**Tanggal**: Oktober 2026  
+**Versi**: 2.0  
+**Tanggal**: 24 Oktober 2026  
 **Status**: Draft  
-**Base URL**: `https://api.rusuh.id/v1`
+**Base URL**: `https://api.rusuh.id/v1`  
+**Selaras dengan**: ADR-005 (Keputusan Arsitektur Final — SSE + ECS Fargate)
+
+> **v2.0** menyelaraskan kontrak ini dengan ADR-005. Perubahan yang memutus kompatibilitas:
+> `POST /queue/claim-token` **dihapus** (grant kini didorong lewat SSE setelah slot aman),
+> payload dan nama event SSE berubah, webhook mendapat switch per tipe event, dan validasi
+> NIK menjadi *fail closed*. Lihat Appendix C.
 
 ---
 
@@ -397,107 +403,144 @@ User bergabung ke antrian. Dipanggil saat klik "Beli Tiket" pada event dengan an
 
 Server-Sent Events stream untuk update posisi real-time. Client connect setelah join queue.
 
-**Endpoint**: `GET /queue/stream`
+**Endpoint**: `GET /events/{event_id}/queue/stream`
 
-**Cookies**:
+**Cookies** (web): `queue_token=qt_xyz789`
+**Headers** (mobile): `Authorization: Bearer qt_xyz789`
+
+> Token **tidak pernah** dikirim lewat query string — ia akan tercatat di access log ALB,
+> CloudWatch, dan history browser.
+
+**Response** (200): `text/event-stream`
+
+**Snapshot awal** — dikirim segera saat koneksi terbuka, sebelum broadcast berikutnya. Tanpa
+ini posisi kosong sampai tick berikutnya, dan FR-10 tidak terpenuhi setelah refresh.
+
 ```
-queue_token=qt_xyz789
+id: 31600
+data: {"nowServing":31600,"state":"OPEN","ratePerMin":318,"paused":false,"serverTime":"2026-10-24T13:10:00.412Z"}
 ```
 
-**Headers**:
+**Event default (tanpa nama)** — dikirim saat `nowServing` berubah, saat `paused` berubah,
+atau tiap 10 detik sebagai heartbeat isi.
+
 ```
-Accept: text/event-stream
+data: {"nowServing":31604,"state":"OPEN","ratePerMin":318,"paused":false,"serverTime":"2026-10-24T13:10:01.004Z"}
 ```
 
-**Response**: SSE stream dengan event types berikut:
+| Field | Tipe | Arti |
+|---|---|---|
+| `nowServing` | int | Nomor antrian global yang sedang dilayani |
+| `state` | string | `OPEN` \| `closed_sold_out` |
+| `ratePerMin` | int | Laju antrian untuk estimasi waktu tunggu (FR-09) |
+| `paused` | bool | Admission dihentikan sementara (gangguan Dukcapil / payment gateway) |
+| `serverTime` | string | Waktu server ISO-8601 — klien menyinkronkan jamnya (BR-10) |
 
-**Event: `status`** (broadcast setiap 1-2 detik)
+> Frontend menghitung `position = ticket_no - nowServing`. Saat `paused = true`, tampilkan
+> banner; jangan tampilkan error — antrian tidak hilang.
+
+**Event: `grant`** — giliran customer tiba. Payload kosong; token **tidak** dikirim lewat SSE.
+
+```
+event: grant
+data: {}
+```
+
+> Klien merespons dengan `GET /events/{event_id}/queue/me` untuk mengambil `access_token`.
+> Grant hanya diterbitkan **setelah** slot diamankan dan baris booking tertulis, sehingga
+> `/queue/me` tidak pernah menolak customer yang sudah menerima `grant` (NFR-02).
+
+**Event: `status`** — indikator koneksi ke Redis, bukan status antrian.
+
 ```
 event: status
-data: {"now_serving": 31600, "throughput": 12, "server_time": "2026-10-23T13:10:00Z"}
+data: {"stale": true}
 ```
 
-> Frontend menghitung: `position = ticket_no - now_serving`
+**Event: `sold-out`** — tiket habis saat menunggu.
 
-**Event: `your_turn`** (ketika posisi = 0)
 ```
-event: your_turn
-data: {"message": "Giliran Anda!", "claim_url": "/queue/claim-token"}
-```
-
-**Event: `heartbeat`** (setiap 30 detik untuk keep-alive)
-```
-event: heartbeat
-data: {"server_time": "2026-10-23T13:10:30Z"}
+event: sold-out
+data: {"message":"Tiket sudah habis"}
 ```
 
-**Event: `sold_out`** (jika tiket habis saat menunggu)
+> **Klien WAJIB memanggil `eventSource.close()`** pada event ini. Tanpa itu `EventSource`
+> reconnect otomatis dan seluruh crowd membanjiri ALB setelah sold out. Server menolak
+> koneksi baru dengan `410 Gone` sebagai jaring pengaman.
+
+**Event: `reconnect`** — task sedang shutdown; `retry:` berisi jeda berjitter 1–15 detik.
+
+**Keepalive** — komentar SSE tiap **15 detik**, bukan event bernama:
+
 ```
-event: sold_out
-data: {"message": "Maaf, tiket sudah habis"}
+: keepalive
 ```
 
-**Connection Handling**:
-- Client harus reconnect jika connection drop
-- Gunakan `Last-Event-ID` header untuk resume dari event terakhir
-- Server close stream setelah `your_turn` atau `sold_out` event
+> Komentar tidak memicu handler di klien dan berukuran 13 byte; sebuah event JSON tiap 30
+> detik berukuran ~6× lebih besar dan tetap berisiko kena idle timeout ALB (default 60s,
+> dikonfigurasi 3600s).
 
-**Requirement Coverage**: FR-07 (posisi diperbarui otomatis), NFR-06 (p95 < 1 detik)
+**Response** (410 - stream ditolak): event sudah sold out. `EventSource` berhenti permanen
+pada status non-200 — ini disengaja.
+
+**Requirement Coverage**: FR-07, FR-08, FR-09, FR-10, BR-10, NFR-06
 
 ---
 
-### 3.3 Claim Access Token
+### 3.3 Get Queue State (Re-entrancy)
 
-Dipanggil saat `position = 0`. Mendapatkan token untuk masuk Detail Ticket Page.
+Satu-satunya endpoint yang dipanggil klien saat kembali — setelah refresh, ganti tab, atau
+kembali dari aplikasi bank. Mengembalikan **token yang sama** selama TTL belum habis.
 
-**Endpoint**: `POST /queue/claim-token`
+**Endpoint**: `GET /events/{event_id}/queue/me`
 
-**Cookies**:
-```
-queue_token=qt_xyz789
-```
+**Cookies**: `queue_token=qt_xyz789`
+
+**Response** (200): bentuk `data` mengikuti keadaan customer.
+
+| Keadaan | `data` | Halaman tujuan |
+|---|---|---|
+| Masih mengantre | `{"state":"QUEUED","ticket_no":31842,"now_serving":31600}` | Waiting Room |
+| Giliran tiba | `{"state":"GRANTED","access_token":"at_abc123","expires_at":"…"}` | Detail Ticket |
+| Sedang memilih | `{"state":"SELECTING","access_token":"at_abc123","booking_id":"RB-00912","booking_expires_at":"…","server_time":"…"}` | Detail Ticket, countdown dilanjutkan |
+| Menunggu bayar | `{"state":"AWAITING_PAYMENT","access_token":"at_abc123","booking_id":"RB-00912","payment_expires_at":"…","payment_ref":"pay_123","server_time":"…"}` | Payment, countdown dilanjutkan |
+| Selesai | `{"state":"CONFIRMED","booking_id":"RB-00912"}` | Halaman tiket |
+| Kedaluwarsa | `{"state":"EXPIRED"}` | Layar expired |
+
+> `POST /queue/claim-token` dari v1.1 **dihapus**. Pada model itu klien meminta slot setelah
+> `your_turn`, dan bisa menerima `429 Slot penuh` — memberi tahu customer bahwa gilirannya
+> tiba lalu menolaknya, pelanggaran langsung NFR-02 "Jangan PHP". Pada v2.0 grant hanya
+> diterbitkan setelah slot diamankan, jadi tidak ada jalur penolakan setelah `grant`.
+
+**Requirement Coverage**: FR-08, FR-10, BR-09, NFR-02, NFR-07
+
+---
+
+### 3.4 Get Now Serving (Polling Fallback)
+
+Dipakai untuk hidrasi awal, jaringan yang memblokir `text/event-stream`, dan degraded mode
+saat tier SSE tidak sehat. **Bukan** transport utama.
+
+**Endpoint**: `GET /events/{event_id}/queue/serving`
 
 **Response** (200):
 ```json
 {
-  "meta": {
-    "code": 200,
-    "message": "Access token granted"
-  },
+  "meta": { "code": 200, "message": "Success" },
   "data": {
-    "access_token": "at_abc123",
-    "expires_in": 300,
-    "expires_at": "2026-10-23T13:15:00Z",
-    "redirect_url": "/events/evt_konser_a/tickets"
+    "now_serving": 31600,
+    "rate_per_min": 318,
+    "paused": false,
+    "server_time": "2026-10-24T13:10:00.412Z",
+    "poll_after_ms": 5000
   }
 }
 ```
 
-**Response** (410 - Tickets Gone):
-```json
-{
-  "meta": {
-    "code": 410,
-    "message": "Maaf, tiket sudah habis"
-  },
-  "data": {}
-}
-```
+> `poll_after_ms` ditentukan **server**, mengikuti profil di `requirements.md` §5:
+> 10s (>1000) → 5s (101–1000) → 2s (11–100) → 1s (1–10). Klien tidak menanam interval sendiri.
 
-**Response** (429 - Slots Full):
-```json
-{
-  "meta": {
-    "code": 429,
-    "message": "Slot penuh, silakan tunggu"
-  },
-  "data": {
-    "retry_after": 5
-  }
-}
-```
-
-**Requirement Coverage**: FR-08 (otomatis dipindahkan ke Detail Page), NFR-07 (token protection)
+**Requirement Coverage**: FR-07 (fallback), NFR-08
 
 ---
 
@@ -621,21 +664,43 @@ Authorization: Bearer {access_token}
 }
 ```
 
-**Response** (200 - Inactive):
+**Response** (200 - Invalid):
 ```json
 {
   "meta": {
     "code": 200,
-    "message": "NIK is inactive"
+    "message": "NIK is not valid"
   },
   "data": {
-    "nik": "3171xxxxxxxxxx99",
     "valid": false,
-    "reason": "NIK_INACTIVE",
-    "name": "JANE DOE"
+    "reason": "NIK_INACTIVE"
   }
 }
 ```
+
+> **Hanya NIK yang dikirim ke Dukcapil.** Nama dan tanggal lahir tidak dikumpulkan maupun
+> dikirim, dan respons tidak pernah memuat nama (FR-15a, `requirements.md` §12).
+
+**Response** (200 - NIK sudah dipakai untuk event ini):
+```json
+{
+  "meta": { "code": 200, "message": "NIK already used for this event" },
+  "data": {
+    "valid": true,
+    "already_used": true,
+    "reason": "NIK_ALREADY_USED"
+  }
+}
+```
+
+> `already_used` bersifat **indikatif, bukan reservasi** — ia hanya memberi tahu customer lebih
+> awal bahwa NIK ini sudah terpakai, alih-alih membiarkannya mengisi tiga NIK lalu ditolak
+> setelah menekan Pay. Penegak sebenarnya adalah `SET nik:used NX` dan `UNIQUE (event_id,
+> nik_hmac)` pada saat hold, yang berjalan atomik. Dua customer yang mengetik NIK yang sama
+> keduanya bisa melihat `already_used: false`; yang menekan Pay lebih dulu menang, yang kalah
+> menerima `NIK_TAKEN`.
+>
+> NIK dinormalisasi sebelum dicocokkan: spasi dan pemisah dibuang, wajib tepat 16 digit.
 
 **Validation Errors** (400):
 ```json
@@ -666,7 +731,13 @@ Authorization: Bearer {access_token}
 |--------|-------------|
 | `NIK_NOT_FOUND` | NIK tidak terdaftar di Dukcapil |
 | `NIK_INACTIVE` | NIK terdaftar tapi status tidak aktif |
-| `DUKCAPIL_ERROR` | Gagal menghubungi Dukcapil (fallback ke format-only validation) |
+| `DUKCAPIL_UNAVAILABLE` | Gagal menghubungi Dukcapil — **pembayaran diblokir**, bukan fallback |
+
+> **Fail closed.** Baik NIK yang ditolak Dukcapil maupun Dukcapil yang tidak dapat dihubungi
+> sama-sama memblokir pembayaran. `POST /bookings` menolak permintaan kecuali **setiap** NIK
+> di dalamnya sudah terverifikasi. Konsekuensinya Dukcapil adalah single point of failure yang
+> diterima secara sadar: saat ia mati, admission di-pause dan penjualan berhenti (ADR-005
+> Bagian 8).
 
 **Requirement Coverage**: FR-15a (validasi NIK ke Dukcapil)
 
@@ -691,20 +762,33 @@ Authorization: Bearer {access_token}
     {
       "category_id": "cat_vip",
       "nik": "3171xxxxxxxxxx22",
-      "nik_name": "JOHN DOE",
-      "email": "buyer@example.com"
+      "holder_email": "buyer@example.com"
     },
     {
       "category_id": "cat_vip",
       "nik": "3171xxxxxxxxxx33",
-      "nik_name": "JANE DOE",
-      "email": "friend@example.com"
+      "holder_email": "friend@example.com"
     }
-  ]
+  ],
+  "contact_email": "buyer@example.com",
+  "terms_version": "2026-10-01"
 }
 ```
 
-> **Note**: `nik_name` adalah nama dari hasil validasi NIK (endpoint 4.2). Backend akan re-validate NIK dan reject jika nama tidak match.
+> **Satu baris per kursi** (BR-02: 1 NIK = 1 seat). `holder_email` adalah alamat tujuan
+> e-tiket kursi itu — FR-26 menuntut tiket sampai ke tiap pemegang NIK, bukan hanya pembeli.
+> Tidak ada field nama: Dukcapil hanya memvalidasi NIK.
+>
+> **Panggilan inilah yang memulai TTL pembayaran.** "Booking dibuat" pada BR-05 adalah saat
+> ini: kursi dipilih, NIK diisi, stok di-hold. `payment_ttl.ttl_seconds` karena itu selalu
+> **600** — setiap customer mendapat 10 menit penuh, berapa pun lama ia memilih kursi.
+> TTL booking (5 menit) berhenti berlaku begitu booking ini dibuat; keduanya berurutan,
+> tidak tumpang tindih.
+>
+> **Idempoten.** Submit yang diulang tidak menjalankan hold kedua. Server mengunci baris
+> booking (`SELECT … FOR UPDATE` atas `access_token`); bila status sudah `HELD` atau lebih
+> jauh, booking yang ada dikembalikan dengan `200`. Tanpa guard ini retry akan gagal dengan
+> `NIK_TAKEN` atas NIK customer sendiri.
 
 **Response** (201):
 ```json
@@ -999,11 +1083,64 @@ Authorization: Bearer {access_token}
 }
 ```
 
-**Requirement Coverage**: FR-20, FR-21, FR-24 (API shared web/mobile)
+**Response** (200 - sudah pernah diinisiasi): **identik dengan respons pertama**, termasuk
+`payment_id` dan `instructions`. Tidak ada charge kedua ke gateway.
+
+> **Idempoten tanpa kunci dari klien.** Baris `bookings` adalah catatan idempotency-nya.
+> Server mengunci baris (`SELECT … FOR UPDATE`); bila status sudah `AWAITING_PAYMENT`,
+> `payment_ref` yang tersimpan dikembalikan apa adanya. Kunci yang dikirim ke gateway
+> diturunkan server sebagai `{booking_id}:{payment_attempts}` — **tidak pernah dari klien**.
+>
+> Tombol "Bayar" yang terklik dua kali menghasilkan satu charge dan dua respons identik;
+> ia tidak boleh terlihat seperti kegagalan.
+
+**Response** (409 - status tidak sesuai): booking belum `HELD` atau sudah terminal.
+
+**Requirement Coverage**: FR-20, FR-21, FR-24 (API shared web/mobile), FR-25 (idempoten)
 
 ---
 
-### 5.3 Get Payment Status
+### 5.3 Retry Payment
+
+Dipanggil setelah pembayaran **ditolak** gateway, saat customer ingin mencoba metode lain.
+Ini aksi yang berbeda, bukan duplikat.
+
+**Endpoint**: `POST /payments/{booking_id}/retry`
+
+**Headers**:
+```
+Authorization: Bearer {access_token}
+```
+
+**Response** (200):
+```json
+{
+  "meta": { "code": 200, "message": "Ready to retry" },
+  "data": {
+    "booking_id": "RB-00912",
+    "status": "HELD",
+    "attempt": 2,
+    "payment_expires_at": "2026-10-24T13:25:00Z",
+    "server_time": "2026-10-24T13:19:40Z"
+  }
+}
+```
+
+> Menaikkan `payment_attempts` dan mengembalikan status ke `HELD`, sehingga charge berikutnya
+> memakai Idempotency-Key baru. **Tanpa endpoint ini customer terkunci**: gateway menyimpan
+> respons terhadap sebuah kunci (lazimnya 24 jam), jadi charge ulang dengan kunci lama akan
+> memutar ulang penolakan yang sama selamanya.
+>
+> Stok **tidak** dilepas — tetap milik customer sampai `payment_expires_at`. Deadline tidak
+> diperpanjang; ia dihitung dari `slot_claimed_at`, bukan dari percobaan (BR-05).
+
+**Response** (409): booking tidak dalam status `AWAITING_PAYMENT` yang gagal.
+
+**Requirement Coverage**: FR-20, NFR-02 (Jangan PHP)
+
+---
+
+### 5.4 Get Payment Status
 
 Polling status pembayaran. UI: Payment Page polling.
 
@@ -1062,9 +1199,9 @@ Authorization: Bearer {access_token}
 
 ---
 
-### 5.4 Payment Gateway Callback (Webhook)
+### 5.5 Payment Gateway Callback (Webhook)
 
-Callback dari payment gateway. Internal endpoint.
+Callback dari payment gateway. Endpoint internal — tidak dipanggil klien.
 
 **Endpoint**: `POST /payments/webhook`
 
@@ -1073,33 +1210,48 @@ Callback dari payment gateway. Internal endpoint.
 X-Callback-Signature: sha256=...
 ```
 
+> Dilindungi **resource policy API Gateway** (allowlist IP gateway) ditambah verifikasi HMAC.
+> Tidak ada CAPTCHA dan tidak ada rate limit per-IP pada endpoint ini.
+
 **Request** (dari gateway):
 ```json
 {
+  "event_id": "evt_9f2a1c7b",
   "transaction_id": "pay_123",
   "external_id": "RB-00912",
   "status": "PAID",
   "paid_amount": 1500000,
-  "paid_at": "2026-10-23T13:23:00Z",
-  "payment_method": "va",
-  "metadata": {}
+  "paid_at": "2026-10-24T13:23:00Z",
+  "payment_method": "va"
 }
 ```
 
-**Response** (200):
+**Idempotency**: `event_id` disimpan di `payment_events.gateway_event_id` dengan constraint
+`UNIQUE`. Pengiriman ulang memicu unique violation, seluruh transaksi batal, dan endpoint
+tetap menjawab `200`.
+
+> **Kuncinya adalah ID event milik gateway, bukan `booking_id`.** Memakai `booking_id` akan
+> menelan setiap event sah berikutnya untuk booking yang sama (pending → settled → refund).
+
+**Perlakuan per tipe event**:
+
+| `status` | Transisi | Efek |
+|---|---|---|
+| `PAID` / `SETTLED` atas booking `AWAITING_PAYMENT` | → `CONFIRMED` | Lepas slot, terbitkan tiket per `booking_item`, kirim e-tiket ke tiap `holder_email` |
+| `PAID` / `SETTLED` atas booking **`EXPIRED`** | tidak ada | **`payment.refund` diterbitkan** + alarm `LatePaymentRefund`. Uang masuk setelah stok dijual ulang |
+| `DENIED` / `CANCELLED` / `FAILURE` | → `HELD`, `payment_ref` dikosongkan | Stok **tetap** milik customer sampai TTL; ia dapat memakai `POST /payments/{id}/retry` |
+| `EXPIRE` (dari gateway) | → `EXPIRED` | Lepas stok, bebaskan NIK, kirim email expired |
+| lainnya | tidak ada | Dicatat di `payment_events`, tanpa transisi status |
+
+**Response** (200) — **selalu**, termasuk pada duplikat:
 ```json
 {
-  "meta": {
-    "code": 200,
-    "message": "Callback processed"
-  },
+  "meta": { "code": 200, "message": "Callback processed" },
   "data": {}
 }
 ```
 
-> Endpoint ini idempoten — callback duplikat tidak mengubah state yang sudah final.
-
-**Requirement Coverage**: FR-25 (idempoten callback), NFR-07 (PCI-DSS via gateway)
+**Requirement Coverage**: FR-25 (idempoten callback), FR-22, FR-23, FR-26, NFR-07 (PCI-DSS via gateway)
 
 ---
 
@@ -1262,44 +1414,68 @@ Authorization: Bearer {access_token}
 
 ## 8. Review vs Requirements
 
-### Coverage Matrix
+### Coverage Matrix — Functional
 
 | Req ID | Endpoint | Status |
 |--------|----------|--------|
-| FR-01 | `GET /events` | ✅ Covered |
-| FR-02 | `GET /events` (status AVAILABLE) | ✅ Covered |
-| FR-03 | `GET /events` (status SOLD_OUT) | ✅ Covered |
-| FR-04 | `POST /events/{id}/queue/join` | ✅ Covered |
-| FR-05 | `GET /events/{id}` + direct to tickets | ✅ Covered (has_queue flag) |
-| FR-06 | Queue join response + status | ✅ Covered |
-| FR-07 | `GET /queue/stream` (SSE) | ✅ Covered |
-| FR-08 | `POST /queue/claim-token` | ✅ Covered |
-| FR-09 | Queue join response (estimated_wait) | ✅ Covered |
-| FR-10 | Re-join returns same ticket_no | ✅ Covered (rejoined flag) |
-| FR-11 | `GET /events/{id}` | ✅ Covered |
-| FR-12 | `GET /events/{id}/tickets` | ✅ Covered |
-| FR-13 | `POST /bookings` (max 3) | ✅ Covered |
-| FR-14 | Validation error response | ✅ Covered |
-| FR-15 | NIK validation (16 digit) | ✅ Covered |
-| FR-15a | NIK validation (Dukcapil) | ✅ Covered (`POST /nik/validate`) |
-| FR-16 | `POST /bookings` (creates hold) | ✅ Covered |
-| FR-17 | Session TTL in response | ✅ Covered |
-| FR-18 | Booking expires → TTL logic | ⚠️ Backend logic (not API visible) |
-| FR-19 | `server_time` in responses | ✅ Covered |
-| FR-20 | `GET /payments/{id}/methods` | ✅ Covered |
-| FR-21 | Payment TTL in response | ✅ Covered |
-| FR-22 | Payment PAID status | ✅ Covered |
-| FR-23 | Payment EXPIRED status | ✅ Covered |
-| FR-24 | REST/JSON API | ✅ Covered |
-| FR-25 | Webhook idempotent | ✅ Covered |
-| FR-26 | Email per NIK | ⚠️ Backend logic (not API visible) |
-| FR-27 | E-ticket content | ✅ Covered |
-| FR-28 | Email expired | ⚠️ Backend logic (not API visible) |
-| FR-29 | Login optional | ✅ Covered (can book without auth) |
-| FR-30 | NIK + email for purchase | ✅ Covered |
-| FR-31 | Magic link verification | ✅ Covered |
-| FR-32 | Multi-language | 🔲 Header `Accept-Language` (to add) |
-| FR-33..35 | Dashboard metrics | 🔲 Admin API (separate doc) |
+| FR-01 | `GET /events` | ✅ |
+| FR-02 | `GET /events` (`status: AVAILABLE`) | ✅ |
+| FR-03 | `GET /events` (`status: SOLD_OUT`) | ✅ |
+| FR-04 | `POST /events/{id}/queue/join` | ✅ |
+| FR-05 | `POST /events/{id}/queue/join` → `granted: true` saat antrian kosong | ✅ |
+| FR-06 | Join response + SSE payload `nowServing` | ✅ |
+| FR-07 | `GET /events/{id}/queue/stream`, fallback `…/queue/serving` | ✅ |
+| FR-08 | SSE `grant` → `GET /events/{id}/queue/me` | ✅ |
+| FR-09 | `ratePerMin` pada payload SSE | ✅ |
+| FR-10 | Snapshot awal pada stream + `GET …/queue/me` | ✅ |
+| FR-11 | `GET /events/{id}` | ✅ |
+| FR-12 | `GET /events/{id}/tickets` | ✅ |
+| FR-13 | `POST /bookings` (maks 3, ditegakkan di Lua) | ✅ |
+| FR-14 | `POST /bookings` → `NO_STOCK` / `QTY_EXCEEDED` | ✅ |
+| FR-15 | Validasi format 16 digit, klien dan server | ✅ |
+| FR-15a | `POST /nik/validate` — **NIK saja**, fail closed | ✅ |
+| FR-16 | `POST /bookings` membuat hold | ✅ |
+| FR-17 | `booking_expires_at` + `server_time` pada response | ✅ |
+| FR-18 | Sweep server-side; tidak terlihat di API | ⚙️ Backend |
+| FR-19 | `server_time` pada setiap response REST + `serverTime` pada tiap payload SSE | ✅ |
+| FR-20 | `GET /payments/{id}/methods`, `POST /payments/{id}`, `POST /payments/{id}/retry` | ✅ |
+| FR-21 | `payment_expires_at` + `ttl_seconds` | ✅ |
+| FR-22 | Webhook `PAID` → e-tiket per `holder_email` | ✅ |
+| FR-23 | Webhook `EXPIRE` / sweep → stok dilepas | ✅ |
+| FR-24 | REST/JSON, identik untuk web dan mobile | ✅ |
+| FR-25 | `payment_events.gateway_event_id UNIQUE`; charge diputar ulang dari state booking | ✅ |
+| FR-26 | `holder_email` per kursi pada `POST /bookings` | ✅ |
+| FR-27 | `GET /tickets/{id}/eticket` — QR, kategori, NIK. **Nomor bangku di luar lingkup POC** | ✅ |
+| FR-28 | Webhook `EXPIRE` / sweep → email expired | ⚙️ Backend |
+| FR-29 | Semua endpoint pembelian dapat diakses tanpa akun | ✅ |
+| FR-30 | `POST /bookings` hanya butuh NIK + email | ✅ |
+| FR-31 | `POST /auth/magic-link`, `GET /auth/verify` | ✅ |
+| FR-32 | Header `Accept-Language`; pesan error dikembalikan sebagai kode | ✅ |
+| FR-33 | CloudWatch EMF `QueueDepth` — tidak ada endpoint aplikasi | ⚙️ Observability |
+| FR-34 | CloudWatch EMF `ConversionRate` | ⚙️ Observability |
+| FR-35 | CloudWatch EMF `ExpiryRate` per tahap | ⚙️ Observability |
+
+### Coverage Matrix — Non-Functional & Business Rules
+
+| Req ID | Bagaimana dipenuhi di API | Status |
+|--------|---------------------------|--------|
+| NFR-02 | Tidak ada jalur penolakan setelah `grant`; gagal hold tidak menghilangkan slot | ✅ |
+| NFR-04 | Hold stok atomik dalam satu skrip Lua | ⚙️ Backend |
+| NFR-05 | FCFS lewat `ticket_no`; **tanpa WAF di POC**, bot pada `/queue/join` hanya ditahan rate limit per-IP | ⚠️ Terdegradasi (POC) |
+| NFR-06 | SSE push; p95 < 1 detik | ✅ |
+| NFR-07 | `access_token` pada endpoint booking/payment; tidak ada data kartu | ✅ |
+| NFR-08 | REST/JSON, platform-agnostic | ✅ |
+| NFR-09 | CloudWatch EMF, namespace `RusuhBooking/Queue` | ⚙️ Observability |
+| NFR-10 | Kegagalan email tidak mengubah status booking; `GET /bookings/{id}/tickets` selalu tersedia | ✅ |
+| BR-01 | Maks 3 tiket per `POST /bookings` | ✅ |
+| BR-02 | Satu entri per kursi, satu NIK masing-masing; `UNIQUE (event_id, nik_hmac)` menolak NIK yang sudah dipakai booking lain di event yang sama | ✅ |
+| BR-03/04 | `booking_expires_at` = `slot_claimed_at` + 5 menit | ✅ |
+| BR-05/06 | `payment_expires_at` = `held_at` + 10 menit — berurutan setelah TTL booking, penuh bagi setiap customer | ✅ |
+| BR-09 | `GET /events/{id}/queue/me` mengembalikan token yang sama | ✅ |
+| BR-10 | `server_time` pada tiap respons; klien menghitung offset jam sekali dan merender semua countdown terhadapnya | ✅ |
+
+Legenda: ✅ terpenuhi di kontrak · ⚙️ di luar permukaan API (backend atau observability) ·
+⚠️ terpenuhi sebagian, keterbatasan dicatat
 
 ---
 
@@ -1327,11 +1503,14 @@ Authorization: Bearer {access_token}
 | `NIK_NOT_FOUND` | NIK tidak terdaftar di Dukcapil |
 | `NIK_INACTIVE` | NIK terdaftar tapi status tidak aktif |
 | `NIK_VALIDATION_FAILED` | Validasi NIK ke Dukcapil gagal |
-| `NIK_NAME_MISMATCH` | Nama NIK tidak cocok dengan input |
-| `DUKCAPIL_ERROR` | Gagal menghubungi Dukcapil API |
+| `NIK_UNVERIFIED` | Ada NIK dalam booking yang belum lolos `POST /nik/validate` |
+| `DUKCAPIL_UNAVAILABLE` | Dukcapil tidak dapat dihubungi — pembayaran diblokir (fail closed) |
+| `QTY_EXCEEDED` | Melebihi 3 tiket per transaksi (BR-01) |
 | `INSUFFICIENT_STOCK` | Stok tiket tidak mencukupi |
 | `TICKETS_UNAVAILABLE` | Tiket sudah habis |
-| `SLOTS_FULL` | Slot booking penuh |
+| `TERMS_NOT_ACCEPTED` | Syarat & ketentuan dan persetujuan PDP belum diterima |
+| `PAYMENT_ALREADY_INITIATED` | Charge sudah berjalan; respons sebelumnya diputar ulang |
+| `ADMISSION_PAUSED` | Admission dihentikan sementara (breaker Dukcapil / payment gateway) |
 | `BOOKING_EXPIRED` | TTL booking habis |
 | `PAYMENT_EXPIRED` | TTL pembayaran habis |
 | `TOO_MANY_REQUESTS` | Rate limited |
@@ -1346,15 +1525,48 @@ Authorization: Bearer {access_token}
 
 | Aspect | Value |
 |--------|-------|
-| Transport | SSE (`GET /queue/stream`) |
-| Broadcast interval | 1-2 detik |
-| Heartbeat | 30 detik |
-| Reconnect | Auto dengan `Last-Event-ID` |
+| Transport | SSE (`GET /events/{event_id}/queue/stream`) |
+| Auth | Cookie `HttpOnly` (web) / header `Authorization` (mobile) — tidak pernah query string |
+| Broadcast | Saat `nowServing` berubah, saat `paused` berubah, atau tiap 10 detik |
+| Tick admission | 500 ms |
+| Keepalive | Komentar `: keepalive` tiap **15 detik** (bukan event bernama) |
+| Snapshot awal | Ya — dikirim saat koneksi terbuka (FR-10) |
+| Reconnect | Otomatis dengan `Last-Event-ID`; `retry:` berjitter saat shutdown |
+| Sold out | Event `sold-out` → klien **wajib** `close()`; koneksi baru ditolak `410 Gone` |
 
 ### Payment Status: Polling
 
 | Aspect | Value |
 |--------|-------|
 | Transport | REST polling (`GET /payments/{id}/status`) |
-| Interval | 3-5 detik |
-| Duration | Max 10 menit (TTL pembayaran) |
+| Interval | 2–3 detik |
+| Duration | Sampai `payment_expires_at` |
+
+> Status pembayaran tidak lewat SSE: ia tiba dari webhook gateway, bukan dari antrian, dan
+> hanya relevan bagi satu customer.
+
+---
+
+## Appendix C: Perubahan v1.1 → v2.0
+
+Penyelarasan dengan ADR-005. Yang memutus kompatibilitas ditandai **BREAKING**.
+
+| # | Perubahan | Alasan |
+|---|---|---|
+| 1 | **BREAKING** `POST /queue/claim-token` dihapus | Bisa menjawab `429 Slot penuh` setelah memberi tahu customer gilirannya tiba — pelanggaran NFR-02. Grant kini diterbitkan hanya setelah slot aman |
+| 2 | **BREAKING** `GET /queue/stream` → `GET /events/{event_id}/queue/stream` | Konsisten dengan `POST /events/{event_id}/queue/join` |
+| 3 | **BREAKING** Payload SSE: `{now_serving, throughput, server_time}` → `{nowServing, state, ratePerMin, paused, serverTime}` | `paused` dan `state` tidak ada sebelumnya; klien tidak bisa membedakan antrian berhenti dari antrian lambat |
+| 4 | **BREAKING** Event `your_turn` → `grant` (payload kosong) | Token tidak dikirim lewat SSE; klien mengambilnya dari `…/queue/me` |
+| 5 | **BREAKING** Event `sold_out` → `sold-out`, klien wajib `close()` | Tanpa `close()` seluruh crowd reconnect setelah sold out |
+| 6 | **BREAKING** `heartbeat` 30 detik → komentar `: keepalive` 15 detik | 30 detik tanpa margin terhadap idle timeout; event JSON ~6× lebih besar dan memicu handler |
+| 7 | **BREAKING** `nik_name` dihapus dari `POST /bookings` | Dukcapil memvalidasi NIK saja; nama tidak dikumpulkan maupun dikirim (FR-15a) |
+| 8 | **BREAKING** `DUKCAPIL_ERROR` fallback-ke-format → `DUKCAPIL_UNAVAILABLE` memblokir | Fail closed: tidak ada tiket terbit dengan NIK yang belum terverifikasi |
+| 9 | Ditambahkan `GET /events/{event_id}/queue/me` | Re-entrancy BR-09 dan pengambilan token setelah `grant` |
+| 10 | Ditambahkan `GET /events/{event_id}/queue/serving` | Jalur fallback polling yang sebelumnya tidak terdokumentasi |
+| 11 | Ditambahkan `POST /payments/{booking_id}/retry` | Tanpanya customer yang charge-nya ditolak terkunci: gateway memutar ulang penolakan yang tersimpan |
+| 12 | **Tidak ada** endpoint baru untuk BR-10 dan FR-33–35 | BR-10 dipenuhi oleh `server_time` yang sudah ada di tiap respons — endpoint waktu tersendiri akan redundan. FR-33–35 diterbitkan sebagai CloudWatch EMF, bukan lewat API |
+| 12a | TTL pembayaran ditegaskan berjalan dari `POST /bookings` | BR-05 "sejak booking dibuat" = saat tombol bayar ditekan dan stok di-hold, sesuai wireframe tender. Kontrak sudah benar (`ttl_seconds: 600`); ADR-005 yang disesuaikan |
+| 13 | Webhook: switch per tipe event + `gateway_event_id UNIQUE` | Sebelumnya hanya menangani `PAID`; "idempoten" dinyatakan tanpa mekanisme |
+| 14 | Webhook: `PAID` atas booking `EXPIRED` → `payment.refund` | Uang diterima setelah stok dijual ulang sebelumnya tidak punya jalur |
+| 15 | Snapshot awal pada stream | FR-10 sebelumnya ditandai terpenuhi tanpa mekanisme |
+| 16 | Matriks coverage dikoreksi | FR-10, FR-19 dan FR-25 sebelumnya ditandai ✅ tanpa dasar |

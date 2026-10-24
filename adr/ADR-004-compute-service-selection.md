@@ -1,8 +1,12 @@
 # ADR-004: Pemilihan Compute Service untuk Backend
 
-**Status**: Accepted  
+**Status**: **Superseded by ADR-005** (24 Oktober 2026)  
 **Tanggal**: 2026-10-22  
 **Decider**: Backend Team
+
+> **Dokumen ini tidak lagi berlaku sebagai acuan build.** Pilihan ECS Fargate-nya
+> dipertahankan di ADR-005, beserta sizing, kuota, dan operasinya yang diperbarui.
+> Gunakan ADR-005.
 
 ---
 

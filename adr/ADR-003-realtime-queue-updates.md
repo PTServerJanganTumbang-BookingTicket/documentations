@@ -1,8 +1,15 @@
 # ADR-003: Mekanisme Pengiriman Update Posisi Antrian ke Client
 
-**Status**: Accepted  
+**Status**: **Superseded by ADR-005** (24 Oktober 2026)  
 **Tanggal**: 2026-10-23  
 **Decider**: Frontend & Backend Team
+
+> **Dokumen ini tidak lagi berlaku sebagai acuan build.** Keputusan SSE-nya dipertahankan di
+> ADR-005, tetapi rinciannya tidak: ADR-005 memakai sticky session OFF, `: keepalive` 15 detik
+> (bukan event `heartbeat` 30 detik), token lewat cookie/header (bukan query string), tick
+> admission 500ms (bukan broadcast 1–2 detik), dan grant yang didorong setelah slot aman
+> (bukan `POST /queue/claim-token` yang dapat menolak). Angka biaya dan kapasitas per task di
+> sini juga sudah digantikan. Gunakan ADR-005.
 
 ---
 
