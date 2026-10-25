@@ -57,6 +57,140 @@ Konkatenasi polos, tanpa pemisah. Tidak cocok → **abaikan notifikasi**, jangan
 
 ---
 
+## Ganti metode pembayaran
+
+Dua situasi yang sering tertukar, dan hanya satu memerlukan pemanggilan API tambahan.
+
+```mermaid
+flowchart TD
+    A[Customer di halaman pembayaran] --> B{Sudah menekan<br/>Bayar Sekarang?}
+    B -->|Belum| C[Ganti pilihan metode<br/>= state frontend saja<br/>TIDAK ada panggilan API]
+    C --> D[POST /payments/booking_id<br/>dengan metode terpilih]
+
+    B -->|Sudah| E{Hasilnya apa?}
+
+    E -->|deny / cancel / failure| F[Sistem sudah mengembalikan<br/>status ke HELD dan menaikkan<br/>payment_attempts sendiri]
+    F --> G[Tidak ada transaksi Midtrans yang hidup]
+    G --> D
+
+    E -->|masih pending<br/>customer berubah pikiran| H[VA / QR lama MASIH<br/>dapat dibayar]
+    H --> I[POST /payments/booking_id/retry]
+    I --> J[Server: POST /v2/order_id/cancel<br/>ke Midtrans, LALU commit]
+    J --> K{Cancel berhasil?}
+    K -->|Ya| L[status HELD<br/>payment_attempts naik]
+    L --> D
+    K -->|Sudah settlement| M[409 — webhook akan<br/>mengonfirmasi normal]
+    K -->|Gagal lain| N[503 — attempt TIDAK naik<br/>VA lama masih berlaku]
+```
+
+**Mengapa cancel sebelum commit.** Bila commit lebih dulu lalu cancel gagal, customer
+memiliki attempt yang sudah naik **dan** VA lama yang masih hidup — dua instrumen untuk satu
+booking, dan keduanya dapat dibayar. Urutan sebaliknya hanya meninggalkan VA yang tidak lagi
+berfungsi, yang terlihat pada polling status dan dibersihkan sweep pada TTL.
+
+**TTL tidak ikut mundur.** `order_time` diisi `held_at`, bukan waktu request, sehingga VA
+baru mewarisi sisa jendela yang benar — anchor 10:15 + 10 menit tetap berakhir 10:25 walau
+charge kedua terjadi pukul 10:23. Dengan `now()`, setiap pergantian metode akan memberi 10
+menit baru dan TTL tidak pernah habis.
+
+**Dibatasi `MAX_PAYMENT_ATTEMPTS`.** Tiap percobaan menerbitkan VA atau QR baru di Midtrans;
+tanpa batas, satu customer dapat menerbitkan puluhan dalam satu jendela TTL.
+
+---
+
+## Halaman pembayaran di frontend
+
+**Tidak ada halaman baru.** Halaman pembayaran punya dua state, dan seluruh alur — termasuk
+ganti metode — bergerak di antara keduanya.
+
+| State | Isi layar |
+|---|---|
+| **A — memilih** | Daftar metode (§5.1), tombol "Bayar Sekarang", countdown |
+| **B — instruksi** | Nomor VA / QR / iframe 3DS, countdown, polling status tiap 2 detik |
+
+`POST /payments/{booking_id}` membawa A → B. Yang mengembalikan B → A ada dua, dan keduanya
+berbeda di kode:
+
+| Pemicu | Siapa memulai | Panggilan API |
+|---|---|---|
+| Pembayaran ditolak | sistem, lewat polling `status: FAILED` | **tidak ada** — langsung ke state A |
+| Customer berubah pikiran | customer, lewat tautan | `POST /payments/{id}/retry` dulu |
+
+### Penanganan tautan "Ganti metode pembayaran"
+
+```
+klik tautan
+  → dialog konfirmasi            ← WAJIB: nomor VA lama berhenti berlaku
+  → POST /payments/{booking_id}/retry
+       200                        → kosongkan instruksi → state A
+       409 PAYMENT_ALREADY_SETTLED → ternyata sudah lunas → halaman tiket
+       409 status lain             → GET /payments/{id}/status, ikuti hasilnya
+       429 MAX_ATTEMPTS_EXCEEDED   → nonaktifkan tautan
+       503                         → tetap di state B; VA lama masih berlaku
+```
+
+Tiga hal yang mudah salah:
+
+**Dialog konfirmasi tidak opsional.** Customer mungkin sudah berdiri di ATM dengan nomor VA
+diketik. Membatalkannya diam-diam membuatnya terdampar. Dialog harus menyebut bahwa nomor
+lama berhenti berlaku.
+
+**Polling tetap jalan selama dialog terbuka.** Bila VA justru lunas pada jendela itu, polling
+mengembalikan `PAID`, dialog menutup sendiri, dan customer diarahkan ke halaman tiket —
+alih-alih membatalkan pembayaran yang sudah ia lakukan. `409 PAYMENT_ALREADY_SETTLED` adalah
+separuh pengaman yang sama di sisi server.
+
+**Countdown tetap terlihat dan terus berjalan** selama pergantian. Ia tidak di-reset: customer
+yang berganti metode pada menit ke-8 menerima VA baru dengan sisa 2 menit. Menyembunyikan
+countdown saat transisi akan menyiratkan 10 menit baru.
+
+### Dua countdown, dua deadline
+
+Masing-masing halaman menjalankan countdown-nya sendiri dari deadline-nya sendiri. Tidak ada
+polling yang terlibat untuk menjalankannya — deadline datang sekali, sisanya aritmetika klien.
+
+| Halaman | Deadline | Sumber | Mulai dari |
+|---|---|---|---|
+| Detail Ticket | `booking_expires_at` | `GET /events/{id}/tickets` → `session.expires_at` | **5:00** |
+| Payment | `payment_expires_at` | `POST /payments/{id}` → `ttl.expires_at` | **10:00** |
+
+```js
+clockOffset = Date.parse(res.server_time) - Date.now();      // sekali, per halaman
+setInterval(() => render(Date.parse(deadline) - (Date.now() + clockOffset)), 1000);
+```
+
+Hitung ulang dari deadline tiap tick — **jangan** mengurangi variabel. Tab latar dibatasi
+browser menjadi sekitar sekali semenit, sehingga penghitung yang dikurangi akan meleset jauh
+lalu menampilkan angka yang salah dengan percaya diri saat customer kembali.
+
+**Perpindahan halaman terlihat seperti lompatan, dan itu benar.** Menekan "Lanjut ke
+Pembayaran" dengan sisa 2:14 menghasilkan layar berikutnya yang menunjukkan **10:00**: jam
+booking selesai, jam pembayaran baru mulai dari `held_at`. Itu hanya membingungkan bila
+keduanya diberi label sama. Label wireframe tender sudah membedakannya — *"Selesaikan
+pemilihan sebelum"* dan *"Selesaikan pembayaran dalam"* — dan perbedaan itu **wajib
+dipertahankan**, karena lompatan ke atas adalah satu-satunya momen seorang customer dapat
+mengira timer-nya rusak.
+
+**Pada 0:00, tanya server.** Jangan berpindah ke layar kedaluwarsa atas dasar countdown
+sendiri: sweep berjalan tiap 500ms dan selisih jam satu-dua detik membuat keduanya dapat
+berbeda. Bekukan tampilan di 0:00 lalu konfirmasi — `GET /events/{id}/queue/me` di halaman
+detail, `GET /payments/{id}/status` di halaman pembayaran.
+
+**Menekan Pay pada 0:01.** Request sedang di jalan ketika sweep meng-expire booking, dan
+`POST /bookings` menjawab **409** karena status bukan lagi `SELECTING`. Frontend harus
+membacanya sebagai *"waktu habis"* dan mengarahkan ke layar kedaluwarsa — **bukan** error
+generik. Bentuk 409-nya sama dengan ketidakcocokan status lain, jadi handler membaca status
+dari respons, bukan menebak penyebabnya.
+
+### Ganti metode ke kartu
+
+`requires_tokenization: true` pada respons §5.1 memberi tahu frontend untuk menjalankan
+Midtrans.js sebelum memanggil charge. Tidak ada perlakuan khusus untuk pergantian itu
+sendiri — `token_id` hanyalah bagian dari request charge biasa, dan selalu baru karena token
+Midtrans sekali pakai.
+
+---
+
 ## Dua keputusan POC yang mempersempit cakupan
 
 ### 1. Hanya BCA, BNI, BRI, CIMB untuk VA

@@ -197,7 +197,7 @@ dikelola lewat Bagian 11.
    │  QUEUE    queue:{ev}:issued · now_serving · state · slots:open:{ev}      │
    │           token:{uuid} (ticket_no, event_id, lapses, account_id?)        │
    │           by_ticket (ZSET score=ticket_no) · readmit:{ev}                │
-   │           grant:{token} EX 900                                           │
+   │           grant:{token} EX GRANT_TOKEN_TTL_SECONDS (1200)                │
    │  BOOKING  stock:{ev}:{cat} · nik:used:{ev}:{hmac} NX                     │
    │           nik:valid:{hmac} EX 86400                                      │
    │           expiries:{ev} (ZSET) — PENJADWAL, bukan sumber kebenaran       │
@@ -214,7 +214,8 @@ dikelola lewat Bagian 11.
    │     id, event_id, queue_token, account_id NULL, contact_email NULL,      │
    │     status, granted_at, slot_claimed_at, held_at,                        │
    │     booking_expires_at, payment_expires_at,   ← OTORITATIF; masing-      │
-   │     payment_ref, payment_attempts,               masing ditulis saat     │
+   │     payment_ref, payment_attempts, payment_method,                       │
+   │                                                  masing ditulis saat     │
    │     terms_version, terms_accepted_at)            CLAIM dan HELD          │
    │                                                                          │
    │   -- contact_email nullable di DDL karena baris GRANTED belum punya      │
@@ -490,8 +491,27 @@ payment_expires_at = held_at         + PAYMENT_TTL_SECONDS   (600)   ← tekan t
 ```
 
 Setiap customer karena itu mendapat **10 menit penuh** di halaman pembayaran, berapa pun lama
-ia memilih kursi — sesuai wireframe tender. Perjalanan maksimum menjadi **15 menit**, dan
-`grant:{token} EX 900` tepat menutupinya.
+ia memilih kursi — sesuai wireframe tender.
+
+**Perjalanan maksimum karena itu 17 menit, bukan 15**, dan umur `accessToken` harus
+diturunkan darinya, bukan ditulis tetap:
+
+```
+grace       120 detik   GRANT → claim
+booking TTL 300 detik   claim → tekan Pay
+payment TTL 600 detik   tekan Pay → batas bayar
+                        ──────────
+                        1020 detik = 17 menit
+
+GRANT_TOKEN_TTL_SECONDS = GRACE + BOOKING_TTL + PAYMENT_TTL + margin = 1200
+```
+
+> Angka tetap `EX 900` berlaku pada model anchor-tunggal sebelumnya dan **tidak lagi**:
+> customer yang memakai hampir seluruh grace dan seluruh TTL booking akan kehilangan
+> token-nya dengan sisa dua menit jendela pembayaran yang masih sah — 401 saat polling
+> status, mungkin sambil berdiri di ATM dengan transfer sudah terkirim. Menurunkannya dari
+> ketiga konstanta membuat perubahan `PAYMENT_TTL_SECONDS` kelak tidak diam-diam
+> memendekkannya lagi.
 
 | Transisi | Kolom Aurora (di dalam transaksi) | ZSET (penjadwal) |
 |---|---|---|
@@ -705,6 +725,10 @@ GRACE_SECONDS=120           BOOKING_TTL_SECONDS=300  PAYMENT_TTL_SECONDS=600
   -- booking dari slot_claimed_at; pembayaran dari held_at (berurutan, maks 15 menit)
 GRANT_INSERT_MAX_RETRIES=3  BROADCAST_HEARTBEAT_SECONDS=10
 MAX_TICKETS_PER_TRANSACTION=3                        TERMS_VERSION
+MAX_PAYMENT_ATTEMPTS=5      -- tiap percobaan menerbitkan VA/QR baru di Midtrans
+MIN_RETRY_REMAINING_SECONDS=60  -- di bawah ini, ganti metode ditolak
+GRANT_TOKEN_TTL_SECONDS=1200    -- = GRACE + BOOKING_TTL + PAYMENT_TTL + margin.
+  -- DITURUNKAN, bukan konstanta lepas: perjalanan maksimum 120+300+600 = 1020 detik.
 ```
 
 **Payment Gateway**: Midtrans **Core API**. Probe half-open read-only; breaker terbuka →
@@ -806,7 +830,10 @@ POST /payments/{id}
   1. Validasi accessToken
   2. BEGIN
        SELECT status, payment_ref, payment_attempts
-         FROM bookings WHERE id = $1 FOR UPDATE      -- serialisasi duplikat bersamaan
+         FROM bookings
+        WHERE id = $1 AND queue_token = $accessToken   -- KEPEMILIKAN, bukan hanya
+          FOR UPDATE                                   --   token yang valid
+       0 baris → COMMIT ; 404 (BUKAN 403 — jangan konfirmasi booking itu ada)
 
        status = 'AWAITING_PAYMENT' → COMMIT ; return 200 { payment_ref, payment_expires_at }
                                      ↑ PEMUTARAN ULANG. Tidak memanggil gateway,
@@ -822,13 +849,23 @@ POST /payments/{id}
        -- VA tetap dapat dibayar sepanjang hari setelah stok dijual ulang.
        -- Tidak berlaku untuk kartu; jendelanya ditentukan batas waktu 3DS.
   5.   UPDATE bookings
-          SET status = 'AWAITING_PAYMENT', payment_ref = $ref
+          SET status = 'AWAITING_PAYMENT', payment_ref = $ref,
+              payment_method = $method        -- credit_card | bank_transfer | gopay
         WHERE id = $1 AND status = 'HELD'
        -- payment_expires_at TIDAK ditulis di sini; sudah ada sejak HELD (Bagian 7)
        INSERT INTO outbox (type='payment.initiated', aggregate_id=$1, payload=…)
      COMMIT
   6. -- Tidak perlu ZADD: skor penjadwal sudah payment_expires_at sejak HELD.
   7. Kembalikan VA / QR / deeplink
+
+  PENOLAKAN SINKRON (kartu, charge menjawab deny langsung):
+     UPDATE bookings
+        SET status = 'HELD', payment_ref = NULL, payment_method = NULL,
+            payment_attempts = payment_attempts + 1     -- WAJIB
+      WHERE id = $1 AND status = 'HELD'
+     -- Kenaikan attempt di sini yang membuat charge berikutnya memakai order_id
+     -- baru. Tanpanya Midtrans menolak percobaan kedua sebagai duplikat dan
+     -- customer terkunci dari membayar booking-nya sendiri.
 ```
 
 Dua klik Pay: keduanya membaca `payment_attempts` yang sama, menurunkan kunci yang sama,
@@ -836,11 +873,84 @@ gateway men-dedup charge-nya, lalu yang kalah pada `FOR UPDATE` masuk ke cabang 
 mengembalikan `payment_ref` yang sama. Tombol yang terklik dua kali tidak boleh terlihat
 seperti kegagalan.
 
-**Retry setelah penolakan** adalah aksi berbeda, bukan duplikat: `POST /payments/{id}/retry`
-menaikkan `payment_attempts`, mengembalikan status ke `HELD`, dan dengan demikian menghasilkan
-`order_id` baru. Tanpa ini, percobaan kedua ditolak Midtrans sebagai `order_id` duplikat.
-Untuk kartu, klien juga **wajib melakukan tokenisasi ulang**: `token_id` Midtrans hanya
-berlaku untuk satu transaksi.
+### Dua jalur berbeda untuk "ganti metode"
+
+**Setelah penolakan — tidak ada endpoint khusus.** Jalur deny (sinkron maupun webhook) sudah
+mengembalikan booking ke `HELD` **dan** menaikkan `payment_attempts`. Tidak ada transaksi
+Midtrans yang hidup. Customer cukup memilih metode lain dan memanggil `POST /payments/{id}`
+biasa; `order_id` yang diturunkan sudah baru.
+
+**Saat pembayaran masih `pending` — `POST /payments/{id}/retry`.** Customer sudah menerima VA
+BCA lalu berubah pikiran ingin GoPay. Tidak ada yang gagal; transaksi lama **masih dapat
+dibayar**. Memanggil charge lagi begitu saja akan membuat dua instrumen hidup sekaligus untuk
+satu booking.
+
+```
+POST /payments/{booking_id}/retry
+
+  KELAYAKAN — diperiksa berurutan; yang paling murah dan paling aman lebih dulu
+  BEGIN
+    SELECT status, payment_ref, payment_attempts, payment_expires_at
+      FROM bookings
+     WHERE id = $1 AND queue_token = $accessToken      -- 1. KEPEMILIKAN
+       FOR UPDATE                                      --    + serialisasi
+    0 baris                                  → ROLLBACK ; 404
+      -- 404, BUKAN 403: 403 memberi tahu penyerang bahwa booking itu ada.
+      -- Pemeriksaan ini mendahului semua yang lain agar status booking orang
+      -- lain tidak pernah bocor lewat kode respons.
+
+    status != 'AWAITING_PAYMENT'             → ROLLBACK ; 409   -- 2. tidak ada
+      -- Satu-satunya status dengan transaksi Midtrans hidup. HELD setelah
+      -- penolakan TIDAK memenuhi syarat: tidak ada yang perlu dibatalkan,
+      -- customer cukup memanggil POST /payments/{id}.
+
+    payment_expires_at <= now()              → ROLLBACK ; 409   -- 3. TTL habis
+      -- Sweep belum sempat menjalankannya. Menerbitkan VA baru di sini
+      -- memberi customer instrumen yang mati sebelum ia sampai ke ATM.
+
+    (payment_expires_at - now()) < MIN_RETRY_REMAINING_SECONDS
+                                             → ROLLBACK ; 409   -- 4. terlalu mepet
+      -- Sisa 15 detik tidak cukup untuk metode apa pun. Lebih jujur menolak
+      -- daripada menyerahkan VA yang pasti kedaluwarsa.
+
+    payment_attempts >= MAX_PAYMENT_ATTEMPTS → ROLLBACK ; 429   -- 5. batas
+    breaker payment gateway == OPEN          → ROLLBACK ; 503   -- 6. percuma
+      -- Tanpa Midtrans kita tidak dapat membatalkan transaksi lama, dan
+      -- menaikkan attempt tanpa membatalkannya meninggalkan dua instrumen hidup.
+
+    old_order_id = booking_id || ':' || payment_attempts
+    POST /v2/{old_order_id}/cancel  → Midtrans        -- masih memegang row lock
+      sudah settlement → ROLLBACK ; 409 — webhook akan mengonfirmasi secara normal
+      gagal lain       → ROLLBACK ; 503 — JANGAN naikkan attempt
+
+    UPDATE bookings
+       SET status='HELD', payment_ref=NULL, payment_method=NULL,
+           payment_attempts = payment_attempts + 1
+  COMMIT
+```
+
+**Cancel sebelum COMMIT, bukan sesudah.** Kedua urutan bisa gagal, tetapi tidak simetris:
+commit berhasil lalu cancel gagal meninggalkan attempt yang sudah naik **dan** VA lama yang
+masih hidup — dua instrumen, dan customer dapat membayar keduanya. Cancel berhasil lalu
+commit gagal hanya meninggalkan VA yang tidak lagi berfungsi, yang terlihat pada polling
+status dan dibersihkan sweep pada TTL. Yang kedua dapat dipulihkan; yang pertama mengambil
+uang dua kali.
+
+Row lock ditahan melewati panggilan HTTP. Itu lazimnya dihindari, tetapi di sini kuncinya
+adalah baris booking milik satu customer — ia hanya memblokir permintaan bersamaan customer
+itu sendiri, yang memang harus diblokir. Timeout ke Midtrans dibuat pendek.
+
+**`cancel`, bukan `expire`.** Tidak ada yang kedaluwarsa saat customer berganti metode;
+merchant membatalkannya. Dashboard Midtrans melaporkan keduanya terpisah, sehingga sale yang
+penuh pergantian metode tidak terbaca sebagai sale yang penuh timeout.
+
+**Untuk kartu, klien wajib melakukan tokenisasi ulang** pada percobaan berikutnya: `token_id`
+Midtrans hanya berlaku untuk satu transaksi.
+
+**TTL tidak ikut mundur.** `custom_expiry.order_time` diisi `held_at`, bukan waktu request,
+sehingga VA baru mewarisi sisa jendela yang benar: anchor 10:15 + 10 menit tetap berakhir
+10:25 walau charge kedua terjadi pukul 10:23. Seandainya `order_time` diisi `now()`, setiap
+pergantian metode akan memberi 10 menit baru dan TTL pembayaran tidak pernah habis.
 
 Bila gateway timeout: **jangan kirim ulang charge** — biarkan `payment_ref` NULL dan serahkan
 ke charge reconciler (Bagian 8).
@@ -880,10 +990,14 @@ POST /payments/webhook
              INSERT INTO outbox (type='ticket.issue', …)   -- satu per booking_item  FR-26
 
          deny / cancel / failure, ATAU capture dengan fraud_status != 'accept':
-           UPDATE bookings SET status='HELD', payment_ref=NULL
+           UPDATE bookings
+              SET status='HELD', payment_ref=NULL, payment_method=NULL,
+                  payment_attempts = payment_attempts + 1     -- WAJIB
             WHERE id=$1 AND status='AWAITING_PAYMENT'
-           -- kembali ke HELD, BUKAN EXPIRED: stok tetap milik customer sampai TTL
-           -- habis, dan ia boleh mencoba metode lain lewat POST /payments/{id}/retry.
+           -- kembali ke HELD, BUKAN EXPIRED: stok tetap milik customer sampai TTL.
+           -- Kenaikan attempt di sini membuat customer cukup memilih metode lain
+           -- lalu memanggil POST /payments/{id} biasa — order_id-nya sudah baru.
+           -- TIDAK perlu /retry: tidak ada transaksi Midtrans yang hidup.
 
          expire (dari sisi gateway):
            UPDATE bookings SET status='EXPIRED' WHERE id=$1 AND status='AWAITING_PAYMENT'
@@ -1120,6 +1234,34 @@ memakai cookie/header — dan mengapa perilaku yang sama dipakai **dengan sengaj
 | **Login** | `account_id` | FR-29 opsional |
 | **Anonim** | `queue_token` + device fingerprint | FR-29, FR-30 |
 
+### Kepemilikan: token yang valid ≠ token untuk booking ini
+
+`accessToken` yang sah membuktikan pemegangnya punya slot, **bukan** bahwa slot itu milik
+`booking_id` di URL. Keduanya harus diikat, pada **setiap** endpoint yang menerima
+`booking_id` atau `ticket_id` dari path:
+
+```sql
+WHERE id = $1 AND queue_token = $accessToken
+```
+
+Tanpa ikatan ini siapa pun yang memegang satu token sah dapat membaca booking orang lain,
+membatalkan pembayaran orang lain lewat `/retry`, atau melakukan charge atas booking orang
+lain. `booking_id` berbentuk `RB-00912` — berurutan dan mudah ditebak, dan pada 300.000
+customer bersamaan enumerasinya sepele.
+
+| Endpoint | Terikat |
+|---|---|
+| `GET /bookings/{id}` | ✅ |
+| `GET /bookings/{id}/tickets` | ✅ |
+| `GET /payments/{id}/methods` | ✅ |
+| `POST /payments/{id}` | ✅ |
+| `POST /payments/{id}/retry` | ✅ |
+| `GET /payments/{id}/status` | ✅ |
+
+**Tidak cocok → `404`, bukan `403`.** `403` mengonfirmasi bahwa booking itu ada, yang sudah
+cukup untuk memetakan rentang id yang aktif. Pemeriksaan ini dijalankan **sebelum** validasi
+status apa pun, agar kode respons tidak pernah membocorkan keadaan booking orang lain.
+
 ### Re-entrancy (BR-09)
 
 `GET /events/{ev}/queue/me` adalah satu-satunya endpoint yang dipanggil klien saat kembali, apa pun
@@ -1134,7 +1276,7 @@ keadaannya, dan ia mengembalikan **token yang sama** selama TTL belum habis:
 | CONFIRMED | `{bookingId}` | Halaman tiket |
 | EXPIRED / LAPSED | `{expired: true}` | Layar expired |
 
-`accessToken` disimpan di `grant:{token} EX 900` sehingga refresh, ganti tab, atau kembali
+`accessToken` disimpan di `grant:{token} EX GRANT_TOKEN_TTL_SECONDS` sehingga refresh, ganti tab, atau kembali
 dari aplikasi bank tidak pernah menerbitkan token baru maupun memindahkan customer.
 
 ### `contact_email`, `holder_email`, dan penerimaan T&C
@@ -1344,7 +1486,11 @@ Working set Redis pada 300.000 ≈ 80 MB terhadap 13 GB per node: sizing didasar
 | Rekonsiliasi memakai drift basi | `current_drift`, bukan `last_drift` (Bagian 6) |
 | Webhook duplikat dari gateway | `payment_events.gateway_event_id UNIQUE`; selalu 200 |
 | **Pembayaran tiba setelah booking EXPIRED** | Stok sudah dijual ulang. Webhook `settled` terhadap baris EXPIRED memicu `payment.refund` + alarm `LatePaymentRefund` (Bagian 9) |
-| Customer terkunci setelah charge ditolak | `POST /payments/{id}/retry` menaikkan `payment_attempts` → `order_id` baru (Bagian 8) |
+| Customer terkunci setelah charge ditolak | Jalur deny menaikkan `payment_attempts` sendiri → `order_id` berikutnya sudah baru (Bagian 9) |
+| **`booking_id` dapat ditebak; token sah dipakai atas booking orang lain** | Setiap endpoint ber-`booking_id` mengikat `queue_token`; tidak cocok → `404` sebelum pemeriksaan status apa pun (Bagian 12) |
+| **`accessToken` kedaluwarsa sebelum jendela pembayaran habis** | Umur token diturunkan dari GRACE + BOOKING_TTL + PAYMENT_TTL, bukan konstanta lepas (Bagian 7) |
+| Ganti metode meninggalkan dua instrumen hidup | `/retry` membatalkan transaksi lama di Midtrans **sebelum** COMMIT; gagal cancel → attempt tidak naik (Bagian 9) |
+| Customer menerbitkan puluhan VA dengan ganti metode berulang | `MAX_PAYMENT_ATTEMPTS` → 429 (Bagian 8) |
 | **VA tetap dapat dibayar setelah stok dijual ulang** | `custom_expiry` menyamai TTL saat charge + `POST /v2/{order_id}/expire` dari sweep (Bagian 7, Bagian 9) |
 | Form kartu kelak mengirim nomor kartu ke backend | Runtuhkan NFR-07 dan perluas cakupan PCI-DSS. Tidak ada endpoint menerima field kartu (Bagian 8) |
 | Outbox retry menerbitkan QR ganda | `UNIQUE (booking_item_id)` pada `tickets` (Bagian 4) |
@@ -1375,12 +1521,12 @@ Working set Redis pada 300.000 ≈ 80 MB terhadap 13 GB per node: sizing didasar
 | 8 | RPO / RTO | Tim |
 | 9 | Daftar skenario load test + threshold | Tim + QA |
 | 10 | Aksesibilitas (`aria-live` pada angka antrian dan banner pause) | Tim FE |
-| 11 | Kontrak API per endpoint (request/response schema) | Tim BE + FE |
 
 **Diputuskan dan ditutup**: transport SSE; perlakuan Dukcapil fail-closed; penghapusan WAF
-untuk POC; TTL berurutan dengan anchor `slot_claimed_at` dan `held_at`; target kapasitas 300.000; Dukcapil memvalidasi
-NIK saja; penomoran kursi tidak diimplementasikan di POC — tiket berisi QR code, kategori,
-dan NIK pemegang.
+untuk POC; TTL berurutan dengan anchor `slot_claimed_at` dan `held_at`; target kapasitas
+300.000; Dukcapil memvalidasi NIK saja; penomoran kursi tidak diimplementasikan di POC —
+tiket berisi QR code, kategori, dan NIK pemegang; kontrak API per endpoint — `api-contracts.md`
+v2.0 berstatus Accepted dan mencakup seluruh endpoint.
 
 ---
 

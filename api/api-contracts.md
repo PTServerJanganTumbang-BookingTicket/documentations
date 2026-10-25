@@ -1156,6 +1156,10 @@ Bentuk request berbeda per metode:
 
 **Response** (409 - status tidak sesuai): booking belum `HELD` atau sudah terminal.
 
+> **Setelah penolakan, panggil endpoint ini lagi — bukan `/retry`.** Jalur `deny` menaikkan
+> `payment_attempts` sendiri, sehingga `order_id` yang diturunkan sudah baru dan Midtrans
+> menerimanya. `/retry` hanya untuk membatalkan pembayaran yang masih `pending` (§5.3).
+
 **Response** (422 - `token_id` tidak valid atau sudah dipakai): token Midtrans **sekali
 pakai**; klien harus melakukan tokenisasi ulang.
 
@@ -1182,12 +1186,20 @@ booking, sebagai lapis kedua terhadap selisih jam.
 
 ---
 
-### 5.3 Retry Payment
+### 5.3 Cancel & Switch Payment Method
 
-Dipanggil setelah pembayaran **ditolak** gateway, saat customer ingin mencoba metode lain.
-Ini aksi yang berbeda, bukan duplikat.
+Dipanggil **hanya** ketika pembayaran sebelumnya masih `pending` dan customer ingin berganti
+metode — misalnya sudah menerima VA BCA lalu memilih GoPay.
 
 **Endpoint**: `POST /payments/{booking_id}/retry`
+
+> **Tidak dipanggil setelah pembayaran ditolak.** Jalur `deny` sudah mengembalikan booking ke
+> `HELD` dan menaikkan `payment_attempts` sendiri, dan tidak ada transaksi Midtrans yang
+> hidup. Customer cukup memilih metode lain lalu memanggil `POST /payments/{booking_id}`.
+>
+> **Tidak dipanggil saat customer hanya mengganti pilihan di UI** sebelum menekan "Bayar
+> Sekarang". Pada titik itu belum ada apa pun di Midtrans; pilihan metode adalah state
+> frontend sampai charge dikirim.
 
 **Headers**:
 ```
@@ -1197,26 +1209,49 @@ Authorization: Bearer {access_token}
 **Response** (200):
 ```json
 {
-  "meta": { "code": 200, "message": "Ready to retry" },
+  "meta": { "code": 200, "message": "Previous payment cancelled" },
   "data": {
     "booking_id": "RB-00912",
     "status": "HELD",
     "attempt": 2,
-    "payment_expires_at": "2026-10-24T13:25:00Z",
-    "server_time": "2026-10-24T13:19:40Z"
+    "cancelled_order_id": "RB-00912:1",
+    "payment_expires_at": "2026-10-25T10:25:00Z",
+    "server_time": "2026-10-25T10:23:10Z"
   }
 }
 ```
 
-> Menaikkan `payment_attempts` dan mengembalikan status ke `HELD`, sehingga charge berikutnya
-> memakai Idempotency-Key baru. **Tanpa endpoint ini customer terkunci**: gateway menyimpan
-> respons terhadap sebuah kunci (lazimnya 24 jam), jadi charge ulang dengan kunci lama akan
-> memutar ulang penolakan yang sama selamanya.
->
-> Stok **tidak** dilepas — tetap milik customer sampai `payment_expires_at`. Deadline tidak
-> diperpanjang; ia dihitung dari `slot_claimed_at`, bukan dari percobaan (BR-05).
+Klien kemudian memanggil `POST /payments/{booking_id}` dengan metode baru.
 
-**Response** (409): booking tidak dalam status `AWAITING_PAYMENT` yang gagal.
+> Server membatalkan transaksi lama di Midtrans (`POST /v2/{order_id}/cancel`) **sebelum**
+> meng-commit perubahan. Bila urutannya dibalik dan cancel gagal, customer memiliki attempt
+> yang sudah naik **dan** VA lama yang masih dapat dibayar — dua instrumen hidup untuk satu
+> booking.
+>
+> `cancel`, bukan `expire`: tidak ada yang kedaluwarsa, merchant membatalkannya. Keduanya
+> dilaporkan terpisah di dashboard Midtrans.
+
+**Response** (409 - `PAYMENT_ALREADY_SETTLED`): pembayaran lama ternyata sudah lunas saat
+cancel dicoba. Tidak ada perubahan; webhook akan mengonfirmasi booking secara normal.
+
+**Response** (404): `booking_id` tidak ada **atau bukan milik pemegang token**. Keduanya
+menjawab sama — `403` akan mengonfirmasi bahwa booking itu ada.
+
+**Response** (409 - status tidak sesuai): booking tidak dalam `AWAITING_PAYMENT`. Termasuk
+`HELD` setelah penolakan: tidak ada transaksi Midtrans yang hidup, panggil §5.2.
+
+**Response** (409 - `PAYMENT_WINDOW_CLOSED`): TTL sudah lewat, atau sisanya di bawah
+`MIN_RETRY_REMAINING_SECONDS`. Menerbitkan instrumen baru dengan sisa 15 detik hanya
+memindahkan kegagalan ke tempat yang lebih menyakitkan.
+
+**Response** (429 - `MAX_ATTEMPTS_EXCEEDED`): melewati `MAX_PAYMENT_ATTEMPTS`. Tiap
+percobaan menerbitkan VA/QR baru di Midtrans.
+
+**Response** (503): Midtrans tidak dapat dihubungi. `payment_attempts` **tidak** dinaikkan;
+VA lama masih berlaku dan customer dapat membayarnya atau mencoba lagi.
+
+> **TTL tidak di-reset.** `payment_expires_at` tetap dihitung dari `held_at` (BR-05). Customer
+> yang berganti metode pada menit ke-8 menerima VA baru dengan sisa 2 menit, bukan 10.
 
 **Requirement Coverage**: FR-20, NFR-02 (Jangan PHP)
 
@@ -1277,6 +1312,38 @@ Authorization: Bearer {access_token}
 }
 ```
 
+**Response** (200 - Failed): pembayaran ditolak, **stok masih milik customer**.
+```json
+{
+  "meta": { "code": 200, "message": "Payment failed" },
+  "data": {
+    "status": "FAILED",
+    "reason": "Kartu ditolak penerbit",
+    "can_retry": true,
+    "attempt": 2,
+    "payment_expires_at": "2026-10-25T10:25:00Z",
+    "server_time": "2026-10-25T10:19:40Z"
+  }
+}
+```
+
+> **Inilah satu-satunya sinyal bahwa pembayaran gagal.** Tanpa status ini customer menatap
+> countdown yang terus berjalan tanpa tahu kartunya ditolak. Frontend yang menerimanya
+> kembali ke daftar metode — **tanpa memanggil `/retry`**: jalur `deny` sudah menaikkan
+> `payment_attempts`, dan tidak ada transaksi Midtrans yang perlu dibatalkan.
+>
+> `payment_expires_at` tetap dihitung dari `held_at`; countdown **tidak** di-reset.
+
+### Pemetaan status booking → status API
+
+| Status `bookings` | `data.status` | Arti bagi frontend |
+|---|---|---|
+| `AWAITING_PAYMENT` | `PENDING` | Tetap di layar instruksi, lanjut polling |
+| `CONFIRMED` | `PAID` | Ke halaman tiket |
+| `HELD` dengan `payment_attempts > 0` | **`FAILED`** | Kembali ke daftar metode |
+| `HELD` dengan `payment_attempts = 0` | `PENDING` | Belum pernah charge; tetap di daftar metode |
+| `EXPIRED` / `LAPSED` | `EXPIRED` | Layar kedaluwarsa |
+
 **Requirement Coverage**: FR-22, FR-23
 
 ---
@@ -1335,7 +1402,7 @@ tetap menjawab `200`.
 | `capture` (kartu) | **`accept`** | → `CONFIRMED` | Idem. `capture` menjadi `settlement` keesokan hari tanpa tindakan |
 | `capture` (kartu) | **bukan `accept`** | tidak ada | **Belum lunas.** Jangan terbitkan tiket; tetap `AWAITING_PAYMENT` |
 | `settlement` / `capture` atas booking **`EXPIRED`** | — | tidak ada | **`payment.refund` diterbitkan** + alarm `LatePaymentRefund`. Uang masuk setelah stok dijual ulang |
-| `deny` / `cancel` / `failure` | — | → `HELD`, `payment_ref` dikosongkan | Stok **tetap** milik customer sampai TTL; ia dapat memakai `POST /payments/{id}/retry` |
+| `deny` / `cancel` / `failure` | — | → `HELD`, `payment_ref` dikosongkan, **`payment_attempts` dinaikkan** | Stok **tetap** milik customer sampai TTL. Kenaikan attempt membuat charge berikutnya memakai `order_id` baru, sehingga customer cukup memilih metode lain dan memanggil §5.2 |
 | `expire` | — | → `EXPIRED` | Lepas stok, bebaskan NIK, kirim email expired |
 | `pending` | — | tidak ada | Normal bagi VA dan e-wallet yang belum dibayar |
 | `refund` / `partial_refund` / `chargeback` | — | tidak ada | Dicatat di `payment_events` + alarm; di luar lingkup POC |
@@ -1598,6 +1665,7 @@ Legenda: ✅ terpenuhi di kontrak · ⚙️ di luar permukaan API (backend atau 
 | Payment | Via payment gateway (PCI-DSS compliant), no card data stored |
 | Rate Limiting | Per IP on queue join, per user on auth |
 | CSRF | `SameSite=Strict` on queue cookie; Origin validation on state-changing endpoints |
+| **Object ownership** | Setiap endpoint yang menerima `booking_id` atau `ticket_id` dari path mengikatnya ke pemegang token: `WHERE id = $1 AND queue_token = $accessToken`. Token yang sah membuktikan pemegangnya punya slot, bukan bahwa slot itu miliknya. Tidak cocok → **404**, bukan 403 |
 | SSE Auth | `queue_token` cookie validated on stream connection |
 
 ---
@@ -1620,6 +1688,9 @@ Legenda: ✅ terpenuhi di kontrak · ⚙️ di luar permukaan API (backend atau 
 | `PAYMENT_ALREADY_INITIATED` | Charge sudah berjalan; respons sebelumnya diputar ulang |
 | `CARD_TOKEN_INVALID` | `token_id` Midtrans tidak valid atau sudah dipakai — tokenisasi ulang |
 | `BANK_NOT_SUPPORTED` | Bank di luar bca/bni/bri/cimb |
+| `MAX_ATTEMPTS_EXCEEDED` | Melewati batas percobaan pembayaran per booking |
+| `PAYMENT_ALREADY_SETTLED` | Pembayaran lama sudah lunas; pembatalan tidak dilakukan |
+| `PAYMENT_WINDOW_CLOSED` | TTL pembayaran habis atau sisanya terlalu pendek untuk ganti metode |
 | `ADMISSION_PAUSED` | Admission dihentikan sementara (breaker Dukcapil / payment gateway) |
 | `BOOKING_EXPIRED` | TTL booking habis |
 | `PAYMENT_EXPIRED` | TTL pembayaran habis |
@@ -1651,6 +1722,33 @@ Legenda: ✅ terpenuhi di kontrak · ⚙️ di luar permukaan API (backend atau 
 | Transport | REST polling (`GET /payments/{id}/status`) |
 | Interval | 2–3 detik |
 | Duration | Sampai `payment_expires_at` |
+
+**Mengapa polling, padahal tier SSE sudah ada.** Pilihan transport mengikuti **bentuk
+fan-out**, bukan ketersediaan infrastruktur.
+
+| | Antrian (SSE) | Status pembayaran (polling) |
+|---|---|---|
+| Penonton | 300.000 | 1 |
+| Nilai | satu `now_serving` bersama | satu booking milik pribadi |
+| Pola | siarkan satu nilai ke banyak | antarkan satu nilai ke pemiliknya |
+| Batas konkurensi | besar antrian | `MAX_CONCURRENT_SLOTS` |
+
+Keunggulan SSE adalah menyiarkan satu nilai ke audiens besar tanpa satu request per penonton.
+Status pembayaran punya audiens **satu orang**, sehingga keunggulan itu tidak berlaku. Pada
+~500 slot terbuka, polling 2 detik hanya ~250 rps — sekitar 1,8 juta request untuk sale dua
+jam, di bawah $2.
+
+Yang menentukan: **customer sering tidak ada di halaman.** Untuk VA dan e-wallet ia pergi ke
+ATM atau aplikasi bank, dan koneksi SSE tidak bertahan melewati backgrounding — keterbatasan
+yang sudah tercatat untuk antrian. Yang dibutuhkan saat ia kembali adalah status **pada saat
+itu**, yaitu satu permintaan. SSE tidak memberi apa pun di atas itu, sehingga keduanya tetap
+harus diimplementasikan.
+
+Biayanya pun nyata: status pembayaran adalah pengiriman **tertarget**, bukan siaran, sehingga
+menuntut registry koneksi kedua — persis yang membuat WebSocket ditolak di Bagian 2 ADR-005.
+Menumpangkannya pada stream antrian lebih buruk lagi: tier itu kini hanya menyiarkan satu
+counter, dan ia adalah tier yang diskalakan ke 300.000 koneksi, tempat kesederhanaan paling
+berharga.
 
 > Status pembayaran tidak lewat SSE: ia tiba dari webhook gateway, bukan dari antrian, dan
 > hanya relevan bagi satu customer.
