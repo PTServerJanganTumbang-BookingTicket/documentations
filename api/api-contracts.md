@@ -990,7 +990,8 @@ Authorization: Bearer {access_token}
 
 ### 5.1 Get Payment Methods
 
-List metode pembayaran yang tersedia. UI: Payment Method selection.
+Metode pembayaran yang tersedia beserta **parameter yang dibutuhkan klien**. UI: Payment
+Method selection.
 
 **Endpoint**: `GET /payments/{booking_id}/methods`
 
@@ -1002,37 +1003,62 @@ Authorization: Bearer {access_token}
 **Response** (200):
 ```json
 {
-  "meta": {
-    "code": 200,
-    "message": "Success"
-  },
+  "meta": { "code": 200, "message": "Success" },
   "data": {
     "methods": [
       {
-        "id": "va",
-        "name": "Virtual Account",
-        "description": "Verifikasi otomatis, tanpa unggah bukti.",
-        "icon_url": "https://cdn.rusuh.id/icons/va.svg",
-        "enabled": true
-      },
-      {
-        "id": "ewallet",
-        "name": "E-Wallet",
-        "description": "Bayar praktis dengan dompet digital.",
-        "icon_url": "https://cdn.rusuh.id/icons/ewallet.svg",
-        "enabled": true
+        "id": "credit_card",
+        "name": "Kartu Kredit/Debit",
+        "description": "Verifikasi 3D Secure, hasil langsung.",
+        "icon_url": "https://cdn.rusuh.id/icons/card.svg",
+        "enabled": true,
+        "requires_tokenization": true,
+        "client_key": "SB-Mid-client-xxxxxxxxxxxx"
       },
       {
         "id": "bank_transfer",
-        "name": "Transfer Bank",
-        "description": "Transfer melalui rekening bank pilihan.",
+        "name": "Transfer Bank / Virtual Account",
+        "description": "Verifikasi otomatis, tanpa unggah bukti.",
         "icon_url": "https://cdn.rusuh.id/icons/bank.svg",
-        "enabled": true
+        "enabled": true,
+        "requires_tokenization": false,
+        "banks": [
+          { "code": "bca",  "name": "BCA",  "icon_url": "https://cdn.rusuh.id/icons/bca.svg" },
+          { "code": "bni",  "name": "BNI",  "icon_url": "https://cdn.rusuh.id/icons/bni.svg" },
+          { "code": "bri",  "name": "BRI",  "icon_url": "https://cdn.rusuh.id/icons/bri.svg" },
+          { "code": "cimb", "name": "CIMB Niaga", "icon_url": "https://cdn.rusuh.id/icons/cimb.svg" }
+        ]
+      },
+      {
+        "id": "gopay",
+        "name": "E-Wallet (GoPay / QRIS)",
+        "description": "Scan QR atau buka aplikasi GoPay.",
+        "icon_url": "https://cdn.rusuh.id/icons/ewallet.svg",
+        "enabled": true,
+        "requires_tokenization": false
       }
     ]
   }
 }
 ```
+
+| Field | Arti |
+|---|---|
+| `id` | Dikirim kembali sebagai `method` pada §5.2. Nilainya sama dengan `payment_type` Midtrans |
+| `requires_tokenization` | `true` → klien **wajib** memanggil Midtrans.js lebih dulu dan mengirim `token_id` |
+| `client_key` | Hanya untuk kartu. Client key Midtrans untuk tokenisasi di browser. **Server key tidak pernah dikirim ke klien** |
+| `banks` | Hanya untuk `bank_transfer`. Daftar bank yang dibuka |
+| `enabled` | `false` saat breaker payment gateway terbuka; UI menonaktifkan pilihan |
+
+**Keputusan lingkup POC — hanya empat bank.** Midtrans mendokumentasikan kasus *reversal*
+(`settlement` berubah menjadi `deny` dalam 1–5 menit, dana kembali ke customer) **hanya**
+untuk Permata, Mandiri Bill Payment, dan Indomaret. Ketiganya tidak dibuka, sehingga kelas
+kegagalan itu tidak dapat terjadi dan handler reversal tidak diperlukan. Lihat
+`payment-method/02-bank-transfer-va.md`.
+
+> "Virtual Account" dan "Transfer Bank" adalah **satu** metode di Core API, bukan dua.
+> Customer memilih bank dan menerima nomor VA; tidak ada jalur transfer manual dengan
+> unggah bukti.
 
 **Requirement Coverage**: FR-20
 
@@ -1040,7 +1066,7 @@ Authorization: Bearer {access_token}
 
 ### 5.2 Initiate Payment
 
-Memulai pembayaran dengan metode terpilih. UI: "Bayar Sekarang" button.
+Memulai pembayaran dengan metode terpilih. UI: tombol "Bayar Sekarang".
 
 **Endpoint**: `POST /payments/{booking_id}`
 
@@ -1049,52 +1075,108 @@ Memulai pembayaran dengan metode terpilih. UI: "Bayar Sekarang" button.
 Authorization: Bearer {access_token}
 ```
 
-**Request**:
+Bentuk request berbeda per metode:
+
+**Kartu** — `token_id` diperoleh klien dari Midtrans.js sebelum memanggil endpoint ini:
 ```json
-{
-  "payment_method": "va"
-}
+{ "method": "credit_card", "token_id": "48111111sHfSakAvHvFQFEjTivUV1114" }
 ```
 
-**Response** (200):
+**Transfer Bank**:
+```json
+{ "method": "bank_transfer", "bank": "bca" }
+```
+
+**E-Wallet**:
+```json
+{ "method": "gopay" }
+```
+
+**Response** (200) — bentuk `data.instructions` mengikuti metode:
+
+**Kartu, 3DS diperlukan**:
 ```json
 {
-  "meta": {
-    "code": 200,
-    "message": "Payment initiated"
-  },
+  "meta": { "code": 200, "message": "Payment initiated" },
   "data": {
-    "payment_id": "pay_123",
+    "payment_id": "RB-00912:1",
+    "method": "credit_card",
     "status": "PENDING",
-    "method": "va",
-    "instructions": {
-      "bank": "BCA",
-      "va_number": "8801234567890",
-      "amount": 1500000,
-      "expires_at": "2026-10-23T13:25:00Z"
-    },
-    "redirect_url": null,
-    "ttl": {
-      "expires_at": "2026-10-23T13:25:00Z",
-      "ttl_seconds": 280,
-      "server_time": "2026-10-23T13:20:20Z"
-    }
+    "instructions": { "redirect_url": "https://api.midtrans.com/v2/3ds/redirect/..." },
+    "ttl": { "expires_at": "2026-10-25T10:25:00Z", "ttl_seconds": 540, "server_time": "2026-10-25T10:16:00Z" }
   }
 }
 ```
+
+**Transfer Bank**:
+```json
+{
+  "data": {
+    "payment_id": "RB-00912:1",
+    "method": "bank_transfer",
+    "status": "PENDING",
+    "instructions": { "bank": "bca", "va_number": "8801234567890" },
+    "ttl": { "expires_at": "2026-10-25T10:25:00Z", "ttl_seconds": 540, "server_time": "2026-10-25T10:16:00Z" }
+  }
+}
+```
+
+**E-Wallet**:
+```json
+{
+  "data": {
+    "payment_id": "RB-00912:1",
+    "method": "gopay",
+    "status": "PENDING",
+    "instructions": {
+      "qr_url": "https://api.midtrans.com/v2/gopay/.../qr-code",
+      "deeplink_url": "https://gojek.link/..."
+    },
+    "ttl": { "expires_at": "2026-10-25T10:25:00Z", "ttl_seconds": 540, "server_time": "2026-10-25T10:16:00Z" }
+  }
+}
+```
+
+> Desktop menampilkan `qr_url`, mobile memakai `deeplink_url`. QR tersebut QRIS — customer
+> boleh membayar dengan aplikasi apa pun, dan webhook kemudian datang sebagai
+> `payment_type: qris`, bukan `gopay`.
 
 **Response** (200 - sudah pernah diinisiasi): **identik dengan respons pertama**, termasuk
 `payment_id` dan `instructions`. Tidak ada charge kedua ke gateway.
 
 > **Idempoten tanpa kunci dari klien.** Baris `bookings` adalah catatan idempotency-nya.
 > Server mengunci baris (`SELECT … FOR UPDATE`); bila status sudah `AWAITING_PAYMENT`,
-> `payment_ref` yang tersimpan dikembalikan apa adanya. Kunci yang dikirim ke gateway
-> diturunkan server sebagai `{booking_id}:{payment_attempts}` — **tidak pernah dari klien**.
+> `payment_ref` yang tersimpan dikembalikan apa adanya. Kunci yang dikirim ke Midtrans adalah
+> **`order_id` = `{booking_id}:{payment_attempts}`**, diturunkan server — Core API membawa
+> idempotency pada `order_id`, bukan pada header tersendiri, dan menolak `order_id` yang
+> sudah dipakai.
 >
 > Tombol "Bayar" yang terklik dua kali menghasilkan satu charge dan dua respons identik;
 > ia tidak boleh terlihat seperti kegagalan.
 
 **Response** (409 - status tidak sesuai): booking belum `HELD` atau sudah terminal.
+
+**Response** (422 - `token_id` tidak valid atau sudah dipakai): token Midtrans **sekali
+pakai**; klien harus melakukan tokenisasi ulang.
+
+**Response** (503 - `ADMISSION_PAUSED`): breaker payment gateway terbuka.
+
+### Expiry yang dikirim ke Midtrans
+
+Untuk `bank_transfer` dan `gopay`, charge menyertakan `custom_expiry` yang **menyamai TTL
+pembayaran**:
+
+```json
+"custom_expiry": { "order_time": "<held_at, WIB>", "expiry_duration": "10", "unit": "minute" }
+```
+
+Tanpa ini, expiry VA bawaan Midtrans adalah **24 jam** — VA tetap dapat dibayar sepanjang
+hari setelah sweep melepas stoknya dan menjualnya ke orang lain. `order_time` diisi
+`held_at`, bukan waktu request, agar jendela Midtrans berakhir bersama jendela kita (BR-05).
+
+`custom_expiry` **tidak berlaku untuk kartu**; jendelanya ditentukan batas waktu 3DS.
+Untuk ketiga metode, sweep juga memanggil `POST /v2/{order_id}/expire` saat meng-expire
+booking, sebagai lapis kedua terhadap selisih jam.
 
 **Requirement Coverage**: FR-20, FR-21, FR-24 (API shared web/mobile), FR-25 (idempoten)
 
@@ -1226,6 +1308,18 @@ X-Callback-Signature: sha256=...
 }
 ```
 
+**Verifikasi tanda tangan**:
+
+```
+signature_key == SHA512(order_id + status_code + gross_amount + ServerKey)
+```
+
+Konkatenasi polos tanpa pemisah. Tidak cocok → **abaikan notifikasi**, jangan proses, jangan
+ubah status apa pun.
+
+> Dokumentasi Midtrans memuat dua skema tanda tangan. SHA256withRSA pada halaman *Security
+> Specification* berlaku untuk lini API lain, **bukan** webhook Core API.
+
 **Idempotency**: `event_id` disimpan di `payment_events.gateway_event_id` dengan constraint
 `UNIQUE`. Pengiriman ulang memicu unique violation, seluruh transaksi batal, dan endpoint
 tetap menjawab `200`.
@@ -1235,13 +1329,27 @@ tetap menjawab `200`.
 
 **Perlakuan per tipe event**:
 
-| `status` | Transisi | Efek |
-|---|---|---|
-| `PAID` / `SETTLED` atas booking `AWAITING_PAYMENT` | → `CONFIRMED` | Lepas slot, terbitkan tiket per `booking_item`, kirim e-tiket ke tiap `holder_email` |
-| `PAID` / `SETTLED` atas booking **`EXPIRED`** | tidak ada | **`payment.refund` diterbitkan** + alarm `LatePaymentRefund`. Uang masuk setelah stok dijual ulang |
-| `DENIED` / `CANCELLED` / `FAILURE` | → `HELD`, `payment_ref` dikosongkan | Stok **tetap** milik customer sampai TTL; ia dapat memakai `POST /payments/{id}/retry` |
-| `EXPIRE` (dari gateway) | → `EXPIRED` | Lepas stok, bebaskan NIK, kirim email expired |
-| lainnya | tidak ada | Dicatat di `payment_events`, tanpa transisi status |
+| `transaction_status` | `fraud_status` | Transisi | Efek |
+|---|---|---|---|
+| `settlement` | `accept` | → `CONFIRMED` | Lepas slot, terbitkan tiket per `booking_item`, kirim e-tiket ke tiap `holder_email` |
+| `capture` (kartu) | **`accept`** | → `CONFIRMED` | Idem. `capture` menjadi `settlement` keesokan hari tanpa tindakan |
+| `capture` (kartu) | **bukan `accept`** | tidak ada | **Belum lunas.** Jangan terbitkan tiket; tetap `AWAITING_PAYMENT` |
+| `settlement` / `capture` atas booking **`EXPIRED`** | — | tidak ada | **`payment.refund` diterbitkan** + alarm `LatePaymentRefund`. Uang masuk setelah stok dijual ulang |
+| `deny` / `cancel` / `failure` | — | → `HELD`, `payment_ref` dikosongkan | Stok **tetap** milik customer sampai TTL; ia dapat memakai `POST /payments/{id}/retry` |
+| `expire` | — | → `EXPIRED` | Lepas stok, bebaskan NIK, kirim email expired |
+| `pending` | — | tidak ada | Normal bagi VA dan e-wallet yang belum dibayar |
+| `refund` / `partial_refund` / `chargeback` | — | tidak ada | Dicatat di `payment_events` + alarm; di luar lingkup POC |
+
+> **`transaction_status` saja tidak cukup untuk kartu.** `capture` dengan `fraud_status`
+> selain `accept` berarti dana **belum** diterima. Memperlakukan `capture` sebagai lunas akan
+> menerbitkan tiket untuk transaksi yang tidak pernah didanai.
+>
+> **`payment_type` pada webhook dapat berbeda dari yang dikirim.** Customer yang membayar QR
+> GoPay memakai aplikasi QRIS lain menghasilkan notifikasi `payment_type: qris`. Handler
+> tidak boleh mencocokkan `payment_type` webhook dengan yang dikirim saat charge.
+>
+> **Reversal tidak ditangani**, dan tidak perlu: `settlement → deny` hanya terjadi pada
+> Permata, Mandiri Bill, dan Indomaret, yang tidak dibuka di POC (§5.1).
 
 **Response** (200) — **selalu**, termasuk pada duplikat:
 ```json
@@ -1510,6 +1618,8 @@ Legenda: ✅ terpenuhi di kontrak · ⚙️ di luar permukaan API (backend atau 
 | `TICKETS_UNAVAILABLE` | Tiket sudah habis |
 | `TERMS_NOT_ACCEPTED` | Syarat & ketentuan dan persetujuan PDP belum diterima |
 | `PAYMENT_ALREADY_INITIATED` | Charge sudah berjalan; respons sebelumnya diputar ulang |
+| `CARD_TOKEN_INVALID` | `token_id` Midtrans tidak valid atau sudah dipakai — tokenisasi ulang |
+| `BANK_NOT_SUPPORTED` | Bank di luar bca/bni/bri/cimb |
 | `ADMISSION_PAUSED` | Admission dihentikan sementara (breaker Dukcapil / payment gateway) |
 | `BOOKING_EXPIRED` | TTL booking habis |
 | `PAYMENT_EXPIRED` | TTL pembayaran habis |
@@ -1566,6 +1676,7 @@ Penyelarasan dengan ADR-005. Yang memutus kompatibilitas ditandai **BREAKING**.
 | 11 | Ditambahkan `POST /payments/{booking_id}/retry` | Tanpanya customer yang charge-nya ditolak terkunci: gateway memutar ulang penolakan yang tersimpan |
 | 12 | **Tidak ada** endpoint baru untuk BR-10 dan FR-33–35 | BR-10 dipenuhi oleh `server_time` yang sudah ada di tiap respons — endpoint waktu tersendiri akan redundan. FR-33–35 diterbitkan sebagai CloudWatch EMF, bukan lewat API |
 | 12a | TTL pembayaran ditegaskan berjalan dari `POST /bookings` | BR-05 "sejak booking dibuat" = saat tombol bayar ditekan dan stok di-hold, sesuai wireframe tender. Kontrak sudah benar (`ttl_seconds: 600`); ADR-005 yang disesuaikan |
+| 12b | §5.1 dan §5.2 ditulis ulang untuk tiga metode Midtrans Core API | VA dan "Transfer Bank" adalah satu metode, bukan dua; kartu absen dari daftar lama; tiap metode butuh parameter berbeda. `custom_expiry` ditambahkan karena default VA Midtrans 24 jam melawan TTL 10 menit |
 | 13 | Webhook: switch per tipe event + `gateway_event_id UNIQUE` | Sebelumnya hanya menangani `PAID`; "idempoten" dinyatakan tanpa mekanisme |
 | 14 | Webhook: `PAID` atas booking `EXPIRED` → `payment.refund` | Uang diterima setelah stok dijual ulang sebelumnya tidak punya jalur |
 | 15 | Snapshot awal pada stream | FR-10 sebelumnya ditandai terpenuhi tanpa mekanisme |

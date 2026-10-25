@@ -550,7 +550,12 @@ untuk booking_id dalam ZRANGEBYSCORE expiries:{ev} 0 now:
                                  DEL nik:used per item
                                                         -- TTL pembayaran (10 menit)
     AWAITING_PAYMENT → EXPIRED : idem HELD ; INSERT outbox 'booking.expired'   FR-28
-                                 callback terlambat → auto-refund (Bagian 8)
+                                 POST /v2/{order_id}/expire  → Midtrans
+                                 -- VA/QR berhenti dapat dibayar. custom_expiry saat
+                                 -- charge sudah menutupnya; ini menutup selisih jam
+                                 -- antara Midtrans dan kita. Gagal → best-effort,
+                                 -- tidak membatalkan expiry; emit MidtransExpireFailed.
+                                 callback terlambat → auto-refund (Bagian 9)
 
   ZREM expiries:{ev} booking_id
   EVALSHA advance_now_serving.lua ; PUBLISH
@@ -687,7 +692,9 @@ DUKCAPIL_BREAKER_OPEN_SECONDS
 
 PG_BASE_URL  PG_RATE_LIMIT_RPS  PG_BURST_CAPACITY  PG_TIMEOUT_MS
 PG_BREAKER_FAILURE_THRESHOLD  PG_BREAKER_OPEN_SECONDS
-PG_WEBHOOK_SIGNING_SECRET  PG_WEBHOOK_IP_ALLOWLIST
+MIDTRANS_SERVER_KEY        MIDTRANS_CLIENT_KEY      MIDTRANS_WEBHOOK_IP_ALLOWLIST
+  -- Server key dipakai untuk Basic Auth charge DAN verifikasi signature_key webhook.
+  -- Client key dikirim ke browser untuk tokenisasi kartu; server key TIDAK PERNAH.
 
 JOIN_RATE_LIMIT  JOIN_RATE_WINDOW_SECONDS  SSE_CONN_RATE_LIMIT
 
@@ -700,16 +707,30 @@ GRANT_INSERT_MAX_RETRIES=3  BROADCAST_HEARTBEAT_SECONDS=10
 MAX_TICKETS_PER_TRANSACTION=3                        TERMS_VERSION
 ```
 
-**Payment Gateway**: probe half-open read-only; breaker terbuka → **pause admission**.
-Tidak ada data kartu yang melewati sistem ini — PCI-DSS sepenuhnya di sisi gateway (NFR-07).
+**Payment Gateway**: Midtrans **Core API**. Probe half-open read-only; breaker terbuka →
+**pause admission**. Tiga metode dibuka — `credit_card`, `bank_transfer` (BCA/BNI/BRI/CIMB
+saja), dan `gopay`; rinciannya di `payment-method/`.
 
-**Idempotency-Key = `{booking_id}:{payment_attempts}`** — diturunkan dari state Aurora,
-**tidak pernah dikirim klien**. Kunci telanjang `booking_id` tidak cukup: gateway menyimpan
-respons terhadap sebuah kunci (lazimnya 24 jam), sehingga percobaan pertama yang **ditolak**
-akan diputar ulang selamanya dan customer terkunci dari membayar booking-nya sendiri. Pada
-Midtrans masalahnya lebih keras lagi — `order_id` wajib unik per percobaan, jadi retry ditolak
-mentah. `payment_attempts` hanya naik pada retry eksplisit setelah kegagalan, bukan pada
-duplikat bersamaan, sehingga dua klik Pay selalu menurunkan kunci yang identik.
+> **Permata, Mandiri Bill dan Indomaret sengaja tidak dibuka.** Midtrans mendokumentasikan
+> `settlement → deny` (reversal, 1–5 menit, dana kembali ke customer) hanya untuk ketiganya.
+> Menutup mereka berarti kelas kegagalan itu tidak dapat terjadi, dan tidak perlu handler
+> yang menarik kembali tiket yang sudah terbit dan e-tiket yang sudah terkirim.
+
+**PCI-DSS (NFR-07) adalah batasan arsitektural, bukan asumsi.** Nomor kartu bergerak
+langsung dari browser ke Midtrans lewat Midtrans.js, dan backend hanya menerima `token_id`.
+Klaim "tidak ada data kartu yang melewati sistem ini" **hanya benar selama itu dipertahankan**:
+satu form yang mengirim nomor kartu ke backend kita akan meruntuhkannya dan memperluas
+cakupan PCI-DSS secara drastis. Tidak ada endpoint yang boleh menerima field nomor kartu.
+
+**`order_id` = `{booking_id}:{payment_attempts}`** — diturunkan dari state Aurora, **tidak
+pernah dikirim klien**. Midtrans Core API membawa idempotency pada field `order_id`, bukan
+pada header tersendiri, dan **menolak `order_id` yang sudah dipakai**. Karena itu percobaan
+ulang wajib memakai nilai baru: `booking_id` telanjang akan ditolak mentah pada percobaan
+kedua, dan customer terkunci dari membayar booking-nya sendiri.
+
+`payment_attempts` hanya naik pada retry eksplisit setelah kegagalan, bukan pada duplikat
+bersamaan — sehingga dua klik Pay selalu menurunkan `order_id` yang identik dan Midtrans
+men-dedup-nya, sementara retry sesudah penolakan selalu menghasilkan yang baru.
 
 **Charge reconciler** (`rusuh-admission-ctl`, tiap 5 menit): untuk tiap booking berstatus
 `HELD` atau `AWAITING_PAYMENT` yang `payment_ref`-nya NULL sementara `payment_attempts > 0` —
@@ -795,7 +816,11 @@ POST /payments/{id}
      -- transaksi tetap terbuka bila status = 'HELD'
 
   3. key = booking_id || ':' || payment_attempts     -- DITURUNKAN, bukan dari klien
-  4. rate limit → breaker → panggil gateway dengan Idempotency-Key = key
+  4. rate limit → breaker → POST /v2/charge dengan transaction_details.order_id = key
+       + custom_expiry { order_time: held_at (WIB), expiry_duration: 10, unit: minute }
+       -- WAJIB: expiry VA bawaan Midtrans 24 JAM vs TTL kita 10 menit. Tanpa ini
+       -- VA tetap dapat dibayar sepanjang hari setelah stok dijual ulang.
+       -- Tidak berlaku untuk kartu; jendelanya ditentukan batas waktu 3DS.
   5.   UPDATE bookings
           SET status = 'AWAITING_PAYMENT', payment_ref = $ref
         WHERE id = $1 AND status = 'HELD'
@@ -813,7 +838,9 @@ seperti kegagalan.
 
 **Retry setelah penolakan** adalah aksi berbeda, bukan duplikat: `POST /payments/{id}/retry`
 menaikkan `payment_attempts`, mengembalikan status ke `HELD`, dan dengan demikian menghasilkan
-Idempotency-Key baru. Tanpa ini, respons penolakan yang tersimpan akan diputar ulang selamanya.
+`order_id` baru. Tanpa ini, percobaan kedua ditolak Midtrans sebagai `order_id` duplikat.
+Untuk kartu, klien juga **wajib melakukan tokenisasi ulang**: `token_id` Midtrans hanya
+berlaku untuk satu transaksi.
 
 Bila gateway timeout: **jangan kirim ulang charge** — biarkan `payment_ref` NULL dan serahkan
 ke charge reconciler (Bagian 8).
@@ -823,7 +850,11 @@ ke charge reconciler (Bagian 8).
 ```
 POST /payments/webhook
   ← Resource policy API Gateway: allowlist IP gateway (dulu rule WAF)
-  1. Verifikasi HMAC + IP allowlist
+  1. Verifikasi tanda tangan + IP allowlist
+     signature_key == SHA512(order_id + status_code + gross_amount + ServerKey)
+     -- konkatenasi polos, tanpa pemisah. Tidak cocok → ABAIKAN, jangan proses.
+     -- Dokumentasi Midtrans memuat dua skema; SHA256withRSA pada halaman Security
+     -- Specification berlaku untuk lini API lain, BUKAN webhook Core API.
 
   2. BEGIN
        INSERT INTO payment_events (booking_id, gateway_event_id, type, raw)
@@ -834,7 +865,10 @@ POST /payments/webhook
 
        switch event.type:
 
-         settled / capture:
+         settlement, ATAU capture DENGAN fraud_status='accept':
+           -- capture + fraud_status != accept BUKAN lunas: dana belum diterima.
+           -- payment_type webhook boleh berbeda dari yang dikirim: pembayaran QR
+           -- GoPay lewat aplikasi QRIS lain datang sebagai 'qris'. Jangan cocokkan.
            UPDATE bookings SET status='CONFIRMED'
             WHERE id=$1 AND status='AWAITING_PAYMENT'
            bila 0 baris DAN status saat ini = 'EXPIRED':
@@ -845,7 +879,7 @@ POST /payments/webhook
              INSERT INTO outbox (type='payment.confirmed', …)
              INSERT INTO outbox (type='ticket.issue', …)   -- satu per booking_item  FR-26
 
-         deny / cancel / failure:
+         deny / cancel / failure, ATAU capture dengan fraud_status != 'accept':
            UPDATE bookings SET status='HELD', payment_ref=NULL
             WHERE id=$1 AND status='AWAITING_PAYMENT'
            -- kembali ke HELD, BUKAN EXPIRED: stok tetap milik customer sampai TTL
@@ -916,7 +950,7 @@ outbox-publisher, tiap 1 detik:
                           → SQS → SES ke booking_items.holder_email   FR-26, FR-27
       booking.expired   → SQS → SES ke contact_email + tiap holder_email      FR-28
       account.verify    → SQS → SES link verifikasi email                     FR-31
-      payment.refund    → refund API gateway (Idempotency-Key = booking_id:refund)
+      payment.refund    → POST /v2/{order_id}/refund ke Midtrans
                           → SQS → SES pemberitahuan + alarm ops
     UPDATE outbox SET published_at = now() WHERE id = row.id   -- urutan sama
     complete_lease(row.id)
@@ -1217,7 +1251,7 @@ yang diterbitkan `outbox-publisher`.
 | NFR-04 | Stok atomic, tidak oversell | Bagian 8 Lua `DECRBY` dalam satu skrip |
 | NFR-05 | FCFS, tidak dapat dilangkahi | Bagian 6 `INCR` + `by_ticket` — lihat batasan WAF Bagian 16 |
 | NFR-06 | p95 < 1 detik | Bagian 10 |
-| NFR-07 | Token proteksi; PCI-DSS via gateway | Bagian 12; Bagian 8 tanpa data kartu |
+| NFR-07 | Token proteksi; PCI-DSS via gateway | Bagian 12; Bagian 8 — tokenisasi Midtrans.js, backend hanya menerima `token_id` |
 | NFR-08 | REST/JSON platform-agnostic | Bagian 13 |
 | NFR-09 | Observability real-time | Bagian 4 EMF; Bagian 13 dashboard |
 | NFR-10 | Kegagalan email tidak membatalkan | Bagian 9 langkah 5 |
@@ -1310,7 +1344,9 @@ Working set Redis pada 300.000 ≈ 80 MB terhadap 13 GB per node: sizing didasar
 | Rekonsiliasi memakai drift basi | `current_drift`, bukan `last_drift` (Bagian 6) |
 | Webhook duplikat dari gateway | `payment_events.gateway_event_id UNIQUE`; selalu 200 |
 | **Pembayaran tiba setelah booking EXPIRED** | Stok sudah dijual ulang. Webhook `settled` terhadap baris EXPIRED memicu `payment.refund` + alarm `LatePaymentRefund` (Bagian 9) |
-| Customer terkunci setelah charge ditolak | `POST /payments/{id}/retry` menaikkan `payment_attempts` → Idempotency-Key baru (Bagian 8) |
+| Customer terkunci setelah charge ditolak | `POST /payments/{id}/retry` menaikkan `payment_attempts` → `order_id` baru (Bagian 8) |
+| **VA tetap dapat dibayar setelah stok dijual ulang** | `custom_expiry` menyamai TTL saat charge + `POST /v2/{order_id}/expire` dari sweep (Bagian 7, Bagian 9) |
+| Form kartu kelak mengirim nomor kartu ke backend | Runtuhkan NFR-07 dan perluas cakupan PCI-DSS. Tidak ada endpoint menerima field kartu (Bagian 8) |
 | Outbox retry menerbitkan QR ganda | `UNIQUE (booking_item_id)` pada `tickets` (Bagian 4) |
 | Submit ulang `/bookings` menolak NIK sendiri | Guard `FOR UPDATE` mengembalikan booking yang ada (Bagian 8) |
 | Task ECS tertinggal menyala setelah sale | Alarm `IdleTaskCount > 0` di luar jendela sale (Bagian 11) |
@@ -1353,6 +1389,11 @@ dan NIK pemegang.
 - `requirement/requirements.md` v1.0 (Finalized) — FR-01..35, NFR-01..10, BR-01..10
 - `Tender Rusuh Booking Ticket.pdf` — baseline
 - `requirement/update-requirement-rusuh-booking-tiket.md` — login opsional, BR-01/BR-02, BR-07
+- `payment-method/` — tiga metode Midtrans Core API, diagram alur dan tautan sumber
+- [Midtrans Core API](https://docs.midtrans.com/docs/custom-interface-core-api) ·
+  [Transaction Status Cycle](https://docs.midtrans.com/docs/transaction-status-cycle) ·
+  [Signature notifikasi](https://docs.midtrans.com/reference/receiving-notifications) ·
+  [custom_expiry](https://docs.midtrans.com/docs/coreapi-advanced-features)
 - ADR-001 — Teknologi Antrian untuk Virtual Waiting Room
 - ADR-002 — Mekanisme Penentuan Posisi Antrian per Customer
 - ADR-003 — Mekanisme Pengiriman Update Posisi Antrian ke Client *(superseded by ADR-005)*
