@@ -184,7 +184,10 @@ dikelola lewat Bagian 11.
   │      ATAU 10 detik berlalu (heartbeat) ← resume otomatis                │
   │   1. SWEEP   ZRANGEBYSCORE expiries:{ev} 0 now  → VERIFIKASI ke Aurora  │
   │              sebelum meng-expire (Bagian 7)                             │
-  │   2. ADVANCE EVALSHA advance_now_serving.lua                            │
+  │   2. ADVANCE bila paused → LEWATI SELURUH LANGKAH INI                   │
+  │              (tanpa ini, banner pause tampil sementara slot             │
+  │               terus dibagikan — pelanggaran NFR-02)                     │
+  │              EVALSHA advance_now_serving.lua                            │
   │              → batch INSERT bookings(status='GRANTED', granted_at=now())│
   │              → ZADD expiries:{ev} (granted_at + GRACE) booking_id       │
   │              → gagal INSERT setelah retry: DECRBY slots:open,           │
@@ -199,7 +202,8 @@ dikelola lewat Bagian 11.
    │           by_ticket (ZSET score=ticket_no) · readmit:{ev}                │
    │           grant:{token} EX GRANT_TOKEN_TTL_SECONDS (1200)                │
    │  BOOKING  stock:{ev}:{cat} · nik:used:{ev}:{hmac} NX                     │
-   │           nik:valid:{hmac} EX 86400                                      │
+   │           nik:valid:{hmac} EX 86400   -- cache verifikasi Dukcapil       │
+   │  QUEUECAP queue:{ev}:capacity · depth = issued − now_serving             │
    │           expiries:{ev} (ZSET) — PENJADWAL, bukan sumber kebenaran       │
    │  DEPEND   rl:{service} · breaker:{service}:state/failures                │
    │  INGRESS  rl:join:{ip} · rl:sse:{ip}        ← pengganti WAF              │
@@ -226,6 +230,9 @@ dikelola lewat Bagian 11.
    │     CHECK (status IN ('GRANTED','SELECTING','LAPSED')                    │
    │            OR terms_accepted_at IS NOT NULL);                            │
    │                                                                          │
+   │   -- status: GRANTED SELECTING HELD AWAITING_PAYMENT                     │
+   │   --         PENDING_CANCELLATION CONFIRMED EXPIRED LAPSED ABANDONED     │
+   │                                                                          │
    │   -- SATU BARIS PER KURSI (BR-02: 1 NIK = 1 seat)                        │
    │   -- Nomor bangku tidak diimplementasikan di POC                         │
    │   booking_items(id, booking_id, category, unit_price,                    │
@@ -242,7 +249,24 @@ dikelola lewat Bagian 11.
    │           nik_hmac, qr_payload, issued_at)                        FR-27  │
    │   UNIQUE (booking_item_id)   ← cegah QR ganda saat outbox retry          │
    │   outbox(id, aggregate_id, type, payload jsonb, published_at NULL)       │
-   │   accounts(id, email, email_verified_at, verify_token)            FR-31  │
+   │   -- AKUN, NIK TERDAFTAR, DAN NIK TERSIMPAN                              │
+   │   accounts(id, email, email_verified_at, verify_token,                   │
+   │            nik_hmac, nik_verified_at, dukcapil_ref)         FR-31        │
+   │   UNIQUE (nik_hmac)   -- satu NIK = satu akun, GLOBAL                    │
+   │   -- nik_verified_at IS NULL = akun BELUM boleh membeli. Tidak ada       │
+   │   -- kolom status terpisah: satu sumber kebenaran, tanpa enum yang       │
+   │   -- bisa menyimpang dari kenyataan.                                     │
+   │                                                                          │
+   │   saved_niks(id, account_id, nik_hmac, label,                            │
+   │              verified_at, dukcapil_ref)   -- Daftar_NIK_Teman            │
+   │   UNIQUE (account_id, nik_hmac)                                          │
+   │   CHECK  (verified_at IS NOT NULL)                                       │
+   │   -- BARIS INI TIDAK DAPAT ADA TANPA BUKTI VERIFIKASI. Tidak ada         │
+   │   -- status PENDING: entri yang belum terverifikasi akan dipakai         │
+   │   -- checkout untuk MELEWATI Dukcapil, jadi ia tidak boleh tersimpan.    │
+   │                                                                          │
+   │   consent_records(id, account_id, policy_version, consented_at)          │
+   │   -- APPEND-ONLY: tanpa UPDATE, tanpa DELETE (UU PDP)                    │
    └───────────────────────────────┬──────────────────────────────────────────┘
      ┌─────────────┬───────────────┼───────────────┬────────────────────────┐
      ▼             ▼               ▼               ▼                        ▼
@@ -367,6 +391,9 @@ pelanggaran NFR-02 "Jangan PHP" paling langsung.
 | GRANTED → SELECTING (claim) | `booking-service` | ❌ Slot yang sama |
 | SELECTING → HELD (tekan Pay) | `booking-service` | ❌ Slot yang sama |
 | HELD → AWAITING_PAYMENT | `payment-api` | ❌ Slot yang sama |
+| AWAITING_PAYMENT → PENDING_CANCELLATION | `rusuh-admission-ctl` | ❌ Stok masih di-hold selama grace |
+| PENDING_CANCELLATION → CONFIRMED | webhook | ✅ Terminal |
+| PENDING_CANCELLATION → EXPIRED | `rusuh-admission-ctl` | ✅ Terminal + lepas stok + `DEL nik:used` |
 | AWAITING_PAYMENT → CONFIRMED | **webhook inline**, fallback outbox (Bagian 9) | ✅ Terminal |
 | apa pun → EXPIRED | `rusuh-admission-ctl` | ✅ Terminal + `DEL nik:used` |
 | GRANTED → LAPSED | `rusuh-admission-ctl` | ✅ Terminal; token → `readmit` |
@@ -443,6 +470,30 @@ customer baru tahu NIK-nya terpakai setelah menekan Pay, bukan saat mengetik.
 dan drift stok tidak menyebabkan over-admission seperti drift `slots:open` — ia hanya menahan
 tiket dari peredaran, sehingga koreksi yang lebih lambat dapat diterima.
 
+### Kapasitas antrian dan state yang terlihat customer
+
+Antrian dibatasi `QUEUE_CAPACITY` (300.000). `POST /events/{ev}/queue/join` menolak dengan
+`QUEUE_FULL` ketika `issued − now_serving >= QUEUE_CAPACITY`, **fail fast** — tanpa buffering
+dan tanpa memberi nomor antrian yang tidak akan pernah terlayani.
+
+State antrian per event tersedia di `GET /events` dan dipakai halaman utama:
+
+| `queue_state` | Arti | Tombol |
+|---|---|---|
+| `OPEN` | Dapat bergabung | "Beli Tiket" aktif |
+| `FULL` | `depth >= QUEUE_CAPACITY` | Nonaktif, "Antrian penuh" |
+| `CLOSED` | `state = closed_sold_out` | Nonaktif, "Sold Out" |
+
+Menampilkannya di halaman utama berarti customer melihat antrian penuh **sebelum** mengklik,
+bukan sesudah. `GET /events` di-cache CDN 30 detik, sehingga `depth` yang ditampilkan adalah
+perkiraan; penegaknya tetap pemeriksaan atomik saat join.
+
+**Tidak ada `Session_TTL_Antrian`.** Yang melepas posisi hanyalah grace period setelah slot
+diberikan: customer yang tidak masuk ke Detail Ticket Page dalam `GRACE_SECONDS` kehilangan
+slotnya ke antrian berikutnya (maksimum dua kali re-admit), dan menutup tab tidak melepas
+posisi. Memberi antrian batas waktu absolut tidak menambah proteksi di atas itu — ia hanya
+menghukum customer yang menunggu lama karena antrian memang panjang.
+
 ### `readmit:{ev}` dan pause/resume
 
 ```
@@ -457,6 +508,33 @@ post-sale job: DEL readmit:{ev} by_ticket
 > berjalan untuk sisanya. Ini benar — token yang di-readmit sudah pernah mendapat gilirannya,
 > ia tidak menyerobot — tetapi berarti customer yang menunggu kadang melihat slot terbebas
 > tanpa posisinya bergerak. Perlu diketahui tim dukungan sebelum hari-H.
+
+### Apa yang dihentikan `paused`, dan apa yang tetap jalan
+
+`paused` bukan sekadar field untuk banner. Ia **melewati seluruh langkah ADVANCE** pada tick
+admission-ctl (Bagian 4 langkah 2):
+
+| Saat `paused = true` | Jalan? | Alasan |
+|---|---|---|
+| ADVANCE — `INCRBY now_serving` + grant baru | ❌ | tidak ada yang dapat menyelesaikan pembelian |
+| Pengurasan `readmit` | ❌ | ia juga memasukkan orang ke funnel yang sama |
+| SWEEP — expiry booking dan pembayaran | ✅ | stok yang tertahan harus tetap dilepas |
+| Broadcast SSE + heartbeat | ✅ | customer harus melihat bannernya dan posisinya |
+| REKONSILIASI `slots:open` | ✅ | drift tidak berhenti hanya karena admission berhenti |
+
+Karena pengurasan `readmit` ada **di dalam** `advance_now_serving.lua`, gerbangnya diletakkan
+di admission-ctl — tick melewatkan `EVALSHA` sepenuhnya — bukan sebagai `ARGV` baru.
+Keputusan pause tidak sensitif terhadap balapan: sebuah tick menjalankan advance atau tidak.
+
+> **SWEEP sengaja TIDAK di-pause.** `booking_expires_at` adalah timestamp absolut yang
+> tersimpan; mem-pause sweep hanya menghentikan **penagihannya**, bukan jamnya. Saat pause
+> berakhir, tenggat itu sudah lewat dan sweep tetap meng-expire mereka — lebih lambat, pada
+> saat yang tidak dapat diduga customer, dan dalam satu gelombang besar. Selama itu
+> `slots:open` tetap terisi booking mati sehingga admission tidak dapat dimulai bersih
+> meskipun breaker sudah CLOSED.
+>
+> Perbaikan yang benar adalah **menggeser tenggatnya**, bukan berhenti menagih — masih
+> menunggu keputusan pemilik tender, Bagian 17 #4.
 
 Pause adalah **field pada payload broadcast**, bukan event tersendiri:
 
@@ -497,13 +575,15 @@ ia memilih kursi — sesuai wireframe tender.
 diturunkan darinya, bukan ditulis tetap:
 
 ```
-grace       120 detik   GRANT → claim
-booking TTL 300 detik   claim → tekan Pay
-payment TTL 600 detik   tekan Pay → batas bayar
-                        ──────────
-                        1020 detik = 17 menit
+grace antrian   120 detik   GRANT → claim
+booking TTL     300 detik   claim → tekan Pay
+payment TTL     600 detik   tekan Pay → batas bayar
+payment grace    30 detik   batas bayar → pembatalan final
+                            ──────────
+                            1050 detik = 17,5 menit
 
-GRANT_TOKEN_TTL_SECONDS = GRACE + BOOKING_TTL + PAYMENT_TTL + margin = 1200
+GRANT_TOKEN_TTL_SECONDS = GRACE_SECONDS + BOOKING_TTL_SECONDS
+                        + PAYMENT_TTL_SECONDS + PAYMENT_GRACE_SECONDS + margin = 1200
 ```
 
 > Angka tetap `EX 900` berlaku pada model anchor-tunggal sebelumnya dan **tidak lagi**:
@@ -527,6 +607,23 @@ ada expiry ganda dan tidak ada tumpang tindih. Deadline pembayaran ditulis **dal
 hold yang sama**, jadi tidak ada jendela di mana stok sudah terkunci tetapi deadline-nya belum
 ada.
 
+### Grace period pembayaran: 30 detik untuk callback, bukan untuk bayar
+
+`payment_expires_at` tidak lagi langsung terminal. Booking melewati
+**`PENDING_CANCELLATION`** selama `PAYMENT_GRACE_SECONDS` (30 detik), dan callback sukses
+yang tiba di jendela itu **tetap mengonfirmasi** booking.
+
+> **Grace menutup latensi callback, bukan pembayaran terlambat.** Customer yang mentransfer
+> pada menit 9:59 menghasilkan callback yang mungkin baru tiba 10:00:15 — pembayaran itu
+> sah dan seharusnya tidak hangus karena jaringan Midtrans. Customer yang baru mentransfer
+> pada 10:00:20 **tidak** tercakup: `custom_expiry` yang dikirim ke Midtrans tetap
+> `PAYMENT_TTL_SECONDS`, bukan TTL + grace, sehingga VA sudah tidak dapat dibayar saat
+> grace berjalan.
+
+Stok **tetap di-hold** selama grace: melepasnya lalu menerima callback sukses 10 detik
+kemudian berarti menjual ulang kursi yang sudah dibayar. Konsekuensinya perjalanan maksimum
+menjadi 17,5 menit, dan `GRANT_TOKEN_TTL_SECONDS` harus mencakupnya.
+
 ### Sweep memverifikasi sebelum meng-expire
 
 ZSET berada di luar transaksi Aurora, sehingga selalu ada jendela crash di antaranya. Jendela
@@ -547,6 +644,8 @@ untuk booking_id dalam ZRANGEBYSCORE expiries:{ev} 0 now:
                WHEN 'SELECTING'        THEN row.booking_expires_at
                WHEN 'HELD'             THEN row.payment_expires_at
                WHEN 'AWAITING_PAYMENT' THEN row.payment_expires_at
+               WHEN 'PENDING_CANCELLATION'
+                                       THEN row.payment_expires_at + PAYMENT_GRACE_SECONDS
                ELSE NULL                                -- sudah terminal
              END
 
@@ -569,7 +668,14 @@ untuk booking_id dalam ZRANGEBYSCORE expiries:{ev} 0 now:
                                  DELETE FROM nik_claims WHERE booking_id = $1
                                  DEL nik:used per item
                                                         -- TTL pembayaran (10 menit)
-    AWAITING_PAYMENT → EXPIRED : idem HELD ; INSERT outbox 'booking.expired'   FR-28
+    AWAITING_PAYMENT → PENDING_CANCELLATION :
+                                 -- TIDAK melepas stok. Grace 30 detik untuk
+                                 -- callback yang sedang di jalan.
+                                 ZADD expiries (payment_expires_at + PAYMENT_GRACE)
+                                 TIDAK DECR slots:open
+
+    PENDING_CANCELLATION → EXPIRED :
+                                 idem HELD ; INSERT outbox 'booking.expired'   FR-28
                                  POST /v2/{order_id}/expire  → Midtrans
                                  -- VA/QR berhenti dapat dibayar. custom_expiry saat
                                  -- charge sudah menutupnya; ini menutup selisih jam
@@ -637,8 +743,25 @@ percobaan ulang. Dukcapil memvalidasi **NIK saja**; nama dan tanggal lahir tidak
 | **Tidak dapat dihubungi** (timeout / 5xx / breaker OPEN) | **BLOKIR.** Tidak ada pembayaran yang dapat dilakukan. Emit `DukcapilBlockedSales` |
 
 `booking-service` menolak `POST /bookings` kecuali **setiap** NIK dalam permintaan punya
-`nik:valid:{hmac}` yang masih hidup. Tidak ada jalur yang menerbitkan tiket dengan NIK yang
-belum terverifikasi, sehingga kolom `nik_unverified` dan verifikasi ulang asinkron dihapus.
+**bukti verifikasi**, yaitu salah satu dari tiga sumber berikut:
+
+| # | Sumber bukti | Dibuat saat |
+|---|---|---|
+| 1 | `accounts.nik_verified_at` milik pemegang token | registrasi |
+| 2 | `saved_niks.verified_at` milik pemegang token | penambahan Daftar NIK Teman |
+| 3 | `nik:valid:{hmac}` masih hidup (cache 24 jam) | verifikasi Dukcapil terakhir |
+
+Ketiganya setara: masing-masing adalah jawaban "valid" dari Dukcapil yang pernah benar-benar
+terjadi. Yang membedakan hanya di mana jawaban itu disimpan dan berapa lama ia bertahan.
+
+> **Sumber 1 dan 2 tidak memerlukan Redis.** Keduanya baris Aurora, dan gate memeriksanya
+> dalam query yang sama dengan pemeriksaan kepemilikan booking — bukan panggilan tambahan.
+> Menuntut `nik:valid:{hmac}` untuk NIK yang sudah terdaftar atau tersimpan akan membatalkan
+> seluruh manfaat fitur itu: NIK yang sah akan ditolak hanya karena cache 24 jam sudah
+> kedaluwarsa.
+
+Tidak ada jalur yang menerbitkan tiket dengan NIK yang belum pernah diverifikasi, sehingga
+kolom `nik_unverified` dan verifikasi ulang asinkron dihapus.
 
 **Konsekuensi yang diterima secara sadar: Dukcapil menjadi single point of failure.** Bila
 Dukcapil tidak dapat dihubungi, penjualan berhenti — bukan melambat. Karena itu breaker
@@ -647,7 +770,116 @@ Ticket Page yang tidak mungkin mereka selesaikan melanggar NFR-02. Customer yang
 di dalam melihat banner pause yang sama dengan gangguan payment gateway, dan TTL mereka tetap
 berjalan — lihat Bagian 16 untuk risiko yang belum tertutup di sini.
 
-**Volume**: ~15.000 verifikasi per event → **~12/detik rata-rata, burst ~40/s**; bila
+> **Istilah: "breaker OPEN" berarti dependensinya SEDANG TIDAK DAPAT DIPAKAI**, bukan
+> sebaliknya. Circuit breaker yang terbuka memutus aliran panggilan — sama seperti sakelar
+> listrik yang terbuka memutus arus. Jadi "breaker Dukcapil OPEN" = Dukcapil gagal/timeout
+> melewati ambang → admission di-pause. Breaker CLOSED = normal, panggilan diteruskan.
+> Jangan membaca OPEN sebagai "API terbuka / tersedia".
+
+**Kedua dependensi diperlakukan sama: pause penuh.** Antrian berhenti maju untuk semua
+orang tanpa pengecualian, dan tidak ada seorang pun yang kehilangan posisinya.
+
+### Menyimpan NIK: Dukcapil dulu, baris kemudian
+
+`saved_niks` dan `accounts.nik_hmac` adalah **bukti verifikasi**, dan checkout memperlakukan
+keduanya setara dengan cache Dukcapil yang masih hidup. Karena itu keduanya hanya boleh
+lahir dari jawaban Dukcapil yang berhasil:
+
+```
+POST /accounts/me/saved-niks
+  1. Validasi format 16 digit + normalisasi (Bagian 8, normalisasi dan pepper)
+  2. Akun sudah punya consent_records?        tidak → 422 CONSENT_REQUIRED
+  3. BEGIN
+       SELECT id FROM accounts WHERE id = $me FOR UPDATE   -- serialisasi per akun
+       SELECT count(*) FROM saved_niks WHERE account_id = $me
+         >= MAX_SAVED_NIKS → ROLLBACK ; 409 MAX_SAVED_NIKS_REACHED
+
+  4.   Panggil Dukcapil  (rate limit → breaker, sama seperti checkout)
+         tidak valid        → ROLLBACK ; 422 — tidak ada baris yang dibuat
+         tidak dapat dihubungi → ROLLBACK ; 503 — tidak ada baris yang dibuat
+
+  5.   INSERT INTO saved_niks (account_id, nik_hmac, label,
+                               verified_at, dukcapil_ref)
+            VALUES ($me, $hmac, $label, now(), $ref)
+     COMMIT
+```
+
+Hal yang sama berlaku pada registrasi: `accounts.nik_verified_at` hanya diisi setelah
+Dukcapil menjawab valid, dan akun dengan `nik_verified_at IS NULL` **tidak dapat membeli**.
+
+> **Tidak ada status PENDING di sini, berbeda dari usulan deferred validation.** Entri yang
+> belum terverifikasi akan dipakai checkout untuk *melewati* Dukcapil — artinya satu NIK
+> yang belum pernah diverifikasi akan menghasilkan tiket. Itu persis lubang yang fail-closed
+> dirancang untuk menutup, hanya dipindahkan satu langkah ke belakang.
+>
+> **Menolak di sini tidak merugikan customer**, dan itulah yang membedakannya dari checkout.
+> Menyimpan NIK tidak berada di bawah tekanan TTL: tidak ada stok yang di-hold, tidak ada
+> countdown berjalan, dan customer dapat mencoba lagi beberapa menit kemudian tanpa
+> kehilangan apa pun. Menolak di checkout menghentikan penjualan; menolak di sini hanya
+> menunda satu entri di halaman profil.
+
+`CHECK (verified_at IS NOT NULL)` menjadikannya invariant basis data, bukan janji kode:
+tidak ada jalur penulisan — termasuk migrasi, skrip perbaikan, atau backfill — yang dapat
+menciptakan entri tanpa bukti.
+
+`dukcapil_ref` menyimpan rujukan jawaban Dukcapil yang memverifikasinya, sehingga sengketa
+di kemudian hari dapat ditelusuri ke panggilan yang sebenarnya.
+
+### NIK tersimpan: memotong panggilan Dukcapil, bukan memotong verifikasi
+
+Dukcapil berbayar per panggilan, dan itulah alasan utama `NIK_Terdaftar` dan
+`Daftar_NIK_Teman` ada. Sebuah NIK diverifikasi **sekali**, saat didaftarkan, lalu dipakai
+berkali-kali tanpa panggilan baru.
+
+| Asal NIK saat checkout | Panggilan Dukcapil |
+|---|---|
+| `accounts.nik_hmac` (NIK_Terdaftar pembeli) | **tidak ada** — diverifikasi saat registrasi |
+| `saved_niks` (Daftar_NIK_Teman, maks 5) | **tidak ada** — diverifikasi saat ditambahkan |
+| `nik:valid:{hmac}` masih hidup (cache 24 jam) | **tidak ada** |
+| Diketik manual, tidak tersimpan, tidak di cache | **satu panggilan** |
+
+**Customer tamu membayar penuh.** Tanpa akun, dua baris pertama tidak dapat berlaku, sehingga
+setiap NIK yang ia ketik — hingga tiga per transaksi, termasuk NIK-nya sendiri — memanggil
+Dukcapil.
+
+Satu pengecualian: `nik:valid:{hmac}` dikunci oleh **hash NIK saja, bukan oleh akun**.
+Cache karena itu bersifat global: NIK yang sudah diverifikasi siapa pun dalam 24 jam terakhir
+menghasilkan cache hit, bahkan untuk customer tamu yang baru pertama mengetiknya. Jarang
+terjadi untuk NIK acak, tetapi nyata — customer yang mengulang setelah gagal, atau dua orang
+yang membelikan tiket untuk teman yang sama.
+
+> Konsekuensi privasi kecil tapi nyata: membedakan cache hit dari panggilan baru pada respons
+> API akan memberi tahu pemanggil bahwa NIK itu baru saja diverifikasi **oleh orang lain**.
+> Karena itu `POST /nik/validate` tidak mengekspos keduanya secara terpisah — lihat
+> `api-contracts.md` §4.2.
+
+Verifikasi tidak dilewati, hanya tidak diulang: `saved_niks.verified_at` dan
+`accounts.nik_verified_at` adalah bukti verifikasi yang sudah terjadi, dan
+`booking-service` memperlakukannya setara dengan `nik:valid:{hmac}` saat memutuskan boleh
+tidaknya hold dijalankan.
+
+> **Ini tidak melonggarkan fail-closed.** NIK tanpa salah satu dari empat sumber di atas
+> tetap wajib melewati Dukcapil, dan Dukcapil yang tidak dapat dihubungi tetap memblokir.
+> Yang berubah hanya **berapa kali** kita membayar untuk jawaban yang sama.
+
+> **Asumsi yang dicatat: bukti verifikasi berlaku permanen, tanpa revalidasi berkala.**
+> Hasil verifikasi NIK dianggap tidak berubah setelah Dukcapil menyatakannya valid, sehingga
+> tidak ada job yang memverifikasi ulang entri lama. Keputusan ini disengaja — revalidasi
+> berkala justru membayar ulang panggilan yang fitur ini ada untuk menghindarinya.
+>
+> Yang membuatnya aman di POC adalah lingkupnya: **sistem gate check-in berada di luar
+> lingkup** (`requirements.md` §8), sehingga tidak ada satu pun komponen hilir yang memeriksa
+> ulang NIK sebuah tiket. NIK yang statusnya berubah di Dukcapil setelah tersimpan tidak
+> menghasilkan konsekuensi apa pun di sistem ini.
+>
+> **Batas asumsinya**: begitu gate check-in masuk lingkup — atau begitu NIK dipakai untuk
+> sesuatu selain pembatasan kuota — revalidasi menjadi perlu, karena saat itu barulah ada
+> pihak yang menolak tiket atas dasar NIK.
+
+**Volume**: ~15.000 verifikasi per event pada sale pertama → **~12/detik rata-rata, burst
+~40/s**. Pada sale berikutnya angka ini turun seiring bertambahnya NIK tersimpan — yang
+merupakan tujuan fitur ini, dan sekaligus berarti **estimasi biaya Dukcapil tidak boleh
+diturunkan dari sale pertama**. Bila
 `DUKCAPIL_RATE_LIMIT_RPS` di bawah itu, **Dukcapil menjadi plafon throughput penjualan**.
 
 ### Normalisasi dan stabilitas pepper
@@ -678,6 +910,8 @@ ke teks yang benar-benar berlaku saat itu. Klausa memerlukan **sign-off legal** 
 ### Siklus hidup NIK
 
 ```
+Terdaftar / tersimpan →  TIDAK memanggil Dukcapil (accounts.nik_verified_at
+                         atau saved_niks.verified_at sebagai bukti)
 Dukcapil valid      →  SETEX nik:valid:{hmac} 86400
 Dukcapil invalid    →  BLOKIR; tidak ada key yang ditulis
 Dukcapil tak dapat
@@ -722,6 +956,8 @@ OUTBOX_LEASE_SECONDS=30     DRIFT_THRESHOLD=3        RECONCILE_EVERY_TICKS=20
 STOCK_DRIFT_THRESHOLD=2     STOCK_RECONCILE_EVERY_TICKS=120
 NIK_USED_TTL_SECONDS        -- durasi sale + margin; membatasi kebocoran nik:used
 GRACE_SECONDS=120           BOOKING_TTL_SECONDS=300  PAYMENT_TTL_SECONDS=600
+PAYMENT_GRACE_SECONDS=30    QUEUE_CAPACITY=300000    MAX_SAVED_NIKS=5
+ACCOUNT_RATE_LIMIT_PER_IP_HOUR=5                     POLICY_VERSION
   -- booking dari slot_claimed_at; pembayaran dari held_at (berurutan, maks 15 menit)
 GRANT_INSERT_MAX_RETRIES=3  BROADCAST_HEARTBEAT_SECONDS=10
 MAX_TICKETS_PER_TRANSACTION=3                        TERMS_VERSION
@@ -980,11 +1216,16 @@ POST /payments/webhook
            -- payment_type webhook boleh berbeda dari yang dikirim: pembayaran QR
            -- GoPay lewat aplikasi QRIS lain datang sebagai 'qris'. Jangan cocokkan.
            UPDATE bookings SET status='CONFIRMED'
-            WHERE id=$1 AND status='AWAITING_PAYMENT'
+            WHERE id=$1 AND status IN ('AWAITING_PAYMENT','PENDING_CANCELLATION')
+           -- PENDING_CANCELLATION ikut diterima: itu seluruh gunanya grace.
            bila 0 baris DAN status saat ini = 'EXPIRED':
              -- UANG DITERIMA SETELAH BOOKING KEDALUWARSA. Stok sudah dijual ulang.
-             INSERT INTO outbox (type='payment.refund', aggregate_id=$1, payload=…)
+             UPDATE bookings SET payment_disputed = true WHERE id = $1
+             INSERT INTO outbox (type='payment.failed_notice', aggregate_id=$1, …)
              emit LatePaymentRefund   ← dialarmkan, bukan ditelan diam-diam
+             -- REFUND OTOMATIS TIDAK DIIMPLEMENTASIKAN DI POC. Booking ditandai
+             -- disputed dan direkonsiliasi lewat GET /admin/reconciliation/disputed
+             -- + refund manual lewat dashboard Midtrans. Alasannya di Bagian 9.
            bila 1 baris:
              INSERT INTO outbox (type='payment.confirmed', …)
              INSERT INTO outbox (type='ticket.issue', …)   -- satu per booking_item  FR-26
@@ -1063,12 +1304,42 @@ outbox-publisher, tiap 1 detik:
       ticket.issue      → terbitkan tickets(seat_category, qr_payload, nik_hmac)
                           → SQS → SES ke booking_items.holder_email   FR-26, FR-27
       booking.expired   → SQS → SES ke contact_email + tiap holder_email      FR-28
+      payment.failed_notice → SQS → SES ke contact_email. Dikirim pada TIGA kondisi:
+                          (a) callback gateway menyatakan transaksi gagal
+                          (b) TTL + grace berlalu tanpa callback apa pun
+                          (c) callback sukses tiba setelah pembatalan final (disputed)
+                          Isi (c) menyatakan dana diterima, booking sudah batal, dan
+                          refund sedang diproses — WAJIB email, bukan hanya log.
       account.verify    → SQS → SES link verifikasi email                     FR-31
       payment.refund    → POST /v2/{order_id}/refund ke Midtrans
                           → SQS → SES pemberitahuan + alarm ops
     UPDATE outbox SET published_at = now() WHERE id = row.id   -- urutan sama
     complete_lease(row.id)
 ```
+
+### Refund disputed: dicatat di POC, tidak dieksekusi otomatis
+
+Callback sukses yang tiba setelah pembatalan final menandai `bookings.payment_disputed` dan
+menerbitkan `payment.failed_notice` ke customer. **Refund otomatis tidak dibangun di POC.**
+
+Alasannya bukan kompleksitas melainkan arah operasi: refund memindahkan uang keluar, dan
+jalur yang mengeksekusinya otomatis berdasarkan callback adalah jalur yang paling mahal bila
+salah. Pada volume POC jumlahnya kecil dan dapat ditangani manusia dengan bukti lengkap.
+
+```
+GET /admin/reconciliation/disputed?event_id=…
+  → daftar booking dengan payment_disputed = true:
+    booking_id, order_id, gross_amount, paid_at, cancelled_at,
+    payment_type, gateway_event_id, contact_email
+```
+
+Operator mencocokkannya dengan dashboard Midtrans dan menjalankan refund di sana. Setiap
+baris sudah memuat `order_id` dan `gateway_event_id`, sehingga pencocokan tidak memerlukan
+pencarian manual.
+
+> **Sebelum produksi**: otomatiskan lewat `POST /v2/{order_id}/refund` pada konsumer outbox,
+> dengan alarm pada tiap eksekusi. Jalur `payment.refund` sudah ada bentuknya di Bagian 9;
+> yang ditunda adalah pemanggilannya, bukan desainnya.
 
 ### Langkah 5 — Email tidak boleh menggagalkan transaksi
 
@@ -1384,7 +1655,12 @@ yang diterbitkan `outbox-publisher`.
 | FR-27 | QR code, kategori tiket, NIK pemegang (nomor bangku tidak diimplementasikan di POC) | Bagian 4 `tickets(seat_category, qr_payload, nik_hmac)` |
 | FR-28 | Email expired | Bagian 7, Bagian 9 `booking.expired` |
 | FR-29, FR-30 | Login opsional; cukup NIK + email | Bagian 12 |
-| FR-31 | Verifikasi email via link | Bagian 12 `accounts` + `account.verify` |
+| FR-31 | Verifikasi email via link | Bagian 12 `accounts` + `account.verify`; link 24 jam, maks 3 kirim ulang/jam |
+| **NIK_Terdaftar** | Satu NIK per akun, unik global | Bagian 4 `UNIQUE (accounts.nik_hmac)` |
+| **Daftar_NIK_Teman** | Maks 5 NIK tersimpan, sudah terverifikasi | Bagian 4 `saved_niks`; Bagian 8 memotong panggilan Dukcapil |
+| **Consent (UU PDP)** | Persetujuan eksplisit saat registrasi, rekam immutable | Bagian 4 `consent_records` append-only |
+| **Grace pembayaran** | 30 detik setelah TTL, callback masih diterima | Bagian 7 `PENDING_CANCELLATION` |
+| **Kapasitas antrian** | 300.000, `QUEUE_FULL` fail fast, state di halaman utama | Bagian 6 |
 | FR-32 | Dua bahasa | Bagian 13 |
 | FR-33..35 | Dashboard real-time | Bagian 13 — CloudWatch EMF via `metrics-scraper`; lihat keterbatasan di sana |
 | NFR-01 | UX terjaga; waiting room melindungi | Bagian 4, Bagian 6 |
@@ -1426,10 +1702,24 @@ BR-07 dihapus dan tidak diimplementasikan; konsekuensinya ada di Bagian 16.
 | Lambda (termasuk `nik-verify`, `outbox-publisher`) | ~$0.80 |
 | Aurora (scale-up + baris GRANTED + rekonsiliasi + verifikasi sweep) | ~$1.05 |
 | SQS + SES | ~$0.09 |
-| Dukcapil API | **per kontrak — belum diketahui** |
+| Dukcapil API | **per kontrak — belum diketahui.** Volumenya bergantung pada rasio login; lihat catatan di bawah |
 | **Total variabel per event** | **~$36 + biaya Dukcapil** |
 
-Pada 15.000 conn/task, ECS turun ke ~$4.94 dan total ≈ **$30**. Egress adalah komponen
+Pada 15.000 conn/task, ECS turun ke ~$4.94 dan total ≈ **$30**.
+
+**Biaya Dukcapil adalah variabel produk, bukan variabel teknis.** Penghematan dari
+`NIK_Terdaftar` dan `Daftar_NIK_Teman` sepenuhnya bergantung pada berapa banyak pembeli yang
+login dan sudah menyimpan NIK:
+
+| Komposisi pembeli | Panggilan Dukcapil per 10.000 tiket |
+|---|---|
+| Seluruhnya tamu (_guest_) | ~10.000 — satu per NIK attendee |
+| Seluruhnya login dengan NIK tersimpan | mendekati nol |
+
+> **Jangan menurunkan angka tender dari asumsi adopsi login.** Rentangnya sekitar 5× antara
+> kedua ujung, dan adopsi login adalah keputusan produk yang belum terjadi. Angka yang aman
+> untuk dikutip adalah skenario tamu-berat; penghematan dari NIK tersimpan disajikan sebagai
+> potensi, bukan sebagai dasar perhitungan. Egress adalah komponen
 terbesar dan berbanding lurus dengan frekuensi update: publish hanya saat `now_serving`
 berubah, bukan tiap tick, memotongnya secara proporsional.
 
@@ -1476,7 +1766,7 @@ Working set Redis pada 300.000 ≈ 80 MB terhadap 13 GB per node: sizing didasar
 | Jalur fallback outbox p95 ≈ 1107ms | `OutboxInlineHitRate`; turunkan interval publisher bila sering |
 | Batch INSERT GRANTED gagal | Retry → `DECRBY` + `readmit` + tidak publish (Bagian 6) |
 | Kuota Dukcapil menjadi plafon throughput | Konfirmasi T-7 hari; uji di rehearsal |
-| Payment gateway tidak tersedia | Breaker fail closed + pause admission + resume otomatis |
+| Payment gateway tidak tersedia | Breaker fail closed + pause admission + resume otomatis. Pause melewatkan ADVANCE, termasuk pengurasan `readmit` (Bagian 6) |
 | Double-charge saat timeout gateway | Kunci per-percobaan `{booking_id}:{attempt}` + charge reconciler read-only (Bagian 8); charge tidak pernah dikirim ulang |
 | Outbox at-least-once merusak `slots:open` | Lease guard (Bagian 9) + rekonsiliasi (Bagian 6) |
 | **Rollback Aurora setelah `hold_booking.lua` berhasil** | Redis di luar transaksi: stok dan NIK bocor, dan jalur expiry `SELECTING` tidak mengembalikannya. Kompensasi eksplisit (Bagian 8) + rekonsiliasi stok tiap 60 detik (Bagian 6) + `HoldCompensated` dialarmkan |
@@ -1488,6 +1778,11 @@ Working set Redis pada 300.000 ≈ 80 MB terhadap 13 GB per node: sizing didasar
 | **Pembayaran tiba setelah booking EXPIRED** | Stok sudah dijual ulang. Webhook `settled` terhadap baris EXPIRED memicu `payment.refund` + alarm `LatePaymentRefund` (Bagian 9) |
 | Customer terkunci setelah charge ditolak | Jalur deny menaikkan `payment_attempts` sendiri → `order_id` berikutnya sudah baru (Bagian 9) |
 | **`booking_id` dapat ditebak; token sah dipakai atas booking orang lain** | Setiap endpoint ber-`booking_id` mengikat `queue_token`; tidak cocok → `404` sebelum pemeriksaan status apa pun (Bagian 12) |
+| **Entri NIK tersimpan tanpa bukti verifikasi** | Mustahil: `CHECK (verified_at IS NOT NULL)` + Dukcapil dipanggil sebelum INSERT, bukan sesudah (Bagian 8) |
+| Status NIK berubah di Dukcapil setelah tersimpan | **Diterima.** Bukti verifikasi permanen, tanpa revalidasi berkala. Tidak berkonsekuensi selama gate check-in di luar lingkup (Bagian 8) |
+| Stok dilepas lalu callback sukses tiba | Stok **tetap** di-hold selama `PENDING_CANCELLATION`; pelepasan hanya setelah grace berakhir (Bagian 7) |
+| Refund disputed tidak otomatis di POC | Ditandai `payment_disputed`, customer diberi tahu lewat email, operator merekonsiliasi lewat `GET /admin/reconciliation/disputed` (Bagian 9) |
+| Antrian menerima lebih banyak orang daripada yang bisa dilayani | `QUEUE_CAPACITY` + `QUEUE_FULL` fail fast; state antrian terlihat di halaman utama sebelum customer mengklik (Bagian 6) |
 | **`accessToken` kedaluwarsa sebelum jendela pembayaran habis** | Umur token diturunkan dari GRACE + BOOKING_TTL + PAYMENT_TTL, bukan konstanta lepas (Bagian 7) |
 | Ganti metode meninggalkan dua instrumen hidup | `/retry` membatalkan transaksi lama di Midtrans **sebelum** COMMIT; gagal cancel → attempt tidak naik (Bagian 9) |
 | Customer menerbitkan puluhan VA dengan ganti metode berulang | `MAX_PAYMENT_ATTEMPTS` → 429 (Bagian 8) |
@@ -1514,7 +1809,7 @@ Working set Redis pada 300.000 ≈ 80 MB terhadap 13 GB per node: sizing didasar
 | 1 | `DUKCAPIL_RATE_LIMIT_RPS` dan **SLA ketersediaan** Dukcapil | **Pemilik tender / Dukcapil** |
 | 2 | Biaya per panggilan Dukcapil | **Pemilik tender** |
 | 3 | Cap antrian / pesan jujur saat 300.000 : 10.000 tiket | **Pemilik tender** |
-| 4 | Perlakuan TTL customer yang sedang aktif saat admission di-pause | **Pemilik tender** |
+| 4 | Perlakuan TTL customer yang sedang aktif saat admission di-pause — biarkan berjalan, bekukan selama pause, atau geser tenggat sebesar durasi pause (dengan batas atas, karena `grant:{token}` hanya hidup 1200 detik) | **Pemilik tender** |
 | 5 | Kapasitas koneksi per ECS task | Tim — **T-14 hari** |
 | 6 | `MAX_CONCURRENT_SLOTS` + maksimum okupansi slot | Tim |
 | 7 | Kebijakan retensi PII (NIK, `contact_email`, `holder_email`) | Tim |
@@ -1525,7 +1820,10 @@ Working set Redis pada 300.000 ≈ 80 MB terhadap 13 GB per node: sizing didasar
 **Diputuskan dan ditutup**: transport SSE; perlakuan Dukcapil fail-closed; penghapusan WAF
 untuk POC; TTL berurutan dengan anchor `slot_claimed_at` dan `held_at`; target kapasitas
 300.000; Dukcapil memvalidasi NIK saja; penomoran kursi tidak diimplementasikan di POC —
-tiket berisi QR code, kategori, dan NIK pemegang; kontrak API per endpoint — `api-contracts.md`
+tiket berisi QR code, kategori, dan NIK pemegang; push notification TIDAK dibangun di POC;
+Session_TTL_Antrian TIDAK dipakai — grace period setelah alokasi slot sudah menutupinya;
+refund disputed dicatat dan direkonsiliasi manual, tidak otomatis;
+bukti verifikasi NIK berlaku permanen tanpa revalidasi berkala; kontrak API per endpoint — `api-contracts.md`
 v2.0 berstatus Accepted dan mencakup seluruh endpoint.
 
 ---

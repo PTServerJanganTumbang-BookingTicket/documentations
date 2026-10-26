@@ -189,18 +189,109 @@ Buat akun baru dengan email dan NIK.
 }
 ```
 
+**Request** (lengkap):
+```json
+{
+  "email": "alex@example.com",
+  "nik": "3171xxxxxxxxxx22",
+  "consent": { "accepted": true, "policy_version": "2026-10-01" }
+}
+```
+
+| Field | Wajib | Catatan |
+|---|---|---|
+| `nik` | ✅ | **NIK_Terdaftar** — 16 digit, diverifikasi Dukcapil saat registrasi, terikat permanen ke akun |
+| `consent.accepted` | ✅ | Persetujuan pemrosesan NIK pihak ketiga. Checkbox **tidak boleh pre-checked** |
+| `consent.policy_version` | ✅ | Versi kebijakan privasi yang ditampilkan saat itu |
+
+> **NIK diverifikasi sekali, di sini.** Setelah itu pembelian oleh akun ini tidak memanggil
+> Dukcapil lagi untuk NIK pembeli. Itulah tujuan utama `NIK_Terdaftar`: Dukcapil berbayar
+> per panggilan, dan pola pemakaian tiket adalah NIK yang sama berulang kali.
+>
+> **Consent diperlukan karena akun boleh menyimpan NIK orang lain** (§1.5). Rekamnya
+> immutable — timestamp, versi kebijakan, identitas akun — dan pencabutan hanya lewat tim
+> operasional (UU PDP No. 27/2022).
+
 **Validation Errors** (400):
 ```json
 {
-  "meta": {
-    "code": 400,
-    "message": "NIK must be exactly 16 digits"
-  },
+  "meta": { "code": 400, "message": "NIK must be exactly 16 digits" },
   "data": {}
 }
 ```
 
-**Requirement Coverage**: FR-29, FR-30 (login opsional, NIK + email untuk pembelian)
+**Response** (409 - `NIK_ALREADY_REGISTERED`): NIK sudah terikat ke akun lain. Satu NIK
+hanya dapat didaftarkan pada satu akun secara global.
+
+**Response** (422 - `CONSENT_REQUIRED`): registrasi diblokir sampai persetujuan dicentang.
+
+**Response** (429): melewati batas 5 akun baru per IP per jam.
+
+**Requirement Coverage**: FR-29, FR-30, FR-31
+
+---
+
+### 1.5 Daftar NIK Teman
+
+NIK yang sering diajak hadir bersama, disimpan sekali dan dipakai berulang **tanpa
+memanggil Dukcapil lagi**. Maksimal 5 per akun. Tidak tersedia untuk guest.
+
+**Endpoint**: `GET /accounts/me/saved-niks`
+
+```json
+{
+  "meta": { "code": 200, "message": "Success" },
+  "data": {
+    "max_entries": 5,
+    "saved_niks": [
+      { "id": "snk_1", "nik_masked": "3171********22", "label": "Budi",
+        "verified_at": "2026-10-20T08:11:00Z", "status": "VERIFIED" }
+    ]
+  }
+}
+```
+
+**Endpoint**: `POST /accounts/me/saved-niks`
+
+```json
+{ "nik": "3171xxxxxxxxxx33", "label": "Budi" }
+```
+
+> **Dukcapil dipanggil di sini, dan barisnya hanya dibuat jika jawabannya valid.** Urutannya
+> Dukcapil dulu, INSERT kemudian — tidak ada status `PENDING`. Entri yang belum terverifikasi
+> akan dipakai checkout untuk *melewati* Dukcapil, sehingga menyimpannya berarti memindahkan
+> lubang fail-closed satu langkah ke belakang.
+>
+> Basis data menegakkannya lewat `CHECK (verified_at IS NOT NULL)`, bukan hanya kode.
+>
+> NIK lengkap tidak pernah dikembalikan — hanya bentuk ter-mask.
+
+**Response** (201): entri dibuat; `verified_at` terisi dari jawaban Dukcapil saat itu.
+
+**Response** (409 - `MAX_SAVED_NIKS_REACHED`): sudah 5 entri; hapus salah satu dulu.
+
+**Response** (409 - `NIK_ALREADY_SAVED`): NIK sudah ada di daftar akun ini.
+
+**Response** (422 - `CONSENT_REQUIRED`): akun belum memberi persetujuan §1.4.
+
+**Response** (422 - NIK ditolak Dukcapil): tidak disimpan.
+
+**Response** (503 - `DUKCAPIL_UNAVAILABLE`): tidak disimpan, tidak ada entri parsial.
+
+> **Menolak di sini tidak merugikan customer.** Menyimpan NIK tidak berada di bawah tekanan
+> TTL — tidak ada stok yang di-hold dan tidak ada countdown berjalan — sehingga mencoba lagi
+> beberapa menit kemudian tidak kehilangan apa pun. Itu yang membedakannya dari checkout,
+> di mana penolakan menghentikan penjualan yang sedang berlangsung.
+
+> **Tidak ada revalidasi berkala.** Hasil verifikasi dianggap permanen: NIK yang sudah
+> dinyatakan valid tidak diverifikasi ulang. Aman di POC karena gate check-in berada di luar
+> lingkup, sehingga tidak ada komponen hilir yang memeriksa ulang NIK sebuah tiket.
+
+**Endpoint**: `DELETE /accounts/me/saved-niks/{id}`
+
+**Response** (204). Penghapusan **tidak** memengaruhi tiket yang sudah dibeli dengan NIK itu.
+
+**Requirement Coverage**: FR-15a (mengurangi panggilan Dukcapil), NFR-14 (UU PDP)
 
 ---
 
@@ -245,7 +336,9 @@ Menampilkan daftar event. UI: Home Page "Daftar Event".
       "image_url": "https://cdn.rusuh.id/events/konser-a.jpg",
       "status": "AVAILABLE",
       "has_queue": true,
-      "queue_length": 1248,
+      "queue_state": "OPEN",
+      "queue_depth": 1248,
+      "queue_capacity": 300000,
       "min_price": 500000,
       "max_price": 1500000
     },
@@ -268,6 +361,18 @@ Menampilkan daftar event. UI: Home Page "Daftar Event".
   ]
 }
 ```
+
+**Queue State Values**:
+
+| `queue_state` | Arti | UI |
+|---|---|---|
+| `OPEN` | Dapat bergabung | Tombol "Beli Tiket" aktif |
+| `FULL` | `queue_depth >= queue_capacity` | Nonaktif, label "Antrian Penuh" |
+| `CLOSED` | Event sold out | Nonaktif, label "Sold Out" |
+
+> `queue_depth` adalah perkiraan — response ini di-cache CDN 30 detik. Penegak sebenarnya
+> adalah pemeriksaan atomik saat `POST /events/{id}/queue/join`. Gunanya menampilkan di sini
+> adalah agar customer melihat antrian penuh **sebelum** mengklik, bukan sesudah.
 
 **Status Values**:
 | Status | UI Display | Action |
@@ -394,6 +499,18 @@ User bergabung ke antrian. Dipanggil saat klik "Beli Tiket" pada event dengan an
   }
 }
 ```
+
+**Response** (503 - `QUEUE_FULL`): antrian sudah mencapai `QUEUE_CAPACITY` (300.000).
+```json
+{
+  "meta": { "code": 503, "message": "Antrian sedang penuh, silakan coba beberapa saat lagi" },
+  "data": { "queue_state": "FULL", "queue_capacity": 300000 }
+}
+```
+
+> **Fail fast, tanpa buffering.** Customer tidak diberi nomor antrian yang tidak akan pernah
+> terlayani. Halaman utama sudah menampilkan `queue_state` (§2.1), jadi penolakan di sini
+> adalah jaring pengaman untuk perlombaan di detik yang sama, bukan jalur normal.
 
 **Requirement Coverage**: FR-04, FR-10 (posisi konsisten saat refresh), NFR-05 (FCFS fairness)
 
@@ -732,6 +849,26 @@ Authorization: Bearer {access_token}
 | `NIK_NOT_FOUND` | NIK tidak terdaftar di Dukcapil |
 | `NIK_INACTIVE` | NIK terdaftar tapi status tidak aktif |
 | `DUKCAPIL_UNAVAILABLE` | Gagal menghubungi Dukcapil — **pembayaran diblokir**, bukan fallback |
+
+> **NIK terdaftar atau tersimpan tidak memanggil Dukcapil.** Bila `nik` cocok dengan
+> `accounts.nik_hmac` pemegang token atau salah satu entri `saved_niks` miliknya, endpoint
+> menjawab `valid: true` dari bukti verifikasi yang tersimpan — tanpa panggilan berbayar.
+> Response menyertakan `"source": "registered" | "saved" | "verified"`. Dua yang pertama
+> adalah data milik pemanggil sendiri, sehingga frontend dapat menampilkan centang seketika
+> tanpa menunggu jaringan.
+>
+> **`verified` sengaja menggabungkan cache hit dan panggilan Dukcapil baru.** Cache
+> `nik:valid:{hmac}` dikunci oleh hash NIK saja, bukan oleh akun, sehingga membedakan
+> keduanya akan memberi tahu pemanggil bahwa NIK itu baru saja diverifikasi **oleh orang
+> lain** — sebuah probe untuk mengetahui NIK mana yang aktif membeli tiket di platform ini.
+> Frontend tidak membutuhkan perbedaan itu.
+>
+> Verifikasi tidak dilewati, hanya tidak diulang. NIK di luar sumber-sumber itu tetap
+> melalui Dukcapil, dan aturan di bawah berlaku penuh.
+>
+> **Customer tamu membayar penuh**: tanpa akun, `registered` dan `saved` tidak dapat berlaku,
+> sehingga setiap NIK yang ia ketik memanggil Dukcapil kecuali kebetulan masih ada di cache
+> 24 jam.
 
 > **Fail closed.** Baik NIK yang ditolak Dukcapil maupun Dukcapil yang tidak dapat dihubungi
 > sama-sama memblokir pembayaran. `POST /bookings` menolak permintaan kecuali **setiap** NIK
@@ -1342,6 +1479,7 @@ Authorization: Bearer {access_token}
 | `CONFIRMED` | `PAID` | Ke halaman tiket |
 | `HELD` dengan `payment_attempts > 0` | **`FAILED`** | Kembali ke daftar metode |
 | `HELD` dengan `payment_attempts = 0` | `PENDING` | Belum pernah charge; tetap di daftar metode |
+| `PENDING_CANCELLATION` | `PENDING` | TTL lewat, grace 30 detik berjalan. Tampilkan "memverifikasi pembayaran…", **jangan** layar kedaluwarsa |
 | `EXPIRED` / `LAPSED` | `EXPIRED` | Layar kedaluwarsa |
 
 **Requirement Coverage**: FR-22, FR-23
@@ -1526,6 +1664,49 @@ Authorization: Bearer {access_token}
 
 ---
 
+### 6.3 Disputed Payment Reconciliation
+
+Booking yang menerima callback sukses **setelah** pembatalan final. Refund **tidak**
+dieksekusi otomatis di POC; operator merekonsiliasi lewat dashboard Midtrans.
+
+**Endpoint**: `GET /admin/reconciliation/disputed?event_id={event_id}`
+
+```json
+{
+  "meta": { "code": 200, "message": "Success" },
+  "data": {
+    "disputed": [
+      {
+        "booking_id": "RB-00912",
+        "order_id": "RB-00912:2",
+        "gateway_event_id": "evt_9f2a1c7b",
+        "gross_amount": 1500000,
+        "payment_type": "bank_transfer",
+        "paid_at": "2026-10-26T10:25:48Z",
+        "cancelled_at": "2026-10-26T10:25:30Z",
+        "contact_email": "buyer@example.com",
+        "refund_status": "PENDING_MANUAL"
+      }
+    ]
+  }
+}
+```
+
+> Setiap baris memuat `order_id` dan `gateway_event_id`, sehingga pencocokan di dashboard
+> Midtrans tidak memerlukan pencarian manual. Customer sudah menerima email
+> `payment.failed_notice` yang menyatakan dana diterima, booking batal, dan refund diproses —
+> email itu wajib, bukan sekadar catatan log.
+>
+> **Sebelum produksi**: otomatiskan lewat `POST /v2/{order_id}/refund`, dengan alarm pada
+> setiap eksekusi. Yang ditunda di POC adalah pemanggilannya, bukan desainnya.
+
+Diamankan sama seperti dashboard operasional: terpisah dari jalur customer, tidak memakai
+`accessToken` antrian.
+
+**Requirement Coverage**: FR-25, NFR-09
+
+---
+
 ## 7. Common Response Structure
 
 ### Success Response
@@ -1691,6 +1872,11 @@ Legenda: ✅ terpenuhi di kontrak · ⚙️ di luar permukaan API (backend atau 
 | `MAX_ATTEMPTS_EXCEEDED` | Melewati batas percobaan pembayaran per booking |
 | `PAYMENT_ALREADY_SETTLED` | Pembayaran lama sudah lunas; pembatalan tidak dilakukan |
 | `PAYMENT_WINDOW_CLOSED` | TTL pembayaran habis atau sisanya terlalu pendek untuk ganti metode |
+| `QUEUE_FULL` | Antrian mencapai kapasitas maksimum |
+| `NIK_ALREADY_REGISTERED` | NIK sudah terikat ke akun lain (satu NIK = satu akun, global) |
+| `NIK_ALREADY_SAVED` | NIK sudah ada di Daftar NIK Teman akun ini |
+| `MAX_SAVED_NIKS_REACHED` | Daftar NIK Teman sudah mencapai 5 entri |
+| `CONSENT_REQUIRED` | Persetujuan pemrosesan data pribadi pihak ketiga belum diberikan |
 | `ADMISSION_PAUSED` | Admission dihentikan sementara (breaker Dukcapil / payment gateway) |
 | `BOOKING_EXPIRED` | TTL booking habis |
 | `PAYMENT_EXPIRED` | TTL pembayaran habis |
@@ -1775,6 +1961,7 @@ Penyelarasan dengan ADR-005. Yang memutus kompatibilitas ditandai **BREAKING**.
 | 12 | **Tidak ada** endpoint baru untuk BR-10 dan FR-33–35 | BR-10 dipenuhi oleh `server_time` yang sudah ada di tiap respons — endpoint waktu tersendiri akan redundan. FR-33–35 diterbitkan sebagai CloudWatch EMF, bukan lewat API |
 | 12a | TTL pembayaran ditegaskan berjalan dari `POST /bookings` | BR-05 "sejak booking dibuat" = saat tombol bayar ditekan dan stok di-hold, sesuai wireframe tender. Kontrak sudah benar (`ttl_seconds: 600`); ADR-005 yang disesuaikan |
 | 12b | §5.1 dan §5.2 ditulis ulang untuk tiga metode Midtrans Core API | VA dan "Transfer Bank" adalah satu metode, bukan dua; kartu absen dari daftar lama; tiap metode butuh parameter berbeda. `custom_expiry` ditambahkan karena default VA Midtrans 24 jam melawan TTL 10 menit |
+| 12c | Akun dengan NIK_Terdaftar, Daftar NIK Teman, consent record, grace pembayaran 30 detik, kapasitas antrian | Penambahan fitur yang dikonfirmasi 26 Oktober. Pendorong utama Daftar NIK Teman adalah biaya Dukcapil per panggilan: NIK yang sudah diverifikasi dipakai ulang tanpa panggilan baru |
 | 13 | Webhook: switch per tipe event + `gateway_event_id UNIQUE` | Sebelumnya hanya menangani `PAID`; "idempoten" dinyatakan tanpa mekanisme |
 | 14 | Webhook: `PAID` atas booking `EXPIRED` → `payment.refund` | Uang diterima setelah stok dijual ulang sebelumnya tidak punya jalur |
 | 15 | Snapshot awal pada stream | FR-10 sebelumnya ditandai terpenuhi tanpa mekanisme |

@@ -1,7 +1,7 @@
 # Rusuh Booking Tiket — Final Requirements
 
-**Versi**: 1.0  
-**Tanggal**: Oktober 2026  
+**Versi**: 1.1  
+**Tanggal**: 26 Oktober 2026  
 **Status**: Finalized  
 **Sumber**:
 
@@ -9,6 +9,13 @@
 - update-requirement-rusuh-booking-tiket.md (perubahan resmi)
 - 2026-10-16-meeting-business-needs-cto-pov.md (klarifikasi CEO/CTO)
 - 2026-10-21-meeting-notes-queue-algorithm.md (keputusan arsitektur)
+- Usulan requirement tim (25 Oktober 2026) — **butir 1–8 dikonfirmasi** dan masuk
+  dokumen ini; butir sisanya masih dalam klarifikasi dan **belum** menjadi requirement
+
+> **Perubahan v1.1** — delapan fitur baru dikonfirmasi: NIK terdaftar per akun,
+> Daftar NIK Teman, persetujuan data pribadi, kapasitas antrian, grace period
+> pembayaran, email kegagalan, serta dua penolakan eksplisit (TTL antrian absolut dan
+> push notification). Rinciannya di Bagian 11.
 
 ---
 
@@ -33,6 +40,8 @@ menangani lonjakan trafik ekstrem (flash crowd) saat penjualan tiket dibuka.
 | FR-01  | Home          | Menampilkan daftar seluruh event yang tiketnya dijual online          | MUST     |
 | FR-02  | Home          | Event available dan memiliki stok ditampilkan aktif/clickable         | MUST     |
 | FR-03  | Home          | Event sold out ditampilkan non-aktif dengan label status              | MUST     |
+| FR-03a | Home          | Menampilkan **state antrian** per event: `OPEN` / `FULL` / `CLOSED`   | MUST     |
+| FR-03b | Home          | State `FULL` menonaktifkan tombol beli dengan label "Antrian Penuh" — customer tahu sebelum klik, bukan sesudah | MUST     |
 | FR-04  | Home          | Saat klik event dan ada antrian → diarahkan ke Waiting Room           | MUST     |
 | FR-05  | Home          | Jika tidak ada antrian → langsung ke Detail Ticket Page               | MUST     |
 | FR-06  | Waiting Room  | Menampilkan posisi antrian customer ("Anda antrian ke-n")             | MUST     |
@@ -40,12 +49,15 @@ menangani lonjakan trafik ekstrem (flash crowd) saat penjualan tiket dibuka.
 | FR-08  | Waiting Room  | Customer otomatis dipindahkan ke Detail Page saat giliran tiba        | MUST     |
 | FR-09  | Waiting Room  | Menampilkan estimasi waktu tunggu berdasarkan laju antrian            | COULD    |
 | FR-10  | Waiting Room  | Posisi tetap konsisten saat refresh halaman                           | MUST     |
+| FR-10a | Waiting Room  | Join antrian ditolak **`QUEUE_FULL`** (fail fast) saat kapasitas antrian event penuh — tanpa buffering | MUST     |
 | FR-11  | Detail Ticket | Menampilkan detail event beserta kategori tempat                      | MUST     |
 | FR-12  | Detail Ticket | Setiap kategori menampilkan stok available dan harga                  | MUST     |
 | FR-13  | Detail Ticket | Customer dapat membeli maksimal **3 tiket per transaksi**             | MUST     |
 | FR-14  | Detail Ticket | Menolak pemilihan jumlah yang melebihi stok atau batas 3              | MUST     |
 | FR-15  | Detail Ticket | Memvalidasi format NIK (16 digit) untuk **setiap tiket**              | MUST     |
 | FR-15a | Detail Ticket | Memvalidasi keberadaan NIK ke Dukcapil API (**NIK saja** — nama dan tanggal lahir tidak dikumpulkan) | MUST     |
+| FR-15b | Detail Ticket | NIK yang berasal dari NIK Terdaftar atau Daftar NIK Teman **tidak memanggil Dukcapil lagi** — bukti verifikasi tersimpan dipakai ulang | MUST     |
+| FR-15c | Detail Ticket | Dukcapil gagal/timeout untuk NIK yang belum terverifikasi → **booking diblokir** (fail-closed), tidak ada pembayaran yang dapat dilakukan | MUST     |
 | FR-16  | Detail Ticket | Saat lanjut ke pembayaran, stok tiket di-hold                         | MUST     |
 | FR-17  | Detail Ticket | Menampilkan countdown TTL Booking (5 menit)                           | MUST     |
 | FR-18  | Detail Ticket | TTL habis → booking batal, hold dilepas, slot ke antrian berikutnya   | MUST     |
@@ -54,18 +66,33 @@ menangani lonjakan trafik ekstrem (flash crowd) saat penjualan tiket dibuka.
 | FR-21  | Payment       | Menampilkan countdown TTL Pembayaran (10 menit)                       | MUST     |
 | FR-22  | Payment       | Pembayaran berhasil → email e-tiket ke customer                       | MUST     |
 | FR-23  | Payment       | Pembayaran tidak selesai dalam 10 menit → booking batal, stok dilepas | MUST     |
+| FR-23a | Payment       | TTL Pembayaran habis → booking masuk **Pending Cancellation** selama **grace 30 detik**; stok **tetap** di-hold | MUST     |
+| FR-23b | Payment       | Callback sukses yang tiba dalam grace **tetap mengonfirmasi** booking | MUST     |
+| FR-23c | Payment       | Callback sukses setelah pembatalan final → booking ditandai **Disputed**, dicatat untuk rekonsiliasi manual | MUST     |
+| FR-23d | Payment       | Customer dapat mengganti metode pembayaran selama status `AWAITING_PAYMENT`; transaksi lama dibatalkan ke gateway | MUST     |
 | FR-24  | Payment       | API pembayaran dapat dikonsumsi web dan mobile (shared API)           | MUST     |
 | FR-25  | Payment       | Menangani callback payment gateway secara idempoten                   | MUST     |
 | FR-26  | Notification  | Email tiket dikirim ke **masing-masing pemegang NIK**                 | MUST     |
 | FR-27  | Notification  | Tiket berisi: QR code, kategori tiket, NIK pemegang (**nomor bangku tidak diimplementasikan di POC**) | MUST     |
 | FR-28  | Notification  | Email expired dikirim jika pembayaran tidak selesai dalam TTL         | MUST     |
+| FR-28a | Notification  | Email pemberitahuan **kegagalan pembayaran** dikirim pada tiga kondisi: (a) gateway menyatakan gagal, (b) TTL + grace berlalu tanpa callback, (c) callback sukses tiba setelah pembatalan (Disputed) | MUST     |
+| FR-28b | Notification  | Email kondisi (c) menyatakan dana diterima, booking batal, dan refund sedang diproses — **wajib email**, bukan hanya log | MUST     |
 | FR-29  | Auth          | **Login bersifat OPSIONAL** — bisa booking tanpa akun                 | MUST     |
 | FR-30  | Auth          | Cukup input NIK dan email untuk melakukan pembelian                   | MUST     |
 | FR-31  | Auth          | Jika buat akun, verifikasi email via link (bukan OTP)                 | SHOULD   |
+| FR-31a | Auth          | Registrasi akun **wajib menyertakan NIK** (NIK Terdaftar), diverifikasi Dukcapil saat registrasi | MUST     |
+| FR-31b | Auth          | Satu NIK hanya dapat terdaftar pada **satu akun** secara global       | MUST     |
+| FR-31c | Auth          | Registrasi wajib disertai **persetujuan pemrosesan NIK pihak ketiga**; checkbox tidak boleh pre-checked | MUST     |
+| FR-31d | Auth          | Rekam persetujuan bersifat **immutable** (timestamp + versi kebijakan); pencabutan hanya lewat tim operasional | MUST     |
 | FR-32  | Auth          | Mendukung minimal 2 bahasa: Indonesia dan Inggris                     | SHOULD   |
+| FR-32a | Profil        | Akun dapat menyimpan **Daftar NIK Teman** — maksimal **5 entri** per akun | MUST     |
+| FR-32b | Profil        | NIK diverifikasi Dukcapil **saat ditambahkan**; NIK yang gagal validasi tidak disimpan | MUST     |
+| FR-32c | Profil        | Daftar NIK Teman hanya menampilkan NIK ter-mask; NIK lengkap tidak pernah dikembalikan API | MUST     |
+| FR-32d | Profil        | Menghapus entri Daftar NIK Teman **tidak** memengaruhi tiket yang sudah dibeli dengan NIK itu | MUST     |
 | FR-33  | Dashboard     | Menampilkan metrik real-time: jumlah antrian aktif                    | MUST     |
 | FR-34  | Dashboard     | Menampilkan laju konversi (antrian → pembelian)                       | MUST     |
 | FR-35  | Dashboard     | Menampilkan expiry rate (booking tidak dibayarkan)                    | MUST     |
+| FR-36  | Dashboard     | Menampilkan daftar booking **Disputed** beserta `order_id` dan nominal untuk rekonsiliasi manual | MUST     |
 
 ---
 
@@ -83,6 +110,9 @@ menangani lonjakan trafik ekstrem (flash crowd) saat penjualan tiket dibuka.
 | NFR-08 | Portability   | API platform-agnostic (REST/JSON) untuk web dan mobile                        |
 | NFR-09 | Observability | Metrik antrian, konversi, expiry dipantau real-time                           |
 | NFR-10 | Resilience    | Kegagalan email tidak membatalkan transaksi; async dengan retry + DLQ         |
+| NFR-11 | Compliance    | Pemrosesan NIK pihak ketiga tunduk **UU PDP No. 27/2022**: persetujuan eksplisit, rekam immutable, NIK disimpan sebagai HMAC (bukan plaintext) |
+| NFR-12 | Cost          | Dukcapil berbayar per panggilan; NIK Terdaftar dan Daftar NIK Teman ada untuk menekan volume. Volume aktual **bergantung pada rasio login** — estimasi tender memakai skenario tamu-berat |
+| NFR-13 | Capacity      | Kapasitas antrian dibatasi **300.000 per event**; kelebihan ditolak fail-fast, tidak di-buffer |
 
 ---
 
@@ -100,6 +130,16 @@ menangani lonjakan trafik ekstrem (flash crowd) saat penjualan tiket dibuka.
 | BR-08 | —          | Stok yang sudah dibayar bersifat final; stok di-hold tidak bisa dibeli orang lain |
 | BR-09 | ➕ NEW     | Re-entrant user dalam TTL kembali ke halaman yang sama dengan token yang sama     |
 | BR-10 | ➕ NEW     | **Server time** sebagai source of truth untuk semua operasi waktu                 |
+| BR-11 | ➕ NEW     | Akun wajib punya NIK terverifikasi; **1 NIK = 1 akun** secara global              |
+| BR-12 | ➕ NEW     | Maksimal **5 NIK tersimpan** per akun; entri hanya lahir dari validasi Dukcapil yang berhasil |
+| BR-13 | ➕ NEW     | Dukcapil **fail-closed**: NIK belum terverifikasi + Dukcapil tidak dapat dihubungi → booking diblokir |
+| BR-13a | ➕ NEW     | Breaker Dukcapil atau payment gateway OPEN → **admission di-pause**; tidak ada grant baru dan tidak ada posisi antrian yang hilang |
+| BR-14 | ➕ NEW     | Grace **30 detik** setelah TTL Pembayaran; stok tetap di-hold → perjalanan maksimum **17,5 menit** |
+| BR-15 | ➕ NEW     | Grace menutup **latensi callback**, bukan pembayaran terlambat — batas bayar ke gateway tetap 10 menit |
+| BR-16 | ➕ NEW     | Kapasitas antrian **300.000** per event; join di atas itu ditolak `QUEUE_FULL`    |
+| BR-17 | ❌ REJECTED | ~~TTL antrian absolut (Session TTL Antrian)~~ — posisi hanya dilepas oleh grace setelah slot diberikan |
+| BR-18 | ❌ REJECTED | ~~Push notification giliran tiba~~ — tidak dibangun di POC                        |
+| BR-19 | ➕ NEW     | Refund Disputed **tidak otomatis** di POC — ditandai, dilaporkan, dieksekusi manual |
 
 ---
 
@@ -113,6 +153,13 @@ menangani lonjakan trafik ekstrem (flash crowd) saat penjualan tiket dibuka.
 | Fallback interval    | Dinamis: 10s (>1000) → 5s (101–1000) → 2s (11–100) → 1s (1–10) — untuk REST fallback `/queue/{ev}/serving` saat SSE tidak tersedia |
 | Admission formula    | `canEnter = (freeSlots > 0) AND (availableTickets > 0)`                                        |
 | Time authority       | Server-side; `serverTime` di setiap payload SSE dan `server_time` di setiap respons REST — frontend menghitung offset jam sekali, tidak ada endpoint waktu tersendiri |
+| Queue capacity       | **300.000 per event**; `QUEUE_FULL` fail-fast, state `OPEN`/`FULL`/`CLOSED` terlihat di halaman utama |
+| Payment grace        | **30 detik** `PENDING_CANCELLATION` setelah TTL Pembayaran; stok tetap di-hold, callback sukses masih diterima |
+| Queue session        | **Tidak ada TTL antrian absolut**; pelepasan posisi hanya oleh grace setelah slot diberikan (maks 2× re-admit) |
+| NIK verification     | **Fail-closed**; bukti verifikasi tersimpan (akun + Daftar NIK Teman + cache 24 jam) dipakai ulang untuk menekan biaya Dukcapil |
+| Degradasi dependensi | Circuit breaker Dukcapil **atau** payment gateway OPEN (= dependensi sedang tidak dapat dipakai) → **pause admission**: tidak ada grant baru, antrian berhenti maju, tidak ada posisi yang hilang. Berlaku sama untuk kedua dependensi, tanpa pengecualian |
+| Payment gateway      | **Midtrans Core API** — Credit Card, Bank Transfer VA (BCA/BNI/BRI/CIMB), E-Wallet GoPay |
+| Disputed refund      | Dicatat dan dilaporkan; **eksekusi manual** di POC |
 
 ---
 
@@ -135,8 +182,21 @@ canEnter = (freeSlots > 0) AND (availableTickets > 0)
 
 1. User menyelesaikan pembayaran (sukses)
 2. TTL Booking habis (5 menit tanpa konfirmasi)
-3. TTL Pembayaran habis (10 menit)
+3. TTL Pembayaran habis (10 menit) **+ grace 30 detik** — stok dilepas hanya setelah grace,
+   bukan saat TTL habis
 4. User secara eksplisit membatalkan
+5. Grace antrian habis: slot sudah diberikan tetapi user tidak masuk ke Detail Ticket Page
+   dalam 120 detik (maksimum dua kali re-admit)
+
+> **Tidak ada pelepasan karena TTL antrian.** Menutup tab tidak melepas posisi; yang melepas
+> hanyalah kelima kondisi di atas. Lihat BR-17.
+
+### Kapasitas Antrian
+
+Antrian dibatasi **300.000 posisi per event**. Join di atas batas ditolak `QUEUE_FULL` secara
+fail-fast — tanpa buffering dan tanpa memberi nomor antrian yang tidak akan pernah terlayani.
+State antrian (`OPEN` / `FULL` / `CLOSED`) ditampilkan di halaman utama agar customer melihat
+antrian penuh sebelum mengklik.
 
 ---
 
@@ -167,16 +227,25 @@ canEnter = (freeSlots > 0) AND (availableTickets > 0)
     │
     ├── Akses dijaga: access_token harus valid
     ├── Pilih kategori & jumlah tiket (max 3)
-    ├── Input NIK + email per tiket (1 NIK per seat)
+    ├── Pilih NIK per tiket:
+    │   ├── NIK Terdaftar (akun)      → tanpa panggilan Dukcapil
+    │   ├── Daftar NIK Teman (maks 5) → tanpa panggilan Dukcapil
+    │   └── Ketik manual              → Dukcapil; gagal/timeout = booking diblokir
     ├── Countdown TTL Booking (5 menit, server-synced)
     │
     ↓
 [Payment Page]
     │
-    ├── Pilih metode pembayaran
+    ├── Pilih metode pembayaran (Credit Card / VA / GoPay)
     ├── Countdown TTL Pembayaran (10 menit)
     ├── Polling status pembayaran
-    └── Sukses → release slot → now_serving++ → tiket diterbitkan via email
+    ├── Ganti metode → batalkan transaksi lama ke gateway, buat yang baru
+    │
+    ├── Sukses → release slot → now_serving++ → tiket diterbitkan via email
+    │
+    └── TTL habis → Pending Cancellation (grace 30 detik, stok MASIH di-hold)
+            ├── callback sukses tiba → booking CONFIRMED
+            └── grace berlalu        → booking batal, stok dilepas, email kegagalan
 ```
 
 ---
@@ -193,6 +262,11 @@ canEnter = (freeSlots > 0) AND (availableTickets > 0)
 - API pembayaran yang dapat dikonsumsi oleh web dan mobile apps
 - Halaman pembayaran berbasis web yang reusable di mobile (WebView)
 - Dashboard operasional real-time (antrian, konversi, expiry rate)
+- Akun opsional dengan NIK terdaftar dan Daftar NIK Teman (maksimal 5) untuk menekan
+  panggilan Dukcapil
+- Grace period 30 detik setelah TTL Pembayaran agar callback yang terlambat tidak
+  menghanguskan pembayaran yang sah
+- Pelaporan booking Disputed untuk rekonsiliasi
 
 ### Di Luar Lingkup (Out of Scope)
 
@@ -200,6 +274,12 @@ canEnter = (freeSlots > 0) AND (availableTickets > 0)
 - Implementasi internal mitra pembayaran (via payment gateway pihak ketiga)
 - Program loyalti, diskon, dan voucher
 - Sistem gate check-in di lokasi event
+- **Push notification** (FCM/APNs) untuk giliran tiba atau posisi mendekati — email dan
+  halaman Waiting Room adalah satu-satunya kanal pemberitahuan di POC
+- **Refund otomatis** untuk booking Disputed — ditandai dan dilaporkan, dieksekusi manual
+  lewat dashboard gateway
+- **TTL antrian absolut** (Session TTL Antrian) — ditolak, lihat BR-17
+- Nomor bangku (seat numbering) — kategori saja, lihat FR-27
 
 ---
 
@@ -228,6 +308,15 @@ canEnter = (freeSlots > 0) AND (availableTickets > 0)
 | NIK                 | Nomor Induk Kependudukan (16 digit) — basis pembatasan 1 seat per NIK                |
 | `now_serving`       | Nilai global yang menunjukkan nomor antrian yang sedang dilayani                     |
 | `ticket_no`         | Nomor antrian unik customer, diberikan saat join queue                               |
+| NIK Terdaftar       | NIK yang terikat permanen pada satu akun, diverifikasi Dukcapil saat registrasi       |
+| Daftar NIK Teman    | Sampai 5 NIK teman tersimpan di profil akun, masing-masing sudah terverifikasi Dukcapil saat ditambahkan; dipakai ulang di checkout tanpa panggilan baru |
+| Persetujuan Data Pribadi | Persetujuan eksplisit saat registrasi untuk memproses NIK pihak ketiga (UU PDP No. 27/2022); wajib, tidak pre-checked, pencabutan lewat tim operasional |
+| Consent Record      | Rekam immutable bukti persetujuan: timestamp, versi kebijakan, identitas akun         |
+| Grace Period        | 30 detik setelah TTL Pembayaran habis; callback sukses masih diterima, stok masih di-hold |
+| Pending Cancellation | Status transisional selama Grace Period — belum batal, belum terkonfirmasi           |
+| Disputed            | Callback "berhasil" tiba setelah booking dibatalkan final; perlu rekonsiliasi dan refund manual |
+| Kapasitas Antrian   | Batas maksimum posisi antrian per event (300.000); kelebihan ditolak `QUEUE_FULL`     |
+| State Antrian       | `OPEN` / `FULL` / `CLOSED` per event, ditampilkan di halaman utama                    |
 
 ---
 
@@ -246,6 +335,28 @@ canEnter = (freeSlots > 0) AND (availableTickets > 0)
 | FR-33..35     | ➕ NEW     | Dashboard operasional real-time                           |
 | Transport     | 🔧 DECIDED | **Server-Sent Events (SSE)** via ECS Fargate — REST polling tetap sebagai fallback (jaringan blokir SSE / degraded mode) |
 | Position calc | 🔧 DECIDED | Di frontend (`ticket_no - now_serving`)                   |
+| Fail-closed   | 🔧 DECIDED | Dukcapil gagal/timeout → booking diblokir (BR-13)         |
+| Pause         | 🔧 DECIDED | Breaker Dukcapil / gateway OPEN → pause admission (BR-13a) |
+| Gateway       | 🔧 DECIDED | Midtrans Core API — tiga metode pembayaran                |
+
+### Tambahan v1.1 — usulan tim 25 Oktober 2026, butir 1–8
+
+| # | Fitur | Jenis | Masuk sebagai |
+| - | ----- | ----- | ------------- |
+| 1 | Daftar NIK Teman (maks 5, terverifikasi saat ditambahkan) | ➕ NEW | FR-32a..d, BR-12 |
+| 2 | NIK Terdaftar per akun, unik global | ➕ NEW | FR-31a..b, BR-11 |
+| 3 | Persetujuan data pribadi + consent record immutable | ➕ NEW | FR-31c..d, NFR-11 |
+| 4 | TTL antrian absolut (Session TTL Antrian) | ❌ REJECTED | BR-17 — grace setelah slot sudah menutupinya |
+| 5 | Grace period 30 detik + Pending Cancellation + Disputed | ➕ NEW | FR-23a..c, FR-36, BR-14..15, BR-19 |
+| 6 | Email pemberitahuan kegagalan pembayaran | ➕ NEW | FR-28a..b |
+| 7 | Push notification giliran tiba | ❌ REJECTED | Out of scope — email + Waiting Room saja |
+| 8 | Kapasitas antrian 300.000 + state antrian di halaman utama | ➕ NEW | FR-03a..b, FR-10a, NFR-13, BR-16 |
+
+> **Butir 9 dan sesudahnya belum menjadi requirement.** Termasuk usulan mengganti SSE
+> dengan adaptive polling, yang bertentangan dengan keputusan Transport di Bagian 5 dan
+> akan membatalkan ADR-003 sampai ADR-005 beserta model biayanya. Keputusannya menunggu
+> klarifikasi.
+
 
 ---
 
@@ -256,6 +367,14 @@ canEnter = (freeSlots > 0) AND (availableTickets > 0)
 - Mitra pembayaran menyediakan mekanisme callback status
 - Validasi NIK dilakukan via Dukcapil API (**NIK saja** — nama dan tanggal lahir tidak dikumpulkan maupun dikirim)
 - Target skala: 300.000 concurrent users pada flash crowd (NFR-03 mensyaratkan 200.000+)
+- NIK yang sudah divalidasi Dukcapil dianggap tidak berubah statusnya; tidak ada revalidasi
+  berkala atas NIK tersimpan
+- Volume panggilan Dukcapil **tidak dapat diturunkan dari asumsi adopsi login**: seluruhnya
+  tamu ≈ 10.000 panggilan per 10.000 tiket, seluruhnya login dengan NIK tersimpan ≈ nol.
+  Rentang ~5×; estimasi tender memakai skenario tamu-berat dan menyajikan penghematan NIK
+  tersimpan sebagai potensi (NFR-12)
+- Mitra pembayaran (Midtrans) menyediakan pembatalan transaksi aktif, sehingga penggantian
+  metode pembayaran tidak meninggalkan dua tagihan hidup untuk satu booking
 
 ---
 
@@ -271,3 +390,6 @@ canEnter = (freeSlots > 0) AND (availableTickets > 0)
 | ADR-002 Queue Position Mechanism  | `adr/ADR-002-queue-position-mechanism.md`                  |
 | ADR-003 Realtime Queue Updates    | `adr/ADR-003-realtime-queue-updates.md`                    |
 | ADR-004 Compute Service Selection | `adr/ADR-004-compute-service-selection.md`                 |
+| ADR-005 Final Architecture        | `adr/ADR-005-final-architecture-decision.md`               |
+| API Contracts                     | `api/api-contracts.md`                                     |
+| Metode Pembayaran (Midtrans)      | `payment-method/README.md`                                 |
