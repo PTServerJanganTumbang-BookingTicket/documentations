@@ -1,6 +1,6 @@
 # Rusuh Booking Tiket — API Contracts
 
-**Versi**: 2.0  
+**Versi**: 2.1  
 **Tanggal**: 24 Oktober 2026  
 **Status**: Draft  
 **Base URL**: `https://api.rusuh.id/v1`  
@@ -306,7 +306,7 @@ Menampilkan daftar event. UI: Home Page "Daftar Event".
 **Query Parameters**:
 | Param | Type | Required | Description |
 |-------|------|----------|-------------|
-| `filter` | string | No | `all`, `available`, `upcoming` |
+| `filter` | string | No | `all`, `available` (`status != SOLD_OUT`), `upcoming` (`queue_state == NOT_OPEN`) |
 | `limit` | int | No | Default: 10, Max: 50 |
 | `offset` | int | No | Default: 0 |
 
@@ -334,11 +334,17 @@ Menampilkan daftar event. UI: Home Page "Daftar Event".
       },
       "date": "2026-12-25",
       "image_url": "https://cdn.rusuh.id/events/konser-a.jpg",
-      "status": "AVAILABLE",
-      "has_queue": true,
-      "queue_state": "OPEN",
-      "queue_depth": 1248,
+      "status": "SELLING_OUT_FAST",
+      "queue_state": "FULL",
+      "queue_depth": 300000,
       "queue_capacity": 300000,
+      "sale_starts_at": "2026-11-10T02:00:00Z",
+      "display": {
+        "enabled": false,
+        "action": "NONE",
+        "label_key": "queue_full",
+        "badge_key": null
+      },
       "min_price": 500000,
       "max_price": 1500000
     },
@@ -353,8 +359,16 @@ Menampilkan daftar event. UI: Home Page "Daftar Event".
       "date": "2027-01-10",
       "image_url": "https://cdn.rusuh.id/events/konser-b.jpg",
       "status": "SOLD_OUT",
-      "has_queue": false,
-      "queue_length": 0,
+      "queue_state": "OPEN",
+      "queue_depth": 0,
+      "queue_capacity": 300000,
+      "sale_starts_at": "2026-10-20T02:00:00Z",
+      "display": {
+        "enabled": false,
+        "action": "NONE",
+        "label_key": "sold_out",
+        "badge_key": null
+      },
       "min_price": null,
       "max_price": null
     }
@@ -362,24 +376,69 @@ Menampilkan daftar event. UI: Home Page "Daftar Event".
 }
 ```
 
-**Queue State Values**:
+**`status`** — sumbu stok saja:
 
-| `queue_state` | Arti | UI |
+| Nilai | Kondisi |
+|---|---|
+| `AVAILABLE` | `available > threshold` |
+| `SELLING_OUT_FAST` | `0 < available <= threshold` |
+| `SOLD_OUT` | `available == 0` |
+
+`threshold = capacity × SELLING_FAST_THRESHOLD_PCT / 100` (bawaan 20).
+
+**`queue_state`** — sumbu izin masuk saja:
+
+| Nilai | Kondisi | Tombol |
 |---|---|---|
-| `OPEN` | Dapat bergabung | Tombol "Beli Tiket" aktif |
-| `FULL` | `queue_depth >= queue_capacity` | Nonaktif, label "Antrian Penuh" |
-| `CLOSED` | Event sold out | Nonaktif, label "Sold Out" |
+| `NOT_OPEN` | sale belum dibuka (`sale_starts_at` di depan) | Nonaktif |
+| `FULL` | `queue_depth >= queue_capacity` | Nonaktif, "Antrian penuh" |
+| `DIRECT` | `queue_depth == 0` dan masih ada slot bebas | "Beli Tiket" — FR-05 |
+| `OPEN` | sisanya | "Masuk Antrian" |
+
+> **`COMING_SOON` dihapus dari `status`**, dan `CLOSED` dihapus dari `queue_state`.
+> `COMING_SOON` adalah keadaan siklus hidup sale, bukan keadaan stok — ia menjadi
+> `queue_state: NOT_OPEN` + `sale_starts_at`. `CLOSED` dulu berarti "event sold out",
+> sehingga ia melaporkan urusan `status`.
+>
+> Keduanya kini dapat bernilai bebas satu terhadap yang lain, dan pada puncak sale kombinasi
+> `status: AVAILABLE` + `queue_state: FULL` (tiket masih ada, antrian sudah penuh) adalah hal
+> normal — satu enum tidak dapat menyatakannya.
+
+**`display`** — keputusan server, bukan frontend:
+
+| Field | Nilai |
+|---|---|
+| `enabled` | bool — tombol dapat ditekan |
+| `action` | `JOIN_QUEUE` \| `GO_TO_TICKETS` \| `NONE` |
+| `label_key` | `sold_out` \| `coming_soon` \| `queue_full` \| `buy_now` \| `join_queue` |
+| `badge_key` | `selling_out_fast` \| `null` |
+
+Aturan resolusi, dijalankan **server-side**, kecocokan pertama menang:
+
+```
+status == SOLD_OUT         → enabled=false  action=NONE           label=sold_out
+queue_state == NOT_OPEN    → enabled=false  action=NONE           label=coming_soon
+queue_state == FULL        → enabled=false  action=NONE           label=queue_full
+queue_state == DIRECT      → enabled=true   action=GO_TO_TICKETS  label=buy_now
+queue_state == OPEN        → enabled=true   action=JOIN_QUEUE     label=join_queue
+
+badge_key = selling_out_fast  bila status == SELLING_OUT_FAST DAN display.enabled
+          = null              selainnya
+```
+
+> **Label adalah kunci, bukan teks.** FR-32 menuntut dua bahasa; teks jadi dari server akan
+> memasukkan `Accept-Language` ke cache key CDN dan memecah satu respons yang di-cache 30
+> detik untuk 300.000 orang. Kunci + tabel terjemahan di frontend adalah pencarian, bukan
+> logika.
+>
+> **Halaman utama menampilkan waktu absolut, bukan hitung mundur.** Hitung mundur pra-buka
+> menuntut frontend membandingkan `sale_starts_at` dengan jam — logika di frontend, dan
+> keliru juga karena respons ini di-cache 30 detik. Label pra-buka berbunyi
+> "Buka 10 Nov 09:00". Hitung mundur hidup hanya ada di ruang tunggu lewat SSE `serverTime`.
 
 > `queue_depth` adalah perkiraan — response ini di-cache CDN 30 detik. Penegak sebenarnya
 > adalah pemeriksaan atomik saat `POST /events/{id}/queue/join`. Gunanya menampilkan di sini
 > adalah agar customer melihat antrian penuh **sebelum** mengklik, bukan sesudah.
-
-**Status Values**:
-| Status | UI Display | Action |
-|--------|------------|--------|
-| `AVAILABLE` | Badge "AVAILABLE", Button "Beli Tiket" aktif | Clickable |
-| `SOLD_OUT` | Badge "SOLD OUT", Button "Tidak Tersedia" disabled | Non-clickable |
-| `COMING_SOON` | Badge "Segera hadir", Button disabled | Non-clickable |
 
 **Requirement Coverage**: FR-01, FR-02, FR-03
 
@@ -411,7 +470,16 @@ Detail event untuk sidebar info dan breadcrumb.
     "image_url": "https://cdn.rusuh.id/events/konser-a.jpg",
     "description": "Energi panggung. Cerita yang kamu bawa pulang.",
     "status": "AVAILABLE",
-    "has_queue": true,
+    "queue_state": "OPEN",
+    "queue_depth": 1248,
+    "queue_capacity": 300000,
+    "sale_starts_at": "2026-11-10T02:00:00Z",
+    "display": {
+      "enabled": true,
+      "action": "JOIN_QUEUE",
+      "label_key": "join_queue",
+      "badge_key": null
+    },
     "ticket_categories": [
       {
         "id": "cat_vip",
@@ -548,7 +616,7 @@ data: {"nowServing":31604,"state":"OPEN","ratePerMin":318,"paused":false,"server
 | Field | Tipe | Arti |
 |---|---|---|
 | `nowServing` | int | Nomor antrian global yang sedang dilayani |
-| `state` | string | `OPEN` \| `closed_sold_out` |
+| `state` | string | `SCHEDULED` \| `OPEN` \| `SOLD_OUT` |
 | `ratePerMin` | int | Laju antrian untuk estimasi waktu tunggu (FR-09) |
 | `paused` | bool | Admission dihentikan sementara (gangguan Dukcapil / payment gateway) |
 | `serverTime` | string | Waktu server ISO-8601 — klien menyinkronkan jamnya (BR-10) |
@@ -618,7 +686,7 @@ kembali dari aplikasi bank. Mengembalikan **token yang sama** selama TTL belum h
 | Keadaan | `data` | Halaman tujuan |
 |---|---|---|
 | Masih mengantre | `{"state":"QUEUED","ticket_no":31842,"now_serving":31600}` | Waiting Room |
-| Giliran tiba | `{"state":"GRANTED","access_token":"at_abc123","expires_at":"…"}` | Detail Ticket |
+| Giliran tiba | `{"state":"GRANTED","access_token":"at_abc123","booking_expires_at":"…","server_time":"…"}` | Detail Ticket, countdown **sudah berjalan** |
 | Sedang memilih | `{"state":"SELECTING","access_token":"at_abc123","booking_id":"RB-00912","booking_expires_at":"…","server_time":"…"}` | Detail Ticket, countdown dilanjutkan |
 | Menunggu bayar | `{"state":"AWAITING_PAYMENT","access_token":"at_abc123","booking_id":"RB-00912","payment_expires_at":"…","payment_ref":"pay_123","server_time":"…"}` | Payment, countdown dilanjutkan |
 | Selesai | `{"state":"CONFIRMED","booking_id":"RB-00912"}` | Halaman tiket |
@@ -912,6 +980,11 @@ Authorization: Bearer {access_token}
 }
 ```
 
+> **Multi-kategori diizinkan.** `tickets[]` boleh memuat `category_id` yang berbeda-beda —
+> misalnya 1 Premium + 1 Festival + 1 VIP. Batas FR-13 adalah **3 tiket per transaksi secara
+> total**, bukan 3 per kategori. Hold-nya all-or-nothing: stok seluruh kategori diperiksa
+> sebelum satu pun dikurangi, dalam satu skrip atomik.
+>
 > **Satu baris per kursi** (BR-02: 1 NIK = 1 seat). `holder_email` adalah alamat tujuan
 > e-tiket kursi itu — FR-26 menuntut tiket sampai ke tiap pemegang NIK, bukan hanya pembeli.
 > Tidak ada field nama: Dukcapil hanya memvalidasi NIK.
@@ -919,7 +992,8 @@ Authorization: Bearer {access_token}
 > **Panggilan inilah yang memulai TTL pembayaran.** "Booking dibuat" pada BR-05 adalah saat
 > ini: kursi dipilih, NIK diisi, stok di-hold. `payment_ttl.ttl_seconds` karena itu selalu
 > **600** — setiap customer mendapat 10 menit penuh, berapa pun lama ia memilih kursi.
-> TTL booking (5 menit) berhenti berlaku begitu booking ini dibuat; keduanya berurutan,
+> TTL booking (5 menit, dihitung dari `granted_at` — **bukan** dari saat halaman dibuka)
+> berhenti berlaku begitu booking ini dibuat; keduanya berurutan,
 > tidak tumpang tindih.
 >
 > **Idempoten.** Submit yang diulang tidak menjalankan hold kedua. Server mengunci baris
@@ -1787,7 +1861,7 @@ Diamankan sama seperti dashboard operasional: terpisah dari jalur customer, tida
 | FR-11 | `GET /events/{id}` | ✅ |
 | FR-12 | `GET /events/{id}/tickets` | ✅ |
 | FR-13 | `POST /bookings` (maks 3, ditegakkan di Lua) | ✅ |
-| FR-14 | `POST /bookings` → `NO_STOCK` / `QTY_EXCEEDED` | ✅ |
+| FR-14 | `POST /bookings` → `NO_STOCK` / `QTY_EXCEEDED`, diperiksa lintas seluruh kategori sebelum hold | ✅ |
 | FR-15 | Validasi format 16 digit, klien dan server | ✅ |
 | FR-15a | `POST /nik/validate` — **NIK saja**, fail closed | ✅ |
 | FR-16 | `POST /bookings` membuat hold | ✅ |
@@ -1825,7 +1899,7 @@ Diamankan sama seperti dashboard operasional: terpisah dari jalur customer, tida
 | NFR-10 | Kegagalan email tidak mengubah status booking; `GET /bookings/{id}/tickets` selalu tersedia | ✅ |
 | BR-01 | Maks 3 tiket per `POST /bookings` | ✅ |
 | BR-02 | Satu entri per kursi, satu NIK masing-masing; `UNIQUE (event_id, nik_hmac)` menolak NIK yang sudah dipakai booking lain di event yang sama | ✅ |
-| BR-03/04 | `booking_expires_at` = `slot_claimed_at` + 5 menit | ✅ |
+| BR-03/04 | `booking_expires_at` = `granted_at` + 5 menit — tidak ada grace antrian, jam mulai saat slot diberikan | ✅ |
 | BR-05/06 | `payment_expires_at` = `held_at` + 10 menit — berurutan setelah TTL booking, penuh bagi setiap customer | ✅ |
 | BR-09 | `GET /events/{id}/queue/me` mengembalikan token yang sama | ✅ |
 | BR-10 | `server_time` pada tiap respons; klien menghitung offset jam sekali dan merender semua countdown terhadapnya | ✅ |
@@ -1862,7 +1936,10 @@ Legenda: ✅ terpenuhi di kontrak · ⚙️ di luar permukaan API (backend atau 
 | `NIK_VALIDATION_FAILED` | Validasi NIK ke Dukcapil gagal |
 | `NIK_UNVERIFIED` | Ada NIK dalam booking yang belum lolos `POST /nik/validate` |
 | `DUKCAPIL_UNAVAILABLE` | Dukcapil tidak dapat dihubungi — pembayaran diblokir (fail closed) |
-| `QTY_EXCEEDED` | Melebihi 3 tiket per transaksi (BR-01) |
+| `QTY_EXCEEDED` | Melebihi 3 tiket per transaksi, dijumlahkan lintas kategori (BR-01) |
+| `QTY_INVALID` | Jumlah tiket sebuah kategori bukan bilangan ≥ 1 |
+| `STOCK_UNINITIALIZED` | **503** — kunci stok hilang dari Redis (flush/failover). Bukan "habis": stok tidak diketahui |
+| `STOCK_NEGATIVE` | **503** — guard terakhir menyala; seluruh pengurangan dikembalikan |
 | `INSUFFICIENT_STOCK` | Stok tiket tidak mencukupi |
 | `TICKETS_UNAVAILABLE` | Tiket sudah habis |
 | `TERMS_NOT_ACCEPTED` | Syarat & ketentuan dan persetujuan PDP belum diterima |
@@ -1966,3 +2043,15 @@ Penyelarasan dengan ADR-005. Yang memutus kompatibilitas ditandai **BREAKING**.
 | 14 | Webhook: `PAID` atas booking `EXPIRED` → `payment.refund` | Uang diterima setelah stok dijual ulang sebelumnya tidak punya jalur |
 | 15 | Snapshot awal pada stream | FR-10 sebelumnya ditandai terpenuhi tanpa mekanisme |
 | 16 | Matriks coverage dikoreksi | FR-10, FR-19 dan FR-25 sebelumnya ditandai ✅ tanpa dasar |
+
+### v2.0 → v2.1
+
+| # | Perubahan | Alasan |
+|---|---|---|
+| 17 | `status` dan `queue_state` dipisah bersih; `COMING_SOON` dan `CLOSED` dihapus | Keduanya mencampur sumbu: `COMING_SOON` adalah siklus hidup sale, `CLOSED` melaporkan stok. Pada puncak sale `AVAILABLE` + `FULL` adalah keadaan normal yang satu enum tidak dapat menyatakan |
+| 18 | `status` menambah `SELLING_OUT_FAST`; `queue_state` menambah `NOT_OPEN` dan `DIRECT` | `DIRECT` menutup FR-05 yang sebelumnya tersembunyi di dalam `OPEN`; `NOT_OPEN` menggantikan `COMING_SOON` bersama `sale_starts_at` |
+| 19 | Ditambahkan blok `display` beserta aturan resolusi server-side | Presedensi lima cabang sebelumnya menjadi logika frontend. Label sebagai kunci menjaga cache CDN tetap satu varian meski FR-32 menuntut dua bahasa |
+| 20 | `has_queue` dihapus; `queue_length` yang tertinggal diperbaiki menjadi `queue_depth` | `has_queue` menjadi mubazir setelah `DIRECT` ada. Kedua objek contoh pada respons yang sama sebelumnya memakai nama field berbeda |
+| 21 | SSE `state`: `OPEN \| closed_sold_out` → `SCHEDULED \| OPEN \| SOLD_OUT` | Casing tidak konsisten dalam satu enum, dan tidak ada nilai awal — sale tidak punya permulaan yang terdefinisi |
+| 22 | `booking_expires_at` dihitung dari `granted_at`, bukan `slot_claimed_at` | Grace antrian dihapus; tanpa anchor baru tidak ada apa pun yang merebut kembali slot yang di-grant tapi tidak pernah diklaim |
+| 23 | `POST /bookings` menyatakan multi-kategori all-or-nothing + 4 kode error baru | `hold_booking.lua` sebelumnya hanya menerima satu kategori, padahal `tickets[]` sudah mengizinkan beberapa |

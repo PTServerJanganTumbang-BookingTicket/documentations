@@ -38,7 +38,7 @@ seluruh FR, NFR dan BR dalam `requirements.md` v1.0; pemetaan lengkapnya ada di 
 | Konfirmasi pembayaran | **`POST /payments/webhook`** dari gateway |
 | Email | **Outbox → SQS → SES**, satu email per pemegang NIK, kegagalan tidak membatalkan transaksi |
 | Sumber kebenaran deadline | **Aurora** (transaksional); ZSET hanya penjadwal |
-| Anchor TTL | **Serial**: booking = `slot_claimed_at` +5 menit; pembayaran = `held_at` +10 menit (BR-03, BR-05) |
+| Anchor TTL | **Serial**: booking = `granted_at` +5 menit; pembayaran = `held_at` +10 menit (BR-03, BR-05). Tidak ada grace antrian — jam booking mulai saat slot diberikan |
 | Proteksi dependensi eksternal | Rate limiter + circuit breaker terdistribusi (Redis) |
 | WAF | **Tidak dipakai di POC** — konsekuensinya dicatat di Bagian 16 |
 | Push notification front-end | **Tidak dibangun** fase ini |
@@ -153,8 +153,9 @@ dikelola lewat Bagian 11.
   │   connections: Map<eventId, Set<Response>> · byToken: Map<token, Response>│
   │                                                                           │
   │   GET /events/{ev}/queue/stream                                          │
-  │     0. GET queue:{ev}:state                                              │
-  │        bila closed_sold_out → HTTP 410 Gone, JANGAN buka stream          │
+  │     0. GET queue:{ev}:state  ∈ SCHEDULED | OPEN | SOLD_OUT               │
+  │        bila SOLD_OUT  → HTTP 410 Gone, JANGAN buka stream                │
+  │        bila SCHEDULED → HTTP 409, sale belum dibuka                      │
   │        ← status non-200 membuat EventSource berhenti permanen,           │
   │          mencegah badai reconnect dari 300.000 klien setelah sold out    │
   │     1. token dari cookie/header → HGET token:{uuid}                      │
@@ -189,7 +190,8 @@ dikelola lewat Bagian 11.
   │               terus dibagikan — pelanggaran NFR-02)                     │
   │              EVALSHA advance_now_serving.lua                            │
   │              → batch INSERT bookings(status='GRANTED', granted_at=now())│
-  │              → ZADD expiries:{ev} (granted_at + GRACE) booking_id       │
+  │                booking_expires_at = granted_at + BOOKING_TTL            │
+  │              → ZADD expiries:{ev} booking_expires_at booking_id         │
   │              → gagal INSERT setelah retry: DECRBY slots:open,           │
   │                SADD readmit, JANGAN publish grant (Bagian 6)            │
   │   3. PUBLISH sse-broadcast / sse-grant / sse-sold-out                   │
@@ -200,7 +202,7 @@ dikelola lewat Bagian 11.
    │  QUEUE    queue:{ev}:issued · now_serving · state · slots:open:{ev}      │
    │           token:{uuid} (ticket_no, event_id, lapses, account_id?)        │
    │           by_ticket (ZSET score=ticket_no) · readmit:{ev}                │
-   │           grant:{token} EX GRANT_TOKEN_TTL_SECONDS (1200)                │
+   │           grant:{token} EX GRANT_TOKEN_TTL_SECONDS (1080)                │
    │  BOOKING  stock:{ev}:{cat} · nik:used:{ev}:{hmac} NX                     │
    │           nik:valid:{hmac} EX 86400   -- cache verifikasi Dukcapil       │
    │  QUEUECAP queue:{ev}:capacity · depth = issued − now_serving             │
@@ -217,6 +219,8 @@ dikelola lewat Bagian 11.
    │   bookings(                                                              │
    │     id, event_id, queue_token, account_id NULL, contact_email NULL,      │
    │     status, granted_at, slot_claimed_at, held_at,                        │
+   │     -- granted_at MENENTUKAN booking_expires_at. slot_claimed_at         │
+   │     -- hanya dicatat untuk metrik konversi, BUKAN otoritatif.            │
    │     booking_expires_at, payment_expires_at,   ← OTORITATIF; masing-      │
    │     payment_ref, payment_attempts, payment_method,                       │
    │                                                  masing ditulis saat     │
@@ -312,7 +316,7 @@ dikelola lewat Bagian 11.
 |---|---|
 | FR-01 daftar event | `GET /events` — Lambda + cache CloudFront 30 detik. Halaman utama dapat di-cache; ia tidak punya konsep freshness per-customer |
 | FR-02 event aktif | `status = 'available' AND stock > 0` → `clickable: true` |
-| FR-03 event sold out | `GET queue:{ev}:state = closed_sold_out` ATAU `stock = 0` → `clickable: false`, label status |
+| FR-03 event sold out | `status = SOLD_OUT` (dari `available == 0`) → `display.enabled = false`, `label_key = sold_out` — Bagian 6 |
 | FR-04 ada antrian → Waiting Room | `POST /events/{ev}/queue/join` mengembalikan `{ticket_no, nowServing, streamUrl}` |
 | **FR-05 tidak ada antrian → langsung Detail** | `POST /events/{ev}/queue/join` mengecek `issued − now_serving == 0 AND slots:open < MAX AND stock > 0`. Bila benar, Lua memberi grant pada permintaan yang sama dan respons berisi `{granted: true, accessToken}` — klien langsung ke Detail Ticket Page tanpa pernah membuka stream |
 
@@ -334,7 +338,7 @@ Saat `POST /events/{ev}/queue/join`: `HSET token:{uuid}` **dan** `ZADD queue:{ev
 
 local stock = tonumber(ARGV[2])
 if stock <= 0 then
-  redis.call('SET', KEYS[3], 'closed_sold_out')
+  redis.call('SET', KEYS[3], 'SOLD_OUT')
   return {0, 0, 'SOLD_OUT', {}}
 end
 
@@ -435,11 +439,24 @@ bila kompensasi itu sendiri gagal:
 ```
 Tiap tick ke-120 (≈60 detik), per kategori:
   E = SELECT capacity FROM event_categories WHERE id = $cat          -- kapasitas awal
+      -- WAJIB IMUTABEL SELAMA SALE. Seluruh perhitungan drift diukur terhadap
+      -- angka ini; mengubahnya di tengah sale menggeser garis dasar dan membuat
+      -- koreksi berikutnya salah arah. Perubahan kapasitas hanya di luar jendela
+      -- sale, dan rekonsiliasi harus di-reset (last_drift = 0) sesudahnya.
     − SELECT COUNT(*) FROM booking_items bi JOIN bookings b ON b.id = bi.booking_id
         WHERE bi.category = $cat
           AND b.status IN ('HELD','AWAITING_PAYMENT','CONFIRMED')     -- WRITER
   R = GET stock:{ev}:{cat}
   current_drift = R - E ;  emit StockDrift
+
+  if R is MISSING (bukan nol):
+      SET stock:{ev}:{cat} E        -- SEGERA, tanpa menunggu konfirmasi kedua
+      emit StockKeyRestored
+      -- Aturan dua-tick ada untuk mencegah koreksi atas drift semu dari lag
+      -- replika. Kunci yang HILANG bukan drift — ia menolak setiap hold sampai
+      -- ditanam kembali, jadi menunggu 60 detik lagi berarti 60 detik penjualan
+      -- mati demi kehati-hatian yang tidak berlaku di sini.
+      continue
 
   if |current_drift| >= STOCK_DRIFT_THRESHOLD and |last_drift| >= STOCK_DRIFT_THRESHOLD:
       INCRBY stock:{ev}:{cat} (-current_drift)
@@ -476,28 +493,137 @@ Antrian dibatasi `QUEUE_CAPACITY` (300.000). `POST /events/{ev}/queue/join` meno
 `QUEUE_FULL` ketika `issued − now_serving >= QUEUE_CAPACITY`, **fail fast** — tanpa buffering
 dan tanpa memberi nomor antrian yang tidak akan pernah terlayani.
 
-State antrian per event tersedia di `GET /events` dan dipakai halaman utama:
+### Dua sumbu, dua field: `status` dan `queue_state`
 
-| `queue_state` | Arti | Tombol |
+`GET /events` memisahkan **stok** dari **izin masuk**, karena keduanya bergerak sendiri-sendiri
+dan pada puncak sale sering berlawanan.
+
+`status` — hanya stok:
+
+| Nilai | Kondisi |
+|---|---|
+| `AVAILABLE` | `available > threshold` |
+| `SELLING_OUT_FAST` | `0 < available <= threshold` |
+| `SOLD_OUT` | `available == 0` |
+
+`threshold = capacity × SELLING_FAST_THRESHOLD_PCT / 100` (bawaan **20**). Ambang persentase,
+bukan laju penjualan: laju memerlukan jendela waktu yang harus ditentukan, lebih berisik, dan
+lebih sulit dipertanggungjawabkan dalam tender.
+
+`queue_state` — hanya izin masuk:
+
+| Nilai | Kondisi | Tombol |
 |---|---|---|
-| `OPEN` | Dapat bergabung | "Beli Tiket" aktif |
+| `NOT_OPEN` | `queue:{ev}:state == SCHEDULED` | Nonaktif |
 | `FULL` | `depth >= QUEUE_CAPACITY` | Nonaktif, "Antrian penuh" |
-| `CLOSED` | `state = closed_sold_out` | Nonaktif, "Sold Out" |
+| `DIRECT` | `depth == 0` dan masih ada slot bebas | "Beli Tiket" — FR-05 |
+| `OPEN` | sisanya | "Masuk Antrian" |
+
+> **`CLOSED` dihapus.** Ia didefinisikan sebagai "event sold out", jadi ia melaporkan urusan
+> field lain — persis percampuran yang pemisahan ini dimaksudkan untuk menghentikan. Sold-out
+> kini hanya dikatakan oleh `status`.
+>
+> **`DIRECT` ditambahkan.** FR-05 menuntut "jika tidak ada antrian → langsung ke Detail Ticket
+> Page", dan sebelumnya `OPEN` membawa dua arti sekaligus meskipun label tombolnya berbeda.
+
+**Mengapa dua field, bukan satu enum.** Pada puncak sale kombinasi ini normal, bukan tepi:
+
+| `status` | `queue_state` | Artinya |
+|---|---|---|
+| `AVAILABLE` | `FULL` | tiket masih ada, antrian sudah 300.000 |
+| `SELLING_OUT_FAST` | `FULL` | tiket hampir habis, antrian sudah 300.000 |
+
+Satu enum harus memilih salah satu kata. Pilih `QUEUE_FULL` dan customer tidak tahu masih ada
+stok, sehingga tidak tahu apakah layak mencoba lagi — padahal halaman utama memang dirancang
+untuk di-refresh manual. Pilih `SELLING_OUT_FAST` dan ia menekan tombol yang pasti ditolak.
+
+### `display`: server memutuskan, klien merender
+
+`status` dan `queue_state` adalah fakta yang dapat dibaca mesin — aplikasi mobile, analitik,
+dan integrasi pihak ketiga membutuhkan keduanya. `display` adalah jawaban yang sudah
+diselesaikan server, sehingga frontend tidak memutuskan apa pun:
+
+```
+-- urutan ini milik SERVER, bukan frontend
+status == SOLD_OUT         → enabled=false  action=NONE           label=sold_out
+queue_state == NOT_OPEN    → enabled=false  action=NONE           label=coming_soon
+queue_state == FULL        → enabled=false  action=NONE           label=queue_full
+queue_state == DIRECT      → enabled=true   action=GO_TO_TICKETS  label=buy_now
+queue_state == OPEN        → enabled=true   action=JOIN_QUEUE     label=join_queue
+
+badge_key = selling_out_fast  bila status == SELLING_OUT_FAST DAN display.enabled
+          = null              selainnya
+```
+
+Satu syarat badge itu menggantikan aturan khusus "sembunyikan saat FULL": lencana urgensi
+hanya tampil ketika tombolnya memang dapat ditekan, sehingga `FULL`, `NOT_OPEN` dan `SOLD_OUT`
+tercakup sekaligus. Menampilkan "hampir habis" kepada 300.000 orang yang tidak dapat masuk
+hanya menambah tekanan pada perilaku yang justru ingin diserap ruang tunggu.
+
+`action` ∈ `JOIN_QUEUE` | `GO_TO_TICKETS` | `NONE` — rute pun bukan keputusan frontend.
+
+**Label dan badge adalah kunci, bukan teks.** FR-32 menuntut dua bahasa; bila server mengirim
+teks jadi, ia harus melokalkannya, dan itu memasukkan `Accept-Language` ke dalam cache key
+CDN — memecah satu respons yang di-cache 30 detik untuk 300.000 orang menjadi banyak varian.
+Kunci + tabel terjemahan di frontend adalah pencarian, bukan logika.
+
+> **Halaman utama menampilkan waktu absolut, bukan hitung mundur.** Hitung mundur pra-buka
+> berarti frontend membandingkan `sale_starts_at` dengan jam — logika di frontend, dan keliru
+> juga karena respons ini di-cache CDN 30 detik. Label pra-buka berbunyi "Buka 10 Nov 09:00".
+> Hitung mundur hidup tetap berada di ruang tunggu, tempat `serverTime` datang pada setiap
+> payload SSE.
 
 Menampilkannya di halaman utama berarti customer melihat antrian penuh **sebelum** mengklik,
 bukan sesudah. `GET /events` di-cache CDN 30 detik, sehingga `depth` yang ditampilkan adalah
 perkiraan; penegaknya tetap pemeriksaan atomik saat join.
 
+### `queue:{ev}:state` dan pembukaan sale
+
+```
+SCHEDULED  ← nilai AWAL. Sale belum dibuka; join ditolak 409.
+   │
+   │  job terjadwal pada sale_starts_at  (EventBridge, satu kali per event)
+   ▼
+OPEN       ← antrian menerima join, admission berjalan
+   │
+   │  advance_now_serving.lua ketika remaining_stock <= 0
+   ▼
+SOLD_OUT   ← stream menjawab 410 Gone
+```
+
+> **Ini menutup celah, bukan menambah fitur.** Sebelumnya `state` hanya punya dua nilai,
+> nilai awalnya tidak pernah dinyatakan, dan tidak ada apa pun yang membukanya — sale tidak
+> punya permulaan yang terdefinisi. Untuk sistem flash sale itu justru layar yang paling
+> padat: 300.000 orang berkumpul **sebelum** gerbang dibuka, bukan sesudah.
+
+> **`SOLD_OUT` masih satu arah, dan itu belum tentu benar.** Stok kembali dari booking yang
+> kedaluwarsa (BR-04, BR-06) dan `ExpiryRate` dipantau sebagai metrik, tetapi tidak ada yang
+> mengembalikan `state` ke `OPEN`. Setiap tiket yang dilepas setelah momen sold-out karena itu
+> tidak dapat terjual. Keputusan apakah `SOLD_OUT` dibuat reversibel **masih terbuka** — lihat
+> Bagian 17.
+
 **Tidak ada `Session_TTL_Antrian`.** Yang melepas posisi hanyalah grace period setelah slot
-diberikan: customer yang tidak masuk ke Detail Ticket Page dalam `GRACE_SECONDS` kehilangan
+diberikan: customer yang tidak masuk ke Detail Ticket Page sebelum `booking_expires_at`
+(`granted_at` + 300 detik) kehilangan
 slotnya ke antrian berikutnya (maksimum dua kali re-admit), dan menutup tab tidak melepas
 posisi. Memberi antrian batas waktu absolut tidak menambah proteksi di atas itu — ia hanya
 menghukum customer yang menunggu lama karena antrian memang panjang.
 
 ### `readmit:{ev}` dan pause/resume
 
+`readmit` adalah satu-satunya mitigasi yang tersisa untuk customer mobile yang melewatkan
+`grant`, karena grace antrian sudah dihapus (Bagian 7). Ia dipertahankan **hanya** untuk
+`LAPSED` — slot diberikan tetapi Detail Ticket Page tidak pernah dibuka. Booking yang
+`EXPIRED` dari `SELECTING` tidak di-readmit: customer itu sudah sampai dan kehabisan waktu.
+
+> **Biaya slot naik 2,5× per no-show.** Dulu satu kali lewat hanya membakar 120 detik
+> jendela klaim; sekarang ia membakar 300 detik penuh jam booking, dan dengan batas 2×
+> satu token dapat menahan slot hingga 900 detik tanpa pernah memilih tiket. Bila
+> `LapsedRate` ternyata tinggi pada beban nyata, turunkan batas readmit ke 1× sebelum
+> menaikkan `MAX_CONCURRENT_SLOTS`.
+
 ```
-grace lapse:   n = HINCRBY token:{uuid} lapses 1
+lapse:         n = HINCRBY token:{uuid} lapses 1
                if n <= 2 then SADD readmit:{ev} {uuid} else ZREM by_ticket end
 sale ditutup:  EXPIRE readmit:{ev} 86400 ; EXPIRE by_ticket 86400
 post-sale job: DEL readmit:{ev} by_ticket
@@ -564,7 +690,7 @@ di-hold (FR-16). Sebelum itu tidak ada booking, hanya sesi pemilihan. Karena itu
 **berurutan**, masing-masing dengan anchor sendiri:
 
 ```
-booking_expires_at = slot_claimed_at + BOOKING_TTL_SECONDS   (300)   ← masuk Detail Ticket
+booking_expires_at = granted_at + BOOKING_TTL_SECONDS       (300)   ← slot diberikan
 payment_expires_at = held_at         + PAYMENT_TTL_SECONDS   (600)   ← tekan tombol bayar
 ```
 
@@ -575,15 +701,24 @@ ia memilih kursi — sesuai wireframe tender.
 diturunkan darinya, bukan ditulis tetap:
 
 ```
-grace antrian   120 detik   GRANT → claim
-booking TTL     300 detik   claim → tekan Pay
+booking TTL     300 detik   GRANT → tekan Pay
 payment TTL     600 detik   tekan Pay → batas bayar
 payment grace    30 detik   batas bayar → pembatalan final
-                            ──────────
-                            1050 detik = 17,5 menit
+                            ─────────
+                             930 detik = 15,5 menit
 
-GRANT_TOKEN_TTL_SECONDS = GRACE_SECONDS + BOOKING_TTL_SECONDS
-                        + PAYMENT_TTL_SECONDS + PAYMENT_GRACE_SECONDS + margin = 1200
+GRANT_TOKEN_TTL_SECONDS = BOOKING_TTL_SECONDS + PAYMENT_TTL_SECONDS
+                        + PAYMENT_GRACE_SECONDS + margin = 1080
+
+**Tidak ada grace antrian.** Jam booking mulai berdetak saat slot diberikan, bukan saat
+customer membuka Detail Ticket Page. Satu jam, satu anchor, tanpa jendela terpisah untuk
+mengklaim.
+
+> **Harganya dibayar customer mobile.** Ponsel dengan layar terkunci yang melewatkan push
+> `grant` dan baru membuka aplikasi empat menit kemudian hanya punya sisa satu menit untuk
+> memilih kursi dan mengisi NIK. Sebelumnya 120 detik pertama adalah jendela klaim terpisah
+> yang tidak memotong waktu memilih. Ini konsekuensi yang diterima; mitigasinya tinggal
+> `readmit` (di bawah).
 ```
 
 > Angka tetap `EX 900` berlaku pada model anchor-tunggal sebelumnya dan **tidak lagi**:
@@ -595,8 +730,8 @@ GRANT_TOKEN_TTL_SECONDS = GRACE_SECONDS + BOOKING_TTL_SECONDS
 
 | Transisi | Kolom Aurora (di dalam transaksi) | ZSET (penjadwal) |
 |---|---|---|
-| GRANT | `granted_at = now()` | `ZADD expiries (granted_at + GRACE) booking_id` |
-| CLAIM → SELECTING | `slot_claimed_at = now()`, `booking_expires_at = slot_claimed_at + 300` | `ZADD expiries (booking_expires_at)` |
+| GRANT | `granted_at = now()`, `booking_expires_at = granted_at + 300` | `ZADD expiries booking_expires_at booking_id` |
+| CLAIM → SELECTING | `slot_claimed_at = now()` — **tenggat tidak diubah**, ia sudah ditetapkan saat GRANT | `ZADD expiries (booking_expires_at)` |
 | **TEKAN PAY → HELD** | `held_at = now()`, **`payment_expires_at = held_at + 600`** | `ZADD expiries (payment_expires_at)` |
 | HELD → AWAITING_PAYMENT | *(tidak menulis deadline baru)* | *(skor tidak berubah)* |
 | Terminal apa pun | `status = <terminal>` | `ZREM expiries booking_id` |
@@ -622,7 +757,7 @@ yang tiba di jendela itu **tetap mengonfirmasi** booking.
 
 Stok **tetap di-hold** selama grace: melepasnya lalu menerima callback sukses 10 detik
 kemudian berarti menjual ulang kursi yang sudah dibayar. Konsekuensinya perjalanan maksimum
-menjadi 17,5 menit, dan `GRANT_TOKEN_TTL_SECONDS` harus mencakupnya.
+menjadi 15,5 menit, dan `GRANT_TOKEN_TTL_SECONDS` harus mencakupnya.
 
 ### Sweep memverifikasi sebelum meng-expire
 
@@ -640,7 +775,7 @@ untuk booking_id dalam ZRANGEBYSCORE expiries:{ev} 0 now:
           FROM bookings WHERE id = booking_id          -- WRITER
 
   deadline = CASE row.status
-               WHEN 'GRANTED'          THEN row.granted_at + GRACE_SECONDS
+               WHEN 'GRANTED'          THEN row.booking_expires_at
                WHEN 'SELECTING'        THEN row.booking_expires_at
                WHEN 'HELD'             THEN row.payment_expires_at
                WHEN 'AWAITING_PAYMENT' THEN row.payment_expires_at
@@ -663,6 +798,10 @@ untuk booking_id dalam ZRANGEBYSCORE expiries:{ev} 0 now:
 
   switch row.status:
     GRANTED          → LAPSED  : DECR slots:open ; lapses+1 ; readmit (maks 2×)
+                                 -- LAPSED = slot diberikan, Detail Ticket Page tidak
+                                 -- pernah dibuka. Dibedakan dari EXPIRED (dibuka tapi
+                                 -- tidak selesai memilih) agar FR-35 tetap dapat
+                                 -- memisahkan keduanya; tenggatnya kini sama.
     SELECTING        → EXPIRED : DECR slots:open        -- TTL booking (5 menit)
     HELD             → EXPIRED : DECR slots:open ; INCR stock
                                  DELETE FROM nik_claims WHERE booking_id = $1
@@ -702,31 +841,79 @@ jatuh tempo, bukan seluruh ZSET.
 
 **Stok di-hold saat tombol Pay ditekan** (FR-16).
 
+**Dua kode kegagalan baru, dan keduanya BUKAN "habis".** `STOCK_UNINITIALIZED` berarti kunci
+stok hilang dari Redis — flush atau failover — dan `STOCK_NEGATIVE` berarti guard terakhir
+menyala. Keduanya dijawab **503**, bukan 409, karena stok sebenarnya tidak diketahui; keduanya
+dialarmkan (`StockKeyMissing`, `StockNegativeGuard`) dan keduanya menuntut rekonsiliasi
+segera, bukan pada tick berikutnya.
+
 > **Gagal hold TIDAK menghilangkan slot.** `NO_STOCK`, `NIK_TAKEN` atau `QTY_EXCEEDED` →
 > customer tetap `SELECTING` dengan sisa TTL; UI menampilkan pesan spesifik; pemilihan ulang
 > kategori atau perbaikan NIK diizinkan. (NFR-02)
 
 ```lua
 -- hold_booking.lua
--- KEYS[1]=stock:{ev}:{category}  KEYS[2..n+1]=nik:used:{ev}:{hmac}
--- ARGV[1]=qty  ARGV[2]=MAX_TICKETS_PER_TRANSACTION  ARGV[3]=NIK_USED_TTL_SECONDS
-local qty = tonumber(ARGV[1])
-if qty < 1 or qty > tonumber(ARGV[2]) then return {0, 'QTY_EXCEEDED', -1} end  -- FR-13
-if #KEYS - 1 ~= qty then return {0, 'NIK_COUNT_MISMATCH', -1} end              -- BR-02
-local stock = tonumber(redis.call('GET', KEYS[1]) or 0)
-if stock < qty then return {0, 'NO_STOCK', -1} end                             -- FR-14
+-- KEYS[1..m]      = stock:{ev}:{cat}       satu per KATEGORI yang dipilih
+-- KEYS[m+1..m+q]  = nik:used:{ev}:{hmac}   satu per KURSI
+-- ARGV[1]=m  ARGV[2]=MAX_TICKETS_PER_TRANSACTION  ARGV[3]=NIK_USED_TTL_SECONDS
+-- ARGV[4..3+m]    = qty per kategori, urutannya sama dengan KEYS[1..m]
+--
+-- Seluruh kunci memakai hash tag {ev} sehingga berada pada slot yang sama di
+-- Redis cluster mode -- prasyarat agar satu skrip boleh menyentuh semuanya.
+local m    = tonumber(ARGV[1])
+local maxq = tonumber(ARGV[2])
+
+-- Kuota dihitung LINTAS kategori: FR-13 membatasi 3 tiket per TRANSAKSI,
+-- bukan 3 per kategori. 1 Premium + 1 Festival + 1 VIP = 3, sah.
+local total = 0
+for i = 1, m do
+  local q = tonumber(ARGV[3 + i])
+  if q == nil or q < 1 then return {0, 'QTY_INVALID', i - 1} end
+  total = total + q
+end
+if total > maxq then return {0, 'QTY_EXCEEDED', -1} end                       -- FR-13
+if #KEYS - m ~= total then return {0, 'NIK_COUNT_MISMATCH', -1} end           -- BR-02
+
+-- FASE 1 -- periksa SEMUA kategori sebelum mengurangi satu pun.
+-- Inilah yang membuat hold multi-kategori all-or-nothing: tidak pernah ada
+-- keadaan sebagian kategori ter-hold dan sebagian gagal.
+for i = 1, m do
+  local raw = redis.call('GET', KEYS[i])
+  if raw == false then
+    -- Kunci HILANG, bukan nol -- Redis flush atau failover. Menjawab NO_STOCK
+    -- di sini akan mengumumkan "habis" untuk event yang stoknya masih penuh,
+    -- dan menolak SELURUH penjualan sampai rekonsiliasi menanamnya kembali.
+    return {0, 'STOCK_UNINITIALIZED', i - 1}
+  end
+  if tonumber(raw) < tonumber(ARGV[3 + i]) then
+    return {0, 'NO_STOCK', i - 1}                                             -- FR-14
+  end
+end
+
+-- FASE 2 -- kunci setiap NIK; satu bentrok membatalkan semuanya
 local claimed = {}
-for i = 2, #KEYS do
+for i = m + 1, #KEYS do
   if redis.call('SET', KEYS[i], 1, 'NX', 'EX', tonumber(ARGV[3])) then
     -- EX membatasi kebocoran bila transaksi Aurora rollback setelah titik ini:
     -- NIK terkunci paling lama selama sale, bukan selamanya (Bagian 6)
     claimed[#claimed + 1] = KEYS[i]
   else
     for j = 1, #claimed do redis.call('DEL', claimed[j]) end
-    return {0, 'NIK_TAKEN', i - 2}        -- indeks NIK yang bentrok
+    return {0, 'NIK_TAKEN', i - m - 1}    -- indeks NIK yang bentrok
   end
 end
-redis.call('DECRBY', KEYS[1], qty)
+
+-- FASE 3 -- kurangi stok. Fase 1 sudah menjamin cukup dan skrip ini atomik,
+-- jadi tidak ada yang dapat menyelip di antaranya. Guard di bawah murni
+-- pertahanan terakhir: Redis tidak punya CHECK (stock >= 0).
+for i = 1, m do
+  local left = redis.call('DECRBY', KEYS[i], tonumber(ARGV[3 + i]))
+  if left < 0 then
+    for j = 1, i          do redis.call('INCRBY', KEYS[j], tonumber(ARGV[3 + j])) end
+    for j = 1, #claimed   do redis.call('DEL', claimed[j]) end
+    return {0, 'STOCK_NEGATIVE', i - 1}
+  end
+end
 return {1, 'HELD', -1}
 ```
 
@@ -954,16 +1141,18 @@ JOIN_RATE_LIMIT  JOIN_RATE_WINDOW_SECONDS  SSE_CONN_RATE_LIMIT
 
 OUTBOX_LEASE_SECONDS=30     DRIFT_THRESHOLD=3        RECONCILE_EVERY_TICKS=20
 STOCK_DRIFT_THRESHOLD=2     STOCK_RECONCILE_EVERY_TICKS=120
+SELLING_FAST_THRESHOLD_PCT=20    -- ambang badge "hampir habis" (Bagian 6)
+MAX_TICKETS_PER_TRANSACTION=3   -- total lintas kategori, bukan per kategori
 NIK_USED_TTL_SECONDS        -- durasi sale + margin; membatasi kebocoran nik:used
-GRACE_SECONDS=120           BOOKING_TTL_SECONDS=300  PAYMENT_TTL_SECONDS=600
+BOOKING_TTL_SECONDS=300     PAYMENT_TTL_SECONDS=600
 PAYMENT_GRACE_SECONDS=30    QUEUE_CAPACITY=300000    MAX_SAVED_NIKS=5
 ACCOUNT_RATE_LIMIT_PER_IP_HOUR=5                     POLICY_VERSION
-  -- booking dari slot_claimed_at; pembayaran dari held_at (berurutan, maks 15 menit)
+  -- booking dari granted_at; pembayaran dari held_at (berurutan, maks 15,5 menit)
 GRANT_INSERT_MAX_RETRIES=3  BROADCAST_HEARTBEAT_SECONDS=10
 MAX_TICKETS_PER_TRANSACTION=3                        TERMS_VERSION
 MAX_PAYMENT_ATTEMPTS=5      -- tiap percobaan menerbitkan VA/QR baru di Midtrans
 MIN_RETRY_REMAINING_SECONDS=60  -- di bawah ini, ganti metode ditolak
-GRANT_TOKEN_TTL_SECONDS=1200    -- = GRACE + BOOKING_TTL + PAYMENT_TTL + margin.
+GRANT_TOKEN_TTL_SECONDS=1080    -- = BOOKING_TTL + PAYMENT_TTL + PAYMENT_GRACE + margin.
   -- DITURUNKAN, bukan konstanta lepas: perjalanan maksimum 120+300+600 = 1020 detik.
 ```
 
@@ -1013,8 +1202,9 @@ POST /bookings
     status sudah 'HELD' atau lebih jauh → COMMIT ; kembalikan booking yang ADA, 200
     status ≠ 'SELECTING'                → COMMIT ; 409
 
-    EVALSHA hold_booking.lua            -- stok + NIK dikunci di Redis
+    EVALSHA hold_booking.lua            -- stok (semua kategori) + NIK, satu skrip
     gagal → COMMIT (tanpa perubahan) ; kembalikan NO_STOCK / NIK_TAKEN / QTY_EXCEEDED
+            STOCK_UNINITIALIZED / STOCK_NEGATIVE → 503 + alarm (Bagian 8)
             -- slot TIDAK hilang; customer tetap SELECTING dengan sisa TTL
 
     UPDATE bookings
@@ -1036,7 +1226,7 @@ POST /bookings
   ZADD expiries:{ev} (payment_expires_at) booking_id   -- rescore dari TTL booking
 
   ON ROLLBACK setelah Lua berhasil:                    -- KOMPENSASI WAJIB
-    INCRBY stock:{ev}:{cat} qty
+    INCRBY stock:{ev}:{cat} qty         -- satu INCRBY per kategori yang di-hold
     DEL    nik:used:{ev}:{hmac}  (setiap NIK dalam permintaan)
     emit   HoldCompensated
     -- nik_claims ikut di-rollback oleh Aurora; hanya Redis yang perlu kompensasi
@@ -1602,7 +1792,7 @@ tiba lewat webhook, bukan lewat antrian.
 | Web tab tertutup | Buka ulang dan reconnect | Acceptable |
 | **Mobile background** | ⚠️ OS menangguhkan jaringan; grant tidak diketahui | **Diketahui, diterima** |
 
-Grace 120 detik + `readmit` (maks 2×) → konsekuensinya penundaan, bukan kehilangan giliran.
+`readmit` (maks 2×) atas `LAPSED` → konsekuensinya penundaan, bukan kehilangan giliran.
 
 **Dashboard operasional (FR-33, FR-34, FR-35).** Tidak ada endpoint aplikasi untuk ini.
 `metrics-scraper` (EventBridge, tiap 1 menit) membaca Redis dan Aurora dan menerbitkan
@@ -1639,7 +1829,7 @@ yang diterbitkan `outbox-publisher`.
 | FR-09 | Estimasi waktu tunggu | `ratePerMin` pada payload |
 | FR-10 | Konsisten saat refresh | Bagian 4 snapshot awal; Bagian 12 re-entrancy |
 | FR-11, FR-12 | Detail event, kategori, stok, harga | `GET /events/{id}` |
-| FR-13, FR-14 | Maks 3; tolak melebihi stok | Bagian 8 `hold_booking.lua` `QTY_EXCEEDED`, `NO_STOCK` |
+| FR-13, FR-14 | Maks 3 **lintas kategori**; tolak melebihi stok | Bagian 8 `hold_booking.lua` — kuota dijumlahkan atas seluruh kategori, stok diperiksa untuk semuanya sebelum satu pun dikurangi (all-or-nothing) |
 | FR-15 | Format NIK 16 digit per tiket | Validasi klien + server sebelum Dukcapil |
 | FR-15a | Validasi Dukcapil | Bagian 8 — **NIK saja**; lihat catatan di bawah |
 | FR-16 | Hold stok saat lanjut bayar | Bagian 8 `hold_booking.lua` |
@@ -1774,6 +1964,10 @@ Working set Redis pada 300.000 ≈ 80 MB terhadap 13 GB per node: sizing didasar
 | **Redis flush / failover menghapus `nik:used`** | BR-02 tetap ditegakkan `UNIQUE (event_id, nik_hmac)` di Aurora; rekonsiliasi memulihkan kunci Redis dan `NikClaimRestored` dialarmkan |
 | Pepper KMS dirotasi saat sale berjalan | Seluruh hmac berubah dan BR-02 gagal senyap — rotasi dijadwalkan di luar jendela penjualan (Bagian 8) |
 | Rekonsiliasi memakai drift basi | `current_drift`, bukan `last_drift` (Bagian 6) |
+| **Redis flush menghapus `stock:{ev}:{cat}`** | `GET` mengembalikan `false`, bukan 0 — skrip menjawab `STOCK_UNINITIALIZED` (503) alih-alih mengumumkan sold-out, dan rekonsiliasi menanam ulang **segera** tanpa aturan dua-tick (Bagian 6, 8) |
+| **`stock` menjadi negatif** | Redis tidak punya `CHECK (stock >= 0)`; Fase 3 memeriksa hasil `DECRBY` dan mengembalikan seluruh pengurangan plus kunci NIK bila negatif, lalu `StockNegativeGuard` dialarmkan (Bagian 8) |
+| **Hold multi-kategori sebagian berhasil** | Fase 1 memeriksa seluruh kategori sebelum Fase 3 mengurangi satu pun, dalam satu skrip atomik (Bagian 8) |
+| Kapasitas kategori diubah saat sale berjalan | Garis dasar drift bergeser dan koreksi salah arah — kapasitas **imutabel selama sale**, perubahan hanya di luar jendela + reset `last_drift` (Bagian 6) |
 | Webhook duplikat dari gateway | `payment_events.gateway_event_id UNIQUE`; selalu 200 |
 | **Pembayaran tiba setelah booking EXPIRED** | Stok sudah dijual ulang. Webhook `settled` terhadap baris EXPIRED memicu `payment.refund` + alarm `LatePaymentRefund` (Bagian 9) |
 | Customer terkunci setelah charge ditolak | Jalur deny menaikkan `payment_attempts` sendiri → `order_id` berikutnya sudah baru (Bagian 9) |
@@ -1793,7 +1987,7 @@ Working set Redis pada 300.000 ≈ 80 MB terhadap 13 GB per node: sizing didasar
 | Task ECS tertinggal menyala setelah sale | Alarm `IdleTaskCount > 0` di luar jendela sale (Bagian 11) |
 | Kuota Fargate vCPU / Lambda concurrency | Service Quota Request T-7 hari |
 | ALB ramp 5.000 conn/s di T=0 | Uji pada ramp |
-| Mobile background tidak menerima grant | Grace 120s + `readmit` maks 2× |
+| Mobile background tidak menerima grant | `readmit` maks 2× atas `LAPSED`. **Degradasi yang diterima**: tanpa grace antrian, jam booking 300 detik sudah berjalan saat push terlewat, sehingga waktu memilih customer itu berkurang — lihat Bagian 7 |
 | Redis Pub/Sub kehilangan pesan saat failover | Resync + re-broadcast; `status {stale:true}`; heartbeat 10 detik |
 | `readmit` livelock | Batas 2× per token; `EXPIRE` + job post-sale |
 | Kontensi kategori saat tekan Pay | Aturan gagal-hold: slot tidak hilang (Bagian 8) |
@@ -1812,13 +2006,14 @@ Working set Redis pada 300.000 ≈ 80 MB terhadap 13 GB per node: sizing didasar
 | 4 | Perlakuan TTL customer yang sedang aktif saat admission di-pause — biarkan berjalan, bekukan selama pause, atau geser tenggat sebesar durasi pause (dengan batas atas, karena `grant:{token}` hanya hidup 1200 detik) | **Pemilik tender** |
 | 5 | Kapasitas koneksi per ECS task | Tim — **T-14 hari** |
 | 6 | `MAX_CONCURRENT_SLOTS` + maksimum okupansi slot | Tim |
+| 6a | Apakah `SOLD_OUT` dibuat **reversibel** sehingga tiket dari booking yang kedaluwarsa dapat terjual kembali — menuntut `advance_now_serving.lua` mengembalikan `state` ke `OPEN` dan perilaku `410 Gone` ditinjau ulang | **Pemilik tender** |
 | 7 | Kebijakan retensi PII (NIK, `contact_email`, `holder_email`) | Tim |
 | 8 | RPO / RTO | Tim |
 | 9 | Daftar skenario load test + threshold | Tim + QA |
 | 10 | Aksesibilitas (`aria-live` pada angka antrian dan banner pause) | Tim FE |
 
 **Diputuskan dan ditutup**: transport SSE; perlakuan Dukcapil fail-closed; penghapusan WAF
-untuk POC; TTL berurutan dengan anchor `slot_claimed_at` dan `held_at`; target kapasitas
+untuk POC; TTL berurutan dengan anchor `granted_at` dan `held_at`, tanpa grace antrian; target kapasitas
 300.000; Dukcapil memvalidasi NIK saja; penomoran kursi tidak diimplementasikan di POC —
 tiket berisi QR code, kategori, dan NIK pemegang; push notification TIDAK dibangun di POC;
 Session_TTL_Antrian TIDAK dipakai — grace period setelah alokasi slot sudah menutupinya;
