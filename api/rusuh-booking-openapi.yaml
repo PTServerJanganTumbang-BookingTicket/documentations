@@ -1,0 +1,1875 @@
+openapi: 3.0.3
+info:
+  title: Rusuh Booking Tiket API
+  version: "2.1"
+  description: |
+    API contracts untuk sistem penjualan tiket konser Rusuh dengan Virtual Waiting Room.
+
+    Selaras dengan **ADR-005** (Keputusan Arsitektur Final — SSE + ECS Fargate).
+
+    ### Dua Surface Berbeda
+    | Surface | Host | Transport |
+    |---|---|---|
+    | REST API | `api.rusuhtiket.com` (API Gateway) | HTTP/JSON |
+    | SSE Stream | `events.rusuhtiket.com` (ALB) | `text/event-stream` |
+
+    ### Autentikasi
+    - **Queue Token**: cookie `HttpOnly` `queue_token` (web) atau `Authorization: Bearer` header (mobile).
+      Token TIDAK pernah dikirim via query string.
+    - **Access Token**: JWT, diperoleh setelah giliran tiba via `GET /queue/me`.
+      Dikirim sebagai `Authorization: Bearer {access_token}`.
+
+    ### Pola Respons
+    Semua endpoint menggunakan envelope `{ meta, data }`.
+    Field `server_time` hadir di setiap respons agar klien dapat menyinkronkan jam (BR-10).
+
+    ### Status Antrian
+    Setelah `POST /events/{id}/queue/join`, klien membuka SSE stream.
+    Posisi dihitung klien: `position = ticket_no − nowServing`.
+    Saat menerima event `grant`, klien memanggil `GET /events/{id}/queue/me` untuk mendapat `access_token`.
+
+servers:
+  - url: https://api.rusuh.id/v1
+    description: Production
+
+tags:
+  - name: Authentication
+    description: Magic link login dan registrasi akun
+  - name: Accounts
+    description: Manajemen NIK tersimpan (Daftar_NIK_Teman)
+  - name: Events
+    description: Daftar dan detail event konser
+  - name: Queue
+    description: Virtual Waiting Room — join, stream SSE, status re-entrancy, polling fallback
+  - name: Booking
+    description: Pemilihan tiket dan pembuatan booking
+  - name: NIK
+    description: Validasi NIK ke Dukcapil
+  - name: Payment
+    description: Inisiasi pembayaran, status, webhook gateway
+  - name: User
+    description: Tiket milik user dan e-ticket
+  - name: Admin
+    description: Rekonsiliasi operasional (bukan jalur customer)
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Access token JWT diperoleh dari `GET /events/{event_id}/queue/me` setelah giliran tiba.
+    QueueTokenCookie:
+      type: apiKey
+      in: cookie
+      name: queue_token
+      description: Cookie HttpOnly yang di-set server saat `POST /queue/join`. Untuk mobile gunakan `Authorization` header.
+
+  schemas:
+    Meta:
+      type: object
+      properties:
+        code:
+          type: integer
+          example: 200
+        message:
+          type: string
+          example: Success
+
+    MetaPagination:
+      allOf:
+        - $ref: "#/components/schemas/Meta"
+        - type: object
+          properties:
+            pagination:
+              type: object
+              properties:
+                totalData:
+                  type: integer
+                totalPage:
+                  type: integer
+                limit:
+                  type: integer
+                offset:
+                  type: integer
+
+    ErrorResponse:
+      type: object
+      properties:
+        meta:
+          $ref: "#/components/schemas/Meta"
+        data:
+          type: object
+
+    EventDisplay:
+      type: object
+      description: Keputusan server untuk rendering tombol — klien tidak menghitung ulang logika ini.
+      properties:
+        enabled:
+          type: boolean
+        action:
+          type: string
+          enum: [JOIN_QUEUE, GO_TO_TICKETS, NONE]
+        label_key:
+          type: string
+          enum: [sold_out, coming_soon, queue_full, buy_now, join_queue]
+        badge_key:
+          type: string
+          nullable: true
+          enum: [selling_out_fast]
+
+    TicketCategory:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        price:
+          type: integer
+        available:
+          type: integer
+        status:
+          type: string
+          enum: [AVAILABLE, SOLD_OUT]
+
+    PaymentTtl:
+      type: object
+      properties:
+        expires_at:
+          type: string
+          format: date-time
+        ttl_seconds:
+          type: integer
+        server_time:
+          type: string
+          format: date-time
+
+paths:
+  # ──────────────────────────────────────────────
+  #  AUTHENTICATION
+  # ──────────────────────────────────────────────
+
+  /auth/magic-link:
+    post:
+      tags: [Authentication]
+      summary: Request Magic Link (Login)
+      operationId: requestMagicLink
+      description: |
+        Mengirim login link ke email. UI: "Send Login Link" button.
+        **Requirement**: FR-31
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email:
+                  type: string
+                  format: email
+            example:
+              email: you@example.com
+      responses:
+        "200":
+          description: Login link sent to email
+          content:
+            application/json:
+              example:
+                meta:
+                  code: 200
+                  message: Login link sent to your email
+        "429":
+          description: Rate limited — too many requests
+          content:
+            application/json:
+              example:
+                meta:
+                  code: 429
+                  message: Please wait before requesting another link
+                data:
+                  retry_after: 60
+
+  /auth/magic-link/resend:
+    post:
+      tags: [Authentication]
+      summary: Resend Magic Link
+      operationId: resendMagicLink
+      description: |
+        Kirim ulang login link. UI: "Resend Login Link" button di "Check your inbox" screen.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email:
+                  type: string
+                  format: email
+            example:
+              email: you@example.com
+      responses:
+        "200":
+          description: New login link sent
+          content:
+            application/json:
+              example:
+                meta:
+                  code: 200
+                  message: New login link sent
+
+  /auth/verify:
+    get:
+      tags: [Authentication]
+      summary: Verify Magic Link Token
+      operationId: verifyMagicLink
+      description: |
+        Verifikasi token dari link email. Ini adalah redirect target dari email login link.
+
+        Mengembalikan `redirect_context` bila user kembali ke booking yang sedang berlangsung (BR-09).
+        **Requirement**: FR-31, BR-09
+      parameters:
+        - name: magic_token
+          in: cookie
+          required: true
+          schema:
+            type: string
+          description: Token dari email link
+      responses:
+        "200":
+          description: Login successful
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+              description: "access_token cookie"
+          content:
+            application/json:
+              example:
+                meta:
+                  code: 200
+                  message: Login successful
+                data:
+                  access_token: eyJhbG...
+                  refresh_token: eyJhbG...
+                  expires_in: 300
+                  user:
+                    id: usr_123
+                    email: you@example.com
+                    nik: "3171xxxxxxxxxx22"
+                  redirect_context:
+                    type: booking
+                    event_id: evt_konser_a
+                    booking_id: RB-00912
+                    message: Booking context restored
+        "401":
+          description: Invalid or expired magic token
+
+  /auth/register:
+    post:
+      tags: [Authentication]
+      summary: Register Account
+      operationId: registerAccount
+      description: |
+        Buat akun baru dengan email dan NIK.
+
+        NIK diverifikasi ke Dukcapil **sekali di sini** dan terikat permanen ke akun.
+        Setelah itu pembelian tidak memanggil Dukcapil lagi untuk NIK pembeli.
+
+        Consent wajib diisi dan tidak boleh pre-checked (UU PDP No. 27/2022).
+        **Requirement**: FR-29, FR-30, FR-31
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, nik, consent]
+              properties:
+                email:
+                  type: string
+                  format: email
+                nik:
+                  type: string
+                  minLength: 16
+                  maxLength: 16
+                  description: NIK 16 digit. Wajib. Diverifikasi Dukcapil.
+                name:
+                  type: string
+                consent:
+                  type: object
+                  required: [accepted, policy_version]
+                  properties:
+                    accepted:
+                      type: boolean
+                      description: Persetujuan pemrosesan NIK pihak ketiga. Checkbox tidak boleh pre-checked.
+                    policy_version:
+                      type: string
+                      description: Versi kebijakan privasi yang ditampilkan saat registrasi
+            example:
+              email: alex@example.com
+              nik: "3171xxxxxxxxxx22"
+              name: ALEX
+              consent:
+                accepted: true
+                policy_version: "2026-10-01"
+      responses:
+        "200":
+          description: Verification link sent
+          content:
+            application/json:
+              example:
+                meta:
+                  code: 200
+                  message: Verification link sent to your email
+                data:
+                  user_id: usr_456
+        "400":
+          description: Validation error (e.g. NIK format)
+          content:
+            application/json:
+              example:
+                meta:
+                  code: 400
+                  message: NIK must be exactly 16 digits
+                data: {}
+        "409":
+          description: NIK sudah terdaftar di akun lain (NIK_ALREADY_REGISTERED)
+          content:
+            application/json:
+              example:
+                meta:
+                  code: 409
+                  message: NIK already registered to another account
+                data: {}
+        "422":
+          description: Consent belum dicentang (CONSENT_REQUIRED)
+        "429":
+          description: Rate limited — 5 akun baru per IP per jam
+
+  # ──────────────────────────────────────────────
+  #  ACCOUNTS — SAVED NIKs
+  # ──────────────────────────────────────────────
+
+  /accounts/me/saved-niks:
+    get:
+      tags: [Accounts]
+      summary: List Saved NIKs (Daftar NIK Teman)
+      operationId: listSavedNiks
+      description: |
+        NIK yang sering diajak hadir bersama, disimpan sekali dan dipakai berulang tanpa memanggil Dukcapil lagi.
+        Maksimal 5 per akun. Tidak tersedia untuk guest.
+        **Requirement**: FR-15a
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: List of saved NIKs
+          content:
+            application/json:
+              example:
+                meta:
+                  code: 200
+                  message: Success
+                data:
+                  max_entries: 5
+                  saved_niks:
+                    - id: snk_1
+                      nik_masked: "3171********22"
+                      label: Budi
+                      verified_at: "2026-10-20T08:11:00Z"
+                      status: VERIFIED
+
+    post:
+      tags: [Accounts]
+      summary: Add Saved NIK
+      operationId: addSavedNik
+      description: |
+        Menambah NIK ke daftar tersimpan. Dukcapil dipanggil di sini — baris hanya dibuat bila jawaban valid.
+        NIK lengkap tidak pernah dikembalikan, hanya bentuk ter-mask.
+        **Requirement**: FR-15a, NFR-14
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [nik, label]
+              properties:
+                nik:
+                  type: string
+                  minLength: 16
+                  maxLength: 16
+                label:
+                  type: string
+            example:
+              nik: "3171xxxxxxxxxx33"
+              label: Budi
+      responses:
+        "201":
+          description: NIK saved and verified by Dukcapil
+        "409":
+          description: |
+            - `MAX_SAVED_NIKS_REACHED` — sudah 5 entri, hapus salah satu dulu
+            - `NIK_ALREADY_SAVED` — NIK sudah ada di daftar akun ini
+        "422":
+          description: Consent belum diberikan (CONSENT_REQUIRED) atau NIK ditolak Dukcapil
+        "503":
+          description: Dukcapil tidak tersedia (DUKCAPIL_UNAVAILABLE) — tidak ada entri parsial
+
+  /accounts/me/saved-niks/{id}:
+    delete:
+      tags: [Accounts]
+      summary: Delete Saved NIK
+      operationId: deleteSavedNik
+      description: |
+        Hapus NIK dari daftar tersimpan.
+        Penghapusan tidak memengaruhi tiket yang sudah dibeli dengan NIK tersebut.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          example: snk_1
+      responses:
+        "204":
+          description: NIK deleted
+        "404":
+          description: Saved NIK not found
+
+  # ──────────────────────────────────────────────
+  #  EVENTS
+  # ──────────────────────────────────────────────
+
+  /events:
+    get:
+      tags: [Events]
+      summary: List Events
+      operationId: listEvents
+      description: |
+        Menampilkan daftar event. UI: Home Page "Daftar Event".
+
+        Response di-cache CDN **30 detik**. `queue_depth` adalah perkiraan; penegak sebenarnya
+        adalah pemeriksaan atomik saat `POST /queue/join`.
+
+        Label `display.label_key` adalah kunci i18n — teks diterjemahkan di frontend (FR-32).
+        **Requirement**: FR-01, FR-02, FR-03
+      parameters:
+        - name: filter
+          in: query
+          schema:
+            type: string
+            enum: [all, available, upcoming]
+          description: "`available` = status != SOLD_OUT; `upcoming` = queue_state == NOT_OPEN"
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 10
+            maximum: 50
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        "200":
+          description: List of events with display directives
+          content:
+            application/json:
+              example:
+                meta:
+                  code: 200
+                  message: Success
+                  pagination:
+                    totalData: 2
+                    totalPage: 1
+                    limit: 10
+                    offset: 0
+                data:
+                  - id: evt_konser_a
+                    name: Konser A — Jakarta
+                    category: LIVE MUSIC
+                    location:
+                      venue: GBK
+                      city: Jakarta
+                    date: "2026-12-25"
+                    image_url: https://cdn.rusuh.id/events/konser-a.jpg
+                    status: SELLING_OUT_FAST
+                    queue_state: FULL
+                    queue_depth: 300000
+                    queue_capacity: 300000
+                    sale_starts_at: "2026-11-10T02:00:00Z"
+                    display:
+                      enabled: false
+                      action: NONE
+                      label_key: queue_full
+                      badge_key: null
+                    min_price: 500000
+                    max_price: 1500000
+                  - id: evt_konser_b
+                    name: Konser B — Bandung
+                    category: LIVE MUSIC
+                    location:
+                      venue: GOR Saparua
+                      city: Bandung
+                    date: "2027-01-10"
+                    image_url: https://cdn.rusuh.id/events/konser-b.jpg
+                    status: SOLD_OUT
+                    queue_state: OPEN
+                    queue_depth: 0
+                    queue_capacity: 300000
+                    sale_starts_at: "2026-10-20T02:00:00Z"
+                    display:
+                      enabled: false
+                      action: NONE
+                      label_key: sold_out
+                      badge_key: null
+                    min_price: null
+                    max_price: null
+
+  /events/{event_id}:
+    get:
+      tags: [Events]
+      summary: Get Event Detail
+      operationId: getEvent
+      description: |
+        Detail event beserta kategori tiket dan ketersediaan stok. UI: Event Detail sidebar.
+        **Requirement**: FR-11, FR-12
+      parameters:
+        - name: event_id
+          in: path
+          required: true
+          schema:
+            type: string
+          example: evt_konser_a
+      responses:
+        "200":
+          description: Event detail with ticket categories
+          content:
+            application/json:
+              example:
+                meta:
+                  code: 200
+                  message: Success
+                data:
+                  id: evt_konser_a
+                  name: Konser A — Jakarta
+                  category: LIVE MUSIC
+                  location:
+                    venue: GBK
+                    city: Jakarta
+                  date: "2026-12-25"
+                  time: "19:00"
+                  image_url: https://cdn.rusuh.id/events/konser-a.jpg
+                  description: Energi panggung. Cerita yang kamu bawa pulang.
+                  status: AVAILABLE
+                  queue_state: OPEN
+                  queue_depth: 1248
+                  queue_capacity: 300000
+                  sale_starts_at: "2026-11-10T02:00:00Z"
+                  display:
+                    enabled: true
+                    action: JOIN_QUEUE
+                    label_key: join_queue
+                    badge_key: null
+                  ticket_categories:
+                    - id: cat_vip
+                      name: VIP
+                      description: Lebih dekat dengan energi panggung.
+                      price: 1500000
+                      available: 12
+                      status: AVAILABLE
+                    - id: cat_festival
+                      name: Festival
+                      description: Nikmati konser dari area festival.
+                      price: 850000
+                      available: 240
+                      status: AVAILABLE
+                    - id: cat_tribune
+                      name: Tribune
+                      description: Area tribun dengan panorama panggung.
+                      price: 500000
+                      available: 0
+                      status: SOLD_OUT
+        "404":
+          description: Event not found
+
+  # ──────────────────────────────────────────────
+  #  QUEUE
+  # ──────────────────────────────────────────────
+
+  /events/{event_id}/queue/join:
+    post:
+      tags: [Queue]
+      summary: Join Queue
+      operationId: joinQueue
+      description: |
+        User bergabung ke antrian. Dipanggil saat klik "Beli Tiket" / "Masuk Antrian".
+
+        **FR-05 — Bypass antrian kosong**: bila `queue_depth == 0` dan stok tersedia,
+        Lua memberi grant pada permintaan yang sama. Respons berisi `granted: true` dan
+        `access_token` — klien langsung ke Detail Ticket tanpa membuka SSE stream.
+
+        **Re-entrancy**: user yang sudah di antrian mendapat posisi lama kembali.
+
+        Server meng-set cookie:
+        ```
+        Set-Cookie: queue_token=qt_xyz789; HttpOnly; Secure; SameSite=Strict; Max-Age=7200
+        ```
+        **Requirement**: FR-04, FR-05, FR-10, NFR-05
+      parameters:
+        - name: event_id
+          in: path
+          required: true
+          schema:
+            type: string
+          example: evt_konser_a
+      responses:
+        "200":
+          description: Joined queue / rejoined existing position
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+              description: queue_token HttpOnly cookie
+          content:
+            application/json:
+              examples:
+                joined:
+                  summary: New queue position
+                  value:
+                    meta:
+                      code: 200
+                      message: Successfully joined queue
+                    data:
+                      ticket_no: 32748
+                      now_serving: 31500
+                      position: 1248
+                      estimated_wait_minutes: 4
+                      sse_url: /queue/stream
+                      event:
+                        id: evt_konser_a
+                        name: Konser A — Jakarta
+                rejoined:
+                  summary: Rejoined existing position
+                  value:
+                    meta:
+                      code: 200
+                      message: Rejoined existing queue position
+                    data:
+                      ticket_no: 32748
+                      now_serving: 31520
+                      position: 1228
+                      estimated_wait_minutes: 4
+                      sse_url: /queue/stream
+                      rejoined: true
+                bypass:
+                  summary: Queue empty — granted immediately (FR-05)
+                  value:
+                    meta:
+                      code: 200
+                      message: No queue — access granted
+                    data:
+                      granted: true
+                      access_token: at_abc123
+                      booking_expires_at: "2026-11-10T02:05:00Z"
+                      server_time: "2026-11-10T02:00:00Z"
+        "503":
+          description: Queue full (QUEUE_FULL)
+          content:
+            application/json:
+              example:
+                meta:
+                  code: 503
+                  message: Antrian sedang penuh, silakan coba beberapa saat lagi
+                data:
+                  queue_state: FULL
+                  queue_capacity: 300000
+
+  /events/{event_id}/queue/stream:
+    get:
+      tags: [Queue]
+      summary: Queue Status Stream (SSE)
+      operationId: queueStream
+      description: |
+        **Server-Sent Events** stream untuk update posisi real-time.
+        Klien connect setelah berhasil join queue.
+
+        > ⚠️ Endpoint ini dilayani oleh ALB (`events.rusuhtiket.com`), bukan API Gateway.
+
+        **Autentikasi**: Cookie `queue_token` (web) | `Authorization: Bearer` header (mobile).
+        Token TIDAK pernah dikirim via query string (akan tercatat di access log).
+
+        **Event types yang dikirim server**:
+
+        | Event | Kapan | Payload |
+        |---|---|---|
+        | *(unnamed, default)* | Tiap `nowServing` berubah, `paused` berubah, atau 10 detik (heartbeat) | `{nowServing, state, ratePerMin, paused, serverTime}` |
+        | `grant` | Giliran customer tiba (slot sudah diamankan) | `{}` — klien memanggil `GET /queue/me` |
+        | `status` | Koneksi Redis bermasalah | `{stale: bool}` |
+        | `sold-out` | Tiket habis saat menunggu | `{message}` — klien **WAJIB** `es.close()` |
+        | `reconnect` | Task sedang shutdown | Retry jitter 1–15 detik |
+        | `: keepalive` | Setiap 15 detik | Komentar SSE (tidak memicu handler) |
+
+        **Snapshot awal** dikirim segera saat koneksi terbuka — posisi utuh tanpa menunggu tick berikutnya (FR-10).
+
+        Klien menghitung posisi: `position = ticket_no − nowServing`.
+        Saat `paused = true` tampilkan banner; jangan tampilkan error — antrian tidak hilang.
+
+        **HTTP 410 Gone** bila event sudah sold out — `EventSource` berhenti permanen.
+        **Requirement**: FR-07, FR-08, FR-09, FR-10, BR-10, NFR-06
+      parameters:
+        - name: event_id
+          in: path
+          required: true
+          schema:
+            type: string
+          example: evt_konser_a
+        - name: Authorization
+          in: header
+          description: "Bearer {queue_token} — untuk mobile. Web pakai cookie."
+          schema:
+            type: string
+      security:
+        - QueueTokenCookie: []
+        - BearerAuth: []
+      responses:
+        "200":
+          description: SSE stream opened successfully
+          content:
+            text/event-stream:
+              schema:
+                type: string
+              examples:
+                initial_snapshot:
+                  summary: Snapshot awal (dikirim segera saat connect)
+                  value: |
+                    id: 31600
+                    data: {"nowServing":31600,"state":"OPEN","ratePerMin":318,"paused":false,"serverTime":"2026-10-24T13:10:00.412Z"}
+
+                position_update:
+                  summary: Update posisi (default event)
+                  value: |
+                    data: {"nowServing":31604,"state":"OPEN","ratePerMin":318,"paused":false,"serverTime":"2026-10-24T13:10:01.004Z"}
+
+                grant:
+                  summary: Giliran tiba — klien panggil GET /queue/me
+                  value: |
+                    event: grant
+                    data: {}
+
+                sold_out:
+                  summary: Tiket habis — klien WAJIB es.close()
+                  value: |
+                    event: sold-out
+                    data: {"message":"Tiket sudah habis"}
+
+                status_stale:
+                  summary: Redis connection lost
+                  value: |
+                    event: status
+                    data: {"stale":true}
+
+                keepalive:
+                  summary: Keepalive comment (15 detik)
+                  value: |
+                    : keepalive
+
+        "401":
+          description: Queue token invalid atau tidak ada
+        "409":
+          description: Sale belum dibuka (state SCHEDULED)
+        "410":
+          description: Event sold out — EventSource berhenti permanen, tidak reconnect
+
+  /events/{event_id}/queue/me:
+    get:
+      tags: [Queue]
+      summary: Get Queue State (Re-entrancy)
+      operationId: getQueueMe
+      description: |
+        Satu-satunya endpoint yang dipanggil klien saat kembali — setelah refresh, ganti tab,
+        atau kembali dari aplikasi bank. Mengembalikan token yang sama selama TTL belum habis.
+
+        Juga dipanggil setelah menerima event `grant` dari SSE untuk mengambil `access_token`.
+
+        `state` yang dikembalikan:
+
+        | State | Halaman tujuan |
+        |---|---|
+        | `QUEUED` | Waiting Room (lanjutkan SSE) |
+        | `GRANTED` | Detail Ticket (countdown mulai) |
+        | `SELECTING` | Detail Ticket (countdown dilanjutkan) |
+        | `AWAITING_PAYMENT` | Payment Page (countdown dilanjutkan) |
+        | `CONFIRMED` | Halaman tiket |
+        | `EXPIRED` | Layar expired |
+
+        **Requirement**: FR-08, FR-10, BR-09, NFR-02, NFR-07
+      parameters:
+        - name: event_id
+          in: path
+          required: true
+          schema:
+            type: string
+          example: evt_konser_a
+      security:
+        - QueueTokenCookie: []
+      responses:
+        "200":
+          description: Current queue/booking state for re-entrancy
+          content:
+            application/json:
+              examples:
+                queued:
+                  summary: Masih mengantre
+                  value:
+                    meta:
+                      code: 200
+                      message: Success
+                    data:
+                      state: QUEUED
+                      ticket_no: 31842
+                      now_serving: 31600
+                granted:
+                  summary: Giliran tiba — access_token tersedia
+                  value:
+                    meta:
+                      code: 200
+                      message: Success
+                    data:
+                      state: GRANTED
+                      access_token: at_abc123
+                      booking_expires_at: "2026-10-23T13:15:00Z"
+                      server_time: "2026-10-23T13:10:00Z"
+                selecting:
+                  summary: Sedang memilih tiket
+                  value:
+                    meta:
+                      code: 200
+                      message: Success
+                    data:
+                      state: SELECTING
+                      access_token: at_abc123
+                      booking_id: RB-00912
+                      booking_expires_at: "2026-10-23T13:15:00Z"
+                      server_time: "2026-10-23T13:10:00Z"
+                awaiting_payment:
+                  summary: Menunggu pembayaran
+                  value:
+                    meta:
+                      code: 200
+                      message: Success
+                    data:
+                      state: AWAITING_PAYMENT
+                      access_token: at_abc123
+                      booking_id: RB-00912
+                      payment_expires_at: "2026-10-23T13:25:00Z"
+                      payment_ref: pay_123
+                      server_time: "2026-10-23T13:10:00Z"
+                confirmed:
+                  summary: Booking terkonfirmasi
+                  value:
+                    meta:
+                      code: 200
+                      message: Success
+                    data:
+                      state: CONFIRMED
+                      booking_id: RB-00912
+                expired:
+                  summary: Token kadaluarsa
+                  value:
+                    meta:
+                      code: 200
+                      message: Success
+                    data:
+                      state: EXPIRED
+        "401":
+          description: Queue token tidak valid atau tidak ada
+
+  /events/{event_id}/queue/serving:
+    get:
+      tags: [Queue]
+      summary: Get Now Serving (Polling Fallback)
+      operationId: getNowServing
+      description: |
+        Fallback polling — dipakai untuk hidrasi awal, jaringan yang memblokir `text/event-stream`,
+        atau degraded mode saat tier SSE tidak sehat. **Bukan transport utama.**
+
+        `poll_after_ms` ditentukan server berdasarkan posisi:
+        - `>1000` → 10.000 ms
+        - `101–1000` → 5.000 ms
+        - `11–100` → 2.000 ms
+        - `1–10` → 1.000 ms
+
+        Klien tidak menanam interval sendiri.
+        **Requirement**: FR-07 (fallback), NFR-08
+      parameters:
+        - name: event_id
+          in: path
+          required: true
+          schema:
+            type: string
+          example: evt_konser_a
+      responses:
+        "200":
+          description: Current now_serving with server-suggested poll interval
+          content:
+            application/json:
+              example:
+                meta:
+                  code: 200
+                  message: Success
+                data:
+                  now_serving: 31600
+                  rate_per_min: 318
+                  paused: false
+                  server_time: "2026-10-24T13:10:00.412Z"
+                  poll_after_ms: 5000
+
+  # ──────────────────────────────────────────────
+  #  BOOKING — TICKET SELECTION
+  # ──────────────────────────────────────────────
+
+  /events/{event_id}/tickets:
+    get:
+      tags: [Booking]
+      summary: Get Ticket Selection Page
+      operationId: getTicketSelection
+      description: |
+        Menampilkan kategori tiket dengan stok terkini. UI: "Pilih tempatmu di konser."
+        Dipanggil setelah klien mendapat `access_token` dari `GET /queue/me`.
+        **Requirement**: FR-11, FR-12, FR-13, FR-17, BR-01, BR-02
+      parameters:
+        - name: event_id
+          in: path
+          required: true
+          schema:
+            type: string
+          example: evt_konser_a
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Ticket categories with availability and session TTL
+          content:
+            application/json:
+              example:
+                meta:
+                  code: 200
+                  message: Success
+                data:
+                  event:
+                    id: evt_konser_a
+                    name: Konser A — Jakarta
+                    date: "2026-12-25"
+                    venue: GBK, Jakarta
+                    image_url: https://cdn.rusuh.id/events/konser-a.jpg
+                  session:
+                    expires_at: "2026-10-23T13:15:00Z"
+                    ttl_seconds: 287
+                    server_time: "2026-10-23T13:10:13Z"
+                  categories:
+                    - id: cat_vip
+                      name: VIP
+                      description: Lebih dekat dengan energi panggung.
+                      price: 1500000
+                      available: 12
+                      max_per_order: 3
+                    - id: cat_festival
+                      name: Festival
+                      description: Nikmati konser dari area festival.
+                      price: 850000
+                      available: 240
+                      max_per_order: 3
+                    - id: cat_tribune
+                      name: Tribune
+                      description: Area tribun dengan panorama panggung.
+                      price: 500000
+                      available: 0
+                      max_per_order: 0
+                  rules:
+                    max_tickets_per_order: 3
+                    one_nik_per_ticket: true
+        "401":
+          description: Access token invalid atau expired
+
+  # ──────────────────────────────────────────────
+  #  NIK VALIDATION
+  # ──────────────────────────────────────────────
+
+  /nik/validate:
+    post:
+      tags: [NIK]
+      summary: Validate NIK
+      operationId: validateNik
+      description: |
+        Validasi NIK ke Dukcapil sebelum submit booking.
+        Dipanggil saat input NIK blur atau sebelum menekan "Lanjut ke Pembayaran".
+
+        **Optimasi**: NIK Terdaftar (milik akun) atau NIK Tersimpan tidak memanggil Dukcapil — dijawab dari bukti verifikasi tersimpan. Response menyertakan `source: "registered" | "saved" | "verified"`.
+
+        **Fail closed**: Dukcapil tidak tersedia → `DUKCAPIL_UNAVAILABLE` → pembayaran diblokir, bukan fallback.
+
+        `already_used` bersifat indikatif saja — penegak sebenarnya adalah `SET nik:used NX` pada `POST /bookings`.
+        **Requirement**: FR-15a
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [nik]
+              properties:
+                nik:
+                  type: string
+                  minLength: 16
+                  maxLength: 16
+                  description: NIK 16 digit. Hanya NIK yang dikirim ke Dukcapil — tanpa nama atau tanggal lahir.
+            example:
+              nik: "3171xxxxxxxxxx22"
+      responses:
+        "200":
+          description: Validation result — selalu 200 untuk valid maupun invalid
+          content:
+            application/json:
+              examples:
+                valid:
+                  summary: NIK valid
+                  value:
+                    meta:
+                      code: 200
+                      message: NIK is valid
+                    data:
+                      nik: "3171xxxxxxxxxx22"
+                      valid: true
+                      name: JOHN DOE
+                      status: ACTIVE
+                      source: verified
+                not_found:
+                  summary: NIK tidak ditemukan di Dukcapil
+                  value:
+                    meta:
+                      code: 200
+                      message: NIK not found
+                    data:
+                      nik: "0000000000000000"
+                      valid: false
+                      reason: NIK_NOT_FOUND
+                inactive:
+                  summary: NIK tidak aktif
+                  value:
+                    meta:
+                      code: 200
+                      message: NIK is not valid
+                    data:
+                      valid: false
+                      reason: NIK_INACTIVE
+                already_used:
+                  summary: NIK sudah dipakai untuk event ini (indikatif)
+                  value:
+                    meta:
+                      code: 200
+                      message: NIK already used for this event
+                    data:
+                      valid: true
+                      already_used: true
+                      reason: NIK_ALREADY_USED
+                dukcapil_down:
+                  summary: Dukcapil tidak tersedia — pembayaran diblokir
+                  value:
+                    meta:
+                      code: 200
+                      message: NIK validation service unavailable
+                    data:
+                      valid: false
+                      reason: DUKCAPIL_UNAVAILABLE
+        "400":
+          description: Format NIK tidak valid
+          content:
+            application/json:
+              example:
+                meta:
+                  code: 400
+                  message: NIK must be exactly 16 digits
+                data: {}
+        "429":
+          description: Rate limited
+          content:
+            application/json:
+              example:
+                meta:
+                  code: 429
+                  message: Please wait before validating another NIK
+                data:
+                  retry_after: 5
+
+  # ──────────────────────────────────────────────
+  #  BOOKING
+  # ──────────────────────────────────────────────
+
+  /bookings:
+    post:
+      tags: [Booking]
+      summary: Create Booking
+      operationId: createBooking
+      description: |
+        Submit pemilihan tiket. UI: tombol "Lanjut ke Pembayaran".
+
+        **Memulai TTL pembayaran**: `payment_expires_at = held_at + 10 menit`. Setiap customer mendapat 10 menit penuh.
+
+        **Hold all-or-nothing**: stok seluruh kategori diperiksa sebelum satu pun dikurangi, dalam satu skrip Lua atomik.
+
+        **Multi-kategori diizinkan**: misalnya 1 VIP + 1 Festival + 1 Tribune. Batas 3 tiket per transaksi secara total, bukan per kategori.
+
+        **1 NIK = 1 kursi** (BR-02): `holder_email` adalah alamat tujuan e-tiket kursi itu (FR-26).
+
+        **Idempoten**: submit ulang mengembalikan booking yang ada — tidak ada hold kedua.
+        **Requirement**: FR-13, FR-14, FR-15, FR-16, NFR-04, BR-01, BR-02
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [event_id, tickets, contact_email, terms_version]
+              properties:
+                event_id:
+                  type: string
+                tickets:
+                  type: array
+                  minItems: 1
+                  maxItems: 3
+                  items:
+                    type: object
+                    required: [category_id, nik, holder_email]
+                    properties:
+                      category_id:
+                        type: string
+                      nik:
+                        type: string
+                        minLength: 16
+                        maxLength: 16
+                      holder_email:
+                        type: string
+                        format: email
+                        description: Alamat tujuan e-tiket untuk pemegang NIK ini
+                contact_email:
+                  type: string
+                  format: email
+                  description: Email kontak pembeli utama
+                terms_version:
+                  type: string
+                  description: Versi T&C yang ditampilkan dan disetujui
+            example:
+              event_id: evt_konser_a
+              tickets:
+                - category_id: cat_vip
+                  nik: "3171xxxxxxxxxx22"
+                  holder_email: buyer@example.com
+                - category_id: cat_festival
+                  nik: "3171xxxxxxxxxx33"
+                  holder_email: friend@example.com
+              contact_email: buyer@example.com
+              terms_version: "2026-10-01"
+      responses:
+        "201":
+          description: Booking created, stock held, payment TTL started
+          content:
+            application/json:
+              example:
+                meta:
+                  code: 201
+                  message: Booking created successfully
+                data:
+                  booking_id: RB-00912
+                  status: PENDING_PAYMENT
+                  event:
+                    id: evt_konser_a
+                    name: Konser A — Jakarta
+                    date: "2026-12-25"
+                    venue: GBK, Jakarta
+                  tickets:
+                    - category: VIP
+                      price: 1500000
+                      nik_masked: "3171********xx22"
+                      holder_name: JOHN DOE
+                    - category: Festival
+                      price: 850000
+                      nik_masked: "3171********xx33"
+                      holder_name: JANE DOE
+                  summary:
+                    subtotal: 2350000
+                    service_fee: 0
+                    total: 2350000
+                  payment_ttl:
+                    expires_at: "2026-10-23T13:25:00Z"
+                    ttl_seconds: 600
+                    server_time: "2026-10-23T13:15:00Z"
+                  redirect_url: /bookings/RB-00912/payment
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              examples:
+                max_tickets:
+                  summary: Melebihi batas 3 tiket
+                  value:
+                    meta:
+                      code: 400
+                      message: Maximum 3 tickets per order
+                    data: {}
+                nik_invalid:
+                  summary: NIK tidak valid di Dukcapil
+                  value:
+                    meta:
+                      code: 400
+                      message: NIK 3171********xx22 tidak terdaftar di Dukcapil
+                    data: {}
+        "409":
+          description: NIK sudah dipakai atau stok tidak cukup
+          content:
+            application/json:
+              examples:
+                nik_taken:
+                  summary: NIK sudah digunakan untuk event ini
+                  value:
+                    meta:
+                      code: 409
+                      message: NIK 3171xxxxxxxxxx22 sudah digunakan untuk event ini
+                    data: {}
+                no_stock:
+                  summary: Stok tidak mencukupi
+                  value:
+                    meta:
+                      code: 409
+                      message: Stok VIP tidak mencukupi
+                    data:
+                      available: 1
+                      requested: 2
+
+  /bookings/{booking_id}:
+    get:
+      tags: [Booking]
+      summary: Get Booking Detail
+      operationId: getBooking
+      description: |
+        Detail booking untuk Payment Page dan Success Page.
+        Payment page meng-poll endpoint ini setiap 2 detik.
+        **Requirement**: FR-21, FR-22
+      parameters:
+        - name: booking_id
+          in: path
+          required: true
+          schema:
+            type: string
+          example: RB-00912
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Booking detail
+          content:
+            application/json:
+              examples:
+                pending_payment:
+                  summary: Menunggu pembayaran
+                  value:
+                    meta:
+                      code: 200
+                      message: Success
+                    data:
+                      booking_id: RB-00912
+                      status: PENDING_PAYMENT
+                      event:
+                        id: evt_konser_a
+                        name: Konser A — Jakarta
+                        date: "2026-12-25"
+                        venue: GBK, Jakarta
+                        image_url: https://cdn.rusuh.id/events/konser-a.jpg
+                      tickets:
+                        - category: VIP
+                          price: 1500000
+                          nik_masked: "3171********xx22"
+                      summary:
+                        quantity: 1
+                        price_per_ticket: 1500000
+                        total: 1500000
+                      payment_ttl:
+                        expires_at: "2026-10-23T13:25:00Z"
+                        ttl_seconds: 342
+                        server_time: "2026-10-23T13:19:18Z"
+                paid:
+                  summary: Sudah dibayar
+                  value:
+                    meta:
+                      code: 200
+                      message: Success
+                    data:
+                      booking_id: RB-00912
+                      status: PAID
+                      event:
+                        id: evt_konser_a
+                        name: Konser A — Jakarta
+                        date: "2026-12-25"
+                        venue: GBK, Jakarta
+                        image_url: https://cdn.rusuh.id/events/konser-a.jpg
+                      tickets:
+                        - ticket_id: TKT-001
+                          category: VIP
+                          price: 1500000
+                          nik_masked: "3171********xx22"
+                          eticket_url: /tickets/TKT-001/eticket
+                      summary:
+                        quantity: 1
+                        total: 1500000
+                      paid_at: "2026-10-23T13:20:00Z"
+                      payment_method: Virtual Account
+        "401":
+          description: Unauthorized
+        "404":
+          description: Booking tidak ditemukan atau bukan milik token ini
+
+  /bookings/{booking_id}/tickets:
+    get:
+      tags: [Booking]
+      summary: Get Booking Tickets
+      operationId: getBookingTickets
+      description: |
+        List tiket dalam sebuah booking setelah konfirmasi pembayaran.
+        **Requirement**: FR-27
+      parameters:
+        - name: booking_id
+          in: path
+          required: true
+          schema:
+            type: string
+          example: RB-00912
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: List of tickets in booking
+          content:
+            application/json:
+              example:
+                meta:
+                  code: 200
+                  message: Success
+                data:
+                  - ticket_id: TKT-001
+                    category: VIP
+                    price: 1500000
+                    nik_masked: "3171********xx22"
+                    eticket_url: /tickets/TKT-001/eticket
+                  - ticket_id: TKT-002
+                    category: Festival
+                    price: 850000
+                    nik_masked: "3171********xx33"
+                    eticket_url: /tickets/TKT-002/eticket
+
+  # ──────────────────────────────────────────────
+  #  PAYMENT
+  # ──────────────────────────────────────────────
+
+  /payments/{booking_id}/methods:
+    get:
+      tags: [Payment]
+      summary: Get Payment Methods
+      operationId: getPaymentMethods
+      description: |
+        Metode pembayaran yang tersedia. UI: Payment Method selection.
+
+        **Dua metode di POC**: `bank_transfer` (BCA, BNI, BRI, CIMB) dan `gopay`.
+        Kartu kredit dan OTC dikecualikan karena tidak dapat menghormati TTL 10 menit.
+
+        `enabled: false` saat circuit breaker payment gateway terbuka — UI menonaktifkan pilihan.
+        **Requirement**: FR-20
+      parameters:
+        - name: booking_id
+          in: path
+          required: true
+          schema:
+            type: string
+          example: RB-00912
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Available payment methods
+          content:
+            application/json:
+              example:
+                meta:
+                  code: 200
+                  message: Success
+                data:
+                  methods:
+                    - id: bank_transfer
+                      name: Transfer Bank / Virtual Account
+                      description: Verifikasi otomatis, tanpa unggah bukti.
+                      icon_url: https://cdn.rusuh.id/icons/bank.svg
+                      enabled: true
+                      banks:
+                        - code: bca
+                          name: BCA
+                          icon_url: https://cdn.rusuh.id/icons/bca.svg
+                        - code: bni
+                          name: BNI
+                          icon_url: https://cdn.rusuh.id/icons/bni.svg
+                        - code: bri
+                          name: BRI
+                          icon_url: https://cdn.rusuh.id/icons/bri.svg
+                        - code: cimb
+                          name: CIMB Niaga
+                          icon_url: https://cdn.rusuh.id/icons/cimb.svg
+                    - id: gopay
+                      name: E-Wallet (GoPay / QRIS)
+                      description: Scan QR atau buka aplikasi GoPay.
+                      icon_url: https://cdn.rusuh.id/icons/ewallet.svg
+                      enabled: true
+
+  /payments/{booking_id}:
+    post:
+      tags: [Payment]
+      summary: Initiate Payment
+      operationId: initiatePayment
+      description: |
+        Memulai pembayaran dengan metode terpilih. UI: tombol "Bayar Sekarang".
+
+        **Idempoten**: klik ganda menghasilkan satu charge dan dua respons identik. Tidak ada charge kedua.
+
+        **Custom expiry** dikirim ke Midtrans agar jendela Midtrans dan sistem kita berakhir pada detik yang sama (`custom_expiry.order_time = held_at`).
+
+        **Setelah penolakan (deny)**: panggil endpoint ini langsung dengan metode baru — jangan panggil `/retry`. Jalur `deny` sudah menaikkan `payment_attempts` sendiri.
+
+        Desktop: gunakan `qr_url` untuk GoPay. Mobile: gunakan `deeplink_url`.
+        **Requirement**: FR-20, FR-21, FR-24, FR-25
+      parameters:
+        - name: booking_id
+          in: path
+          required: true
+          schema:
+            type: string
+          example: RB-00912
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [method]
+              properties:
+                method:
+                  type: string
+                  enum: [bank_transfer, gopay]
+                bank:
+                  type: string
+                  enum: [bca, bni, bri, cimb]
+                  description: Wajib bila method = bank_transfer
+            examples:
+              bank_transfer:
+                summary: Bank Transfer — Virtual Account
+                value:
+                  method: bank_transfer
+                  bank: bca
+              gopay:
+                summary: GoPay / QRIS
+                value:
+                  method: gopay
+      responses:
+        "200":
+          description: Payment initiated (or already initiated — idempotent)
+          content:
+            application/json:
+              examples:
+                bank_transfer:
+                  summary: VA BCA
+                  value:
+                    meta:
+                      code: 200
+                      message: Payment initiated
+                    data:
+                      payment_id: RB-00912:1
+                      method: bank_transfer
+                      status: PENDING
+                      instructions:
+                        bank: bca
+                        va_number: "8801234567890"
+                      ttl:
+                        expires_at: "2026-10-25T10:25:00Z"
+                        ttl_seconds: 540
+                        server_time: "2026-10-25T10:16:00Z"
+                gopay:
+                  summary: GoPay QR + deeplink
+                  value:
+                    meta:
+                      code: 200
+                      message: Payment initiated
+                    data:
+                      payment_id: RB-00912:1
+                      method: gopay
+                      status: PENDING
+                      instructions:
+                        qr_url: https://api.midtrans.com/v2/gopay/.../qr-code
+                        deeplink_url: https://gojek.link/...
+                      ttl:
+                        expires_at: "2026-10-25T10:25:00Z"
+                        ttl_seconds: 540
+                        server_time: "2026-10-25T10:16:00Z"
+        "409":
+          description: Status booking tidak sesuai (bukan HELD atau sudah terminal)
+        "503":
+          description: Admission paused — circuit breaker payment gateway terbuka (ADMISSION_PAUSED)
+
+  /payments/{booking_id}/retry:
+    post:
+      tags: [Payment]
+      summary: Cancel & Switch Payment Method
+      operationId: retryPayment
+      description: |
+        Dipanggil **hanya** ketika pembayaran sebelumnya masih `pending` dan customer ingin berganti metode.
+
+        **JANGAN panggil setelah pembayaran ditolak (deny)** — cukup panggil `POST /payments/{booking_id}` langsung dengan metode baru.
+
+        **JANGAN panggil** saat customer masih memilih di UI sebelum menekan "Bayar Sekarang" — belum ada transaksi Midtrans.
+
+        TTL tidak di-reset: `payment_expires_at` tetap dihitung dari `held_at`.
+        Setelah endpoint ini sukses, klien memanggil `POST /payments/{booking_id}` dengan metode baru.
+        **Requirement**: FR-20, NFR-02
+      parameters:
+        - name: booking_id
+          in: path
+          required: true
+          schema:
+            type: string
+          example: RB-00912
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Previous payment cancelled, booking returned to HELD
+          content:
+            application/json:
+              example:
+                meta:
+                  code: 200
+                  message: Previous payment cancelled
+                data:
+                  booking_id: RB-00912
+                  status: HELD
+                  attempt: 2
+                  cancelled_order_id: RB-00912:1
+                  payment_expires_at: "2026-10-25T10:25:00Z"
+                  server_time: "2026-10-25T10:23:10Z"
+        "404":
+          description: Booking tidak ditemukan atau bukan milik token ini (404 juga untuk 403 — jangan bocorkan eksistensi)
+        "409":
+          description: |
+            Berbagai kondisi konflik:
+            - `PAYMENT_ALREADY_SETTLED` — pembayaran sudah lunas, webhook akan mengonfirmasi
+            - Status mismatch — booking tidak dalam `AWAITING_PAYMENT`
+            - `PAYMENT_WINDOW_CLOSED` — TTL sudah lewat atau sisa waktu di bawah minimum
+        "429":
+          description: MAX_ATTEMPTS_EXCEEDED
+        "503":
+          description: Midtrans tidak tersedia — `payment_attempts` TIDAK dinaikkan, VA lama masih berlaku
+
+  /payments/{booking_id}/status:
+    get:
+      tags: [Payment]
+      summary: Get Payment Status
+      operationId: getPaymentStatus
+      description: |
+        Polling status pembayaran. UI: Payment Page polling (setiap 2 detik).
+
+        **Satu-satunya sinyal bahwa pembayaran gagal** untuk customer. Tanpa endpoint ini customer menatap countdown tanpa tahu kartunya ditolak.
+
+        Saat menerima `FAILED`: kembali ke daftar metode, **tanpa memanggil `/retry`** — jalur deny sudah menaikkan `payment_attempts`.
+
+        `PENDING_CANCELLATION` ditampilkan sebagai `PENDING` — "memverifikasi pembayaran…", bukan layar expired.
+        **Requirement**: FR-22, FR-23
+      parameters:
+        - name: booking_id
+          in: path
+          required: true
+          schema:
+            type: string
+          example: RB-00912
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Payment status — selalu 200 terlepas dari hasil pembayaran
+          content:
+            application/json:
+              examples:
+                pending:
+                  summary: Menunggu pembayaran
+                  value:
+                    meta:
+                      code: 200
+                      message: Payment pending
+                    data:
+                      status: PENDING
+                      server_time: "2026-10-23T13:22:00Z"
+                      ttl_seconds: 180
+                paid:
+                  summary: Pembayaran sukses
+                  value:
+                    meta:
+                      code: 200
+                      message: Payment successful
+                    data:
+                      status: PAID
+                      paid_at: "2026-10-23T13:23:00Z"
+                      redirect_url: /bookings/RB-00912/success
+                expired:
+                  summary: Pembayaran kadaluarsa
+                  value:
+                    meta:
+                      code: 200
+                      message: Payment expired
+                    data:
+                      status: EXPIRED
+                      expired_at: "2026-10-23T13:25:00Z"
+                failed:
+                  summary: Pembayaran gagal — stok masih dipegang customer
+                  value:
+                    meta:
+                      code: 200
+                      message: Payment failed
+                    data:
+                      status: FAILED
+                      reason: Kartu ditolak penerbit
+                      can_retry: true
+                      attempt: 2
+                      payment_expires_at: "2026-10-25T10:25:00Z"
+                      server_time: "2026-10-25T10:19:40Z"
+
+  /payments/webhook:
+    post:
+      tags: [Payment]
+      summary: Payment Gateway Webhook
+      operationId: paymentWebhook
+      description: |
+        Callback dari payment gateway (Midtrans). **Endpoint internal — tidak dipanggil klien.**
+
+        Dilindungi oleh **resource policy API Gateway** (allowlist IP gateway) + verifikasi HMAC.
+
+        **Verifikasi signature**: `SHA512(order_id + status_code + gross_amount + ServerKey)`
+        Tidak cocok → abaikan notifikasi, tidak ada perubahan status.
+
+        **Idempoten**: `gateway_event_id` disimpan dengan constraint UNIQUE — pengiriman ulang menjawab 200 tanpa diproses ulang.
+
+        **Selalu menjawab 200** — termasuk pada duplikat.
+
+        | `transaction_status` | `fraud_status` | Transisi |
+        |---|---|---|
+        | `settlement` | `accept` | → `CONFIRMED`, terbitkan tiket, kirim e-tiket |
+        | `capture` | **`accept`** | → `CONFIRMED` |
+        | `capture` | bukan `accept` | tetap `AWAITING_PAYMENT` — belum lunas |
+        | `deny`/`cancel`/`failure` | — | → `HELD`, `payment_attempts` naik |
+        | `expire` | — | → `EXPIRED`, lepas stok |
+        | `pending` | — | tidak ada perubahan |
+
+        `payment_type` webhook bisa berbeda dari yang dikirim (QRIS vs GoPay) — jangan dicocokkan.
+        **Requirement**: FR-25, FR-22, FR-23, FR-26, NFR-07
+      parameters:
+        - name: X-Callback-Signature
+          in: header
+          required: true
+          schema:
+            type: string
+          description: "HMAC SHA512 signature dari Midtrans"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            example:
+              event_id: evt_9f2a1c7b
+              transaction_id: pay_123
+              external_id: RB-00912
+              status: PAID
+              paid_amount: 1500000
+              paid_at: "2026-10-24T13:23:00Z"
+              payment_method: va
+      responses:
+        "200":
+          description: Callback processed (selalu 200, termasuk duplikat)
+          content:
+            application/json:
+              example:
+                meta:
+                  code: 200
+                  message: Callback processed
+                data: {}
+
+  # ──────────────────────────────────────────────
+  #  USER — MY TICKETS
+  # ──────────────────────────────────────────────
+
+  /users/me/tickets:
+    get:
+      tags: [User]
+      summary: Get My Tickets
+      operationId: getMyTickets
+      description: |
+        List tiket milik user yang sedang login. UI: "Tiket saya" menu.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [upcoming, past, all]
+          description: Filter berdasarkan status event
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 10
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        "200":
+          description: List of user's tickets
+          content:
+            application/json:
+              example:
+                meta:
+                  code: 200
+                  message: Success
+                  pagination:
+                    totalData: 1
+                    totalPage: 1
+                    limit: 10
+                    offset: 0
+                data:
+                  - ticket_id: TKT-001
+                    booking_id: RB-00912
+                    event:
+                      id: evt_konser_a
+                      name: Konser A — Jakarta
+                      date: "2026-12-25"
+                      venue: GBK
+                      image_url: https://cdn.rusuh.id/events/konser-a.jpg
+                    category: VIP
+                    price: 1500000
+                    status: VALID
+                    eticket_url: /tickets/TKT-001/eticket
+
+  /tickets/{ticket_id}/eticket:
+    get:
+      tags: [User]
+      summary: Get E-Ticket
+      operationId: getEticket
+      description: |
+        Download/view e-ticket dengan QR code. UI: "Lihat E-Tiket" button.
+
+        QR code berisi `qr_value` yang diverifikasi petugas venue bersama identitas pemegang.
+        **Nomor bangku tidak diimplementasikan di POC.**
+        **Requirement**: FR-27
+      parameters:
+        - name: ticket_id
+          in: path
+          required: true
+          schema:
+            type: string
+          example: TKT-001
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: E-ticket with QR code
+          content:
+            application/json:
+              example:
+                meta:
+                  code: 200
+                  message: Success
+                data:
+                  ticket_id: TKT-001
+                  event:
+                    name: Konser A — Jakarta
+                    date: "2026-12-25"
+                    time: "19:00"
+                    venue: GBK, Jakarta
+                  category: VIP
+                  holder:
+                    nik_masked: "3171********xx22"
+                  qr_code: data:image/png;base64,iVBORw0KGgo...
+                  qr_value: TKT-001|evt_konser_a|3171xxxxxxxxxx22
+                  instructions: Tunjukkan QR code dan identitas pemegang saat masuk venue.
+        "401":
+          description: Unauthorized
+        "404":
+          description: Tiket tidak ditemukan atau bukan milik token ini
+
+  # ──────────────────────────────────────────────
+  #  ADMIN
+  # ──────────────────────────────────────────────
+
+  /admin/reconciliation/disputed:
+    get:
+      tags: [Admin]
+      summary: Disputed Payment Reconciliation
+      operationId: getDisputedPayments
+      description: |
+        Booking yang menerima callback sukses **setelah** pembatalan final — pembayaran masuk setelah stok dijual ulang ke orang lain.
+
+        Endpoint operasional — terpisah dari jalur customer. Tidak memakai `access_token` antrian.
+
+        **Refund tidak dieksekusi otomatis di POC** — operator merekonsiliasi lewat dashboard Midtrans menggunakan `order_id` dan `gateway_event_id` di setiap baris.
+
+        Sebelum produksi: otomatiskan lewat `POST /v2/{order_id}/refund`.
+        **Requirement**: FR-25, NFR-09
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: event_id
+          in: query
+          required: true
+          schema:
+            type: string
+          example: evt_konser_a
+      responses:
+        "200":
+          description: List of disputed payments requiring manual reconciliation
+          content:
+            application/json:
+              example:
+                meta:
+                  code: 200
+                  message: Success
+                data:
+                  disputed:
+                    - booking_id: RB-00912
+                      order_id: RB-00912:2
+                      gateway_event_id: evt_9f2a1c7b
+                      gross_amount: 1500000
+                      payment_type: bank_transfer
+                      paid_at: "2026-10-26T10:25:48Z"
+                      cancelled_at: "2026-10-26T10:25:30Z"
+                      contact_email: buyer@example.com
+                      refund_status: PENDING_MANUAL
