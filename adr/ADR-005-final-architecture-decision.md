@@ -40,7 +40,7 @@ seluruh FR, NFR dan BR dalam `requirements.md` v1.0; pemetaan lengkapnya ada di 
 | Sumber kebenaran deadline | **Aurora** (transaksional); ZSET hanya penjadwal |
 | Anchor TTL | **Serial**: booking = `granted_at` +5 menit; pembayaran = `held_at` +10 menit (BR-03, BR-05). Tidak ada grace antrian — jam booking mulai saat slot diberikan |
 | Proteksi dependensi eksternal | Rate limiter + circuit breaker terdistribusi (Redis) |
-| WAF | **Tidak dipakai di POC** — konsekuensinya dicatat di Bagian 16 |
+| WAF | **Tidak dipakai di POC** — digantikan rate limit Redis + CAPTCHA tak terlihat di `/join`; sisa celahnya di Bagian 16 |
 | Push notification front-end | **Tidak dibangun** fase ini |
 | Target kapasitas | **300.000 concurrent** (NFR-03 meminta 200.000+) |
 | Dasar pertimbangan utama | **NFR-06** — p95 < 1 detik |
@@ -92,7 +92,7 @@ dikelola lewat Bagian 11.
 
 ```
   ┌──────────────────────────────┐              ┌──────────────────────────────┐
-  │         Web Browser          │              │         Mobile App            │
+  │         Web Browser          │              │         Mobile App           │
   │  EventSource(url,{withCreds})│              │  react-native-sse + header   │
   │  Cookie HttpOnly             │              │  Token TIDAK di URL          │
   │                              │              │                              │
@@ -113,7 +113,7 @@ dikelola lewat Bagian 11.
   │     bawaan (kecuali 410)     │              │                              │
   │  Payment page: poll          │              │                              │
   │    GET /bookings/{id} 2s      │              │                             │
-  │  i18n: Accept-Language       │              │  idem                   FR-32 │
+  │  i18n: Accept-Language       │              │  idem                   FR-32│
   └──────────────┬───────────────┘              └──────────────┬───────────────┘
                  └─────────────────────────┬────────────────────┘
                ┌─────────────────────────┴────────────────────────────┐
@@ -137,9 +137,10 @@ dikelola lewat Bagian 11.
   │                                  │      │ POST /payments/{id}/retry        │
   │                                  │      │ GET  /payments/{id}/status  FR-21│
   │                                  │      │ POST /payments/webhook      FR-25│
-  │                                  │      │                                  │
-  │                                  │      │                                  │
-  │                                  │      │                                  │
+  │  CAPTCHA tak terlihat (/join):   │      │                                  │
+  │   token diterbitkan PRA-gerbang  │      │                                  │
+  │   rate limit dulu, lalu verify   │      │                                  │
+  │   provider mati → FAIL-OPEN      │      │                                  │
   │                                  │      │ /payments/webhook:               │
   │                                  │      │  RESOURCE POLICY allowlist IP    │
   │                                  │      │  gateway + verifikasi HMAC       │
@@ -149,21 +150,24 @@ dikelola lewat Bagian 11.
   ┌───────────────▼──────────────────────────────────────────────────────────┐
   │  ECS Fargate: rusuh-sse-server    300.000 koneksi · max_tasks 60         │
   │  2 vCPU / 4 GB per task · N = 300.000 ÷ kapasitas TERUKUR (Bagian 11)    │
-  │                                                                           │
-  │   connections: Map<eventId, Set<Response>> · byToken: Map<token, Response>│
-  │                                                                           │
+  │                                                                          │
+  │  connections: Map<eventId, Set<Response>> · byToken: Map<token, Response>│
+  │                                                                          │
   │   GET /events/{ev}/queue/stream                                          │
-  │     0. GET queue:{ev}:state  ∈ SCHEDULED | OPEN | SOLD_OUT               │
-  │        bila SOLD_OUT  → HTTP 410 Gone, JANGAN buka stream                │
+  │     0. GET queue:{ev}:state                                              │
+  │        ∈ SCHEDULED | OPEN | SOLD_OUT | CLOSED                            │
+  │        bila CLOSED    → HTTP 410 Gone, JANGAN buka stream                │
   │        bila SCHEDULED → HTTP 409, sale belum dibuka                      │
+  │        bila SOLD_OUT  → BUKA stream seperti biasa — stok dapat           │
+  │                         kembali dari booking yang kedaluwarsa            │
   │        ← status non-200 membuat EventSource berhenti permanen,           │
-  │          mencegah badai reconnect dari 300.000 klien setelah sold out    │
+  │          mencegah badai reconnect setelah sale benar-benar habis         │
   │     1. token dari cookie/header → HGET token:{uuid}                      │
   │     2. headers: text/event-stream · no-cache · X-Accel-Buffering: no     │
   │     3. SNAPSHOT AWAL: { nowServing, state, ratePerMin, paused,           │
   │        serverTime } + id    ← FR-10: posisi utuh segera setelah refresh  │
   │     4. `: keepalive` 15 detik · close → hapus dari KEDUA map             │
-  │                                                                           │
+  │                                                                          │
   │   HANDLER PER CHANNEL                                                    │
   │     sse-broadcast → fan-out ter-chunk; payload membawa nowServing,       │
   │                     state, ratePerMin, paused, serverTime                │
@@ -173,42 +177,63 @@ dikelola lewat Bagian 11.
   │                     reconnect menerima 410 pada langkah 0 dan berhenti.  │
   │     Redis putus   → "event: status" {"stale":true}                       │
   │     Redis kembali → GET now_serving → re-broadcast + {"stale":false}     │
-  │                                                                           │
+  │     TIDAK ada sse-broadcast > SSE_STALE_AFTER_SECONDS, sementara         │
+  │       state ∈ {OPEN, SOLD_OUT} → "event: status"                         │
+  │       {"stale":true,"reason":"no_admission_updates"}                     │
+  │       ← admission-ctl diam; Redis dan sse-server sendiri sehat,          │
+  │         jadi tidak ada jalur lain yang menyalakannya (Bagian 11)         │
+  │                                                                          │
   │   SIGTERM → retry berjitter 1–15 detik + event reconnect (Bagian 11)     │
   │             ← di sini reconnect otomatis justru DIINGINKAN               │
   └────────────────────────────────┬─────────────────────────────────────────┘
   ┌────────────────────────────────▼─────────────────────────────────────────┐
-  │  ECS Fargate: rusuh-admission-ctl   desired_count 1 · 0.5 vCPU · 500ms   │
-  │   0. paused := (breaker payment gateway == OPEN)                        │
+  │  ECS Fargate: rusuh-admission-ctl   desired_count 2 · 0.5 vCPU · 500ms   │
+  │   1 leader + 1 standby · leader lease di Redis (Bagian 11)               │
+  │  -1. SET ctl:leader {task_id} NX EX 5   (atau perpanjang milik kita)     │
+  │      BUKAN leader → lewati seluruh tick; standby diam tetapi hangat      │
+  │   0. paused := (breaker payment gateway == OPEN)                         │
   │                OR (breaker Dukcapil == OPEN)        ← BARU, Bagian 8     │
-  │      PUBLISH sse-broadcast bila nowServing berubah, ATAU paused berubah,│
-  │      ATAU 10 detik berlalu (heartbeat) ← resume otomatis                │
-  │   1. SWEEP   ZRANGEBYSCORE expiries:{ev} 0 now  → VERIFIKASI ke Aurora  │
-  │              sebelum meng-expire (Bagian 7)                             │
-  │   2. ADVANCE bila paused → LEWATI SELURUH LANGKAH INI                   │
-  │              (tanpa ini, banner pause tampil sementara slot             │
-  │               terus dibagikan — pelanggaran NFR-02)                     │
-  │              EVALSHA advance_now_serving.lua                            │
-  │              → batch INSERT bookings(status='GRANTED', granted_at=now())│
-  │                booking_expires_at = granted_at + BOOKING_TTL            │
-  │              → ZADD expiries:{ev} booking_expires_at booking_id         │
-  │              → gagal INSERT setelah retry: DECRBY slots:open,           │
-  │                SADD readmit, JANGAN publish grant (Bagian 6)            │
-  │   3. PUBLISH sse-broadcast / sse-grant / sse-sold-out                   │
-  │   4. REKONSILIASI tiap tick ke-20 (≈10 detik) — Bagian 6                │
+  │      PUBLISH sse-broadcast bila nowServing berubah, ATAU paused berubah, │
+  │      ATAU 10 detik berlalu (heartbeat) ← resume otomatis                 │
+  │      Heartbeat TIDAK bersyarat: terbit juga saat paused dan saat         │
+  │      SOLD_OUT. Diam berarti loop mati, bukan "tidak ada kabar" —         │
+  │      itu yang membuat detektor stale dapat dipercaya (Bagian 11)         │
+  │   1. SWEEP   ZRANGEBYSCORE expiries:{ev} 0 now  → VERIFIKASI ke Aurora   │
+  │              sebelum meng-expire (Bagian 7)                              │
+  │   2. ADVANCE bila paused → LEWATI SELURUH LANGKAH INI                    │
+  │              (tanpa ini, banner pause tampil sementara slot              │
+  │               terus dibagikan — pelanggaran NFR-02)                      │
+  │              EVALSHA advance_now_serving.lua                             │
+  │              → batch INSERT bookings(status='GRANTED', granted_at=now()) │
+  │                booking_expires_at = granted_at + BOOKING_TTL             │
+  │              → ZADD expiries:{ev} booking_expires_at booking_id          │
+  │              → gagal INSERT setelah retry: DECRBY slots:open,            │
+  │                SADD readmit, JANGAN publish grant (Bagian 6)             │
+  │   3. PUBLISH sse-broadcast / sse-grant / sse-sold-out                    │
+  │   4. REKONSILIASI tiap tick ke-20 (≈10 detik) — Bagian 6                 │
+  │   5. bila state=SOLD_OUT dan now > sold_out_at +                         │
+  │      SOLD_OUT_HOLD_SECONDS → SET state CLOSED,                           │
+  │      PUBLISH sse-sold-out (Bagian 6)                                     │
+  │   6. DRAIN qpersist:{ev} → queue_entries (batch, TERAKHIR,               │
+  │      beranggaran QPERSIST_DRAIN_BUDGET_MS) — Bagian 6                    │
   └────────────────────────────────┬─────────────────────────────────────────┘
    ┌───────────────────────────────▼──────────────────────────────────────────┐
    │  REDIS — FAST PATH · PUB/SUB · RATE LIMIT · BREAKER · LEASE              │
    │  QUEUE    queue:{ev}:issued · now_serving · state · slots:open:{ev}      │
    │           token:{uuid} (ticket_no, event_id, lapses, account_id?)        │
+   │             EX SALE_WINDOW_SECONDS  -- kunci yang DIANDALKAN recovery    │
+   │           acct:{ev}:{account_id} NX   -- BR-07, hanya user login         │
+   │           qpersist:{ev} (LIST) -- buffer tulis durabel; panjang = RPO    │
    │           by_ticket (ZSET score=ticket_no) · readmit:{ev}                │
    │           grant:{token} EX GRANT_TOKEN_TTL_SECONDS (1080)                │
    │  BOOKING  stock:{ev}:{cat} · nik:used:{ev}:{hmac} NX                     │
    │           nik:valid:{hmac} EX 86400   -- cache verifikasi Dukcapil       │
    │  QUEUECAP queue:{ev}:capacity · depth = issued − now_serving             │
    │           expiries:{ev} (ZSET) — PENJADWAL, bukan sumber kebenaran       │
+   │  CONTROL  ctl:leader (NX EX 5) · ctl:epoch (INCR, fencing token)         │
+   │           pause:{ev}:grace_applied NX                                    │
    │  DEPEND   rl:{service} · breaker:{service}:state/failures                │
-   │  INGRESS  rl:join:{ip} · rl:sse:{ip}        ← pengganti WAF              │
+   │  INGRESS  rl:join:{ip} · rl:sse:{ip} · captcha ← pengganti WAF           │
    │  OUTBOX   processed:{outbox_id}  LEASE 30s → "done" EX 86400             │
    │  PUB/SUB  sse-broadcast · sse-grant · sse-sold-out                       │
    │  ElastiCache cluster mode · Multi-AZ · r6g.large × 3 · working set ≈80 MB│
@@ -253,6 +278,17 @@ dikelola lewat Bagian 11.
    │           nik_hmac, qr_payload, issued_at)                        FR-27  │
    │   UNIQUE (booking_item_id)   ← cegah QR ganda saat outbox retry          │
    │   outbox(id, aggregate_id, type, payload jsonb, published_at NULL)       │
+   │                                                                          │
+   │   -- POSISI ANTRIAN DURABEL (RPO; ditulis async, Bagian 6)               │
+   │   queue_entries(event_id, queue_token, ticket_no,                        │
+   │                 account_id NULL, joined_at)                              │
+   │   PRIMARY KEY (event_id, queue_token)                                    │
+   │   UNIQUE (event_id, ticket_no)                                           │
+   │   INDEX  (event_id, account_id) WHERE account_id IS NOT NULL             │
+   │                                                                          │
+   │   event_queue_state(event_id, state, sold_out_at)                        │
+   │   -- hanya ditulis saat TRANSISI state; now_serving TIDAK disimpan       │
+   │   -- di sini, ia diturunkan saat rebuild (Bagian 6)                      │
    │   -- AKUN, NIK TERDAFTAR, DAN NIK TERSIMPAN                              │
    │   accounts(id, email, email_verified_at, verify_token,                   │
    │            nik_hmac, nik_verified_at, dukcapil_ref)         FR-31        │
@@ -303,6 +339,11 @@ dikelola lewat Bagian 11.
     SlotsOpenDrift · StockDrift · HoldCompensated · GrantInsertFailures · ExpiryRescored
     SoldOutStreamRejections (410) · JoinRateLimited · SSERateLimited
     ReadmitSetSize · SSEWriteBackpressure · OutboxLag · OutboxInlineHitRate
+    CaptchaRejected · CaptchaVerifyErrors · CaptchaFailOpenSeconds · Br07JoinRecovered
+    SoldOutResumed · SoldOutHoldSeconds · TicketsResoldAfterSoldOut
+    PauseTtlGrantedSeconds · PauseTransitions
+    CtlLeaderHandovers · CtlHeartbeatAge · StockAdjustRejected · StaleLeaderRejected
+    QPersistLag · QPersistAgeSeconds · QPersistBatchFailures
     DukcapilLatency p95 · DukcapilCircuitState · DukcapilThrottled
     NikRejectedRate · DukcapilBlockedSales · PaymentGatewayLatency p95
     PGCircuitState · PGThrottled · AdmissionPausedSeconds · WebhookLag · EmailDLQDepth
@@ -327,20 +368,142 @@ tidak ada jalur admission kedua yang bisa menyimpang dari yang utama.
 
 ## 6. Satu Jalur Admission, dan Integritas `slots:open`
 
-Saat `POST /events/{ev}/queue/join`: `HSET token:{uuid}` **dan** `ZADD queue:{ev}:by_ticket {ticket_no} {uuid}`.
+Saat `POST /events/{ev}/queue/join`, dalam urutan ini:
+
+```
+1. rate limit  rl:join:{ip}                  -- Redis lokal, murah
+2. verifikasi CAPTCHA (token dari klien)     -- panggilan eksternal
+3. BR-07, hanya bila pemanggil login:
+     SET acct:{ev}:{account_id} {uuid} NX EX SALE_WINDOW_SECONDS
+     gagal → BUKAN error. Ambil {uuid} yang sudah ada, terbitkan ulang
+             cookie untuk token itu, dan kembalikan keadaannya (200).
+4. INCR queue:{ev}:issued → ticket_no
+5. HSET token:{uuid} ; ZADD queue:{ev}:by_ticket {ticket_no} {uuid}
+6. RPUSH qpersist:{ev} <queue_token|ticket_no|account_id|joined_at>
+     -- satu RPUSH, tetap di jalur cepat Redis. Aurora TIDAK disentuh di
+     -- sini: 300.000 join dalam ~60 detik = ~5.000 insert/detik tepat pada
+     -- momen beban tertinggi, dan itu akan menjadikan Aurora SPOF baru di
+     -- satu-satunya jalur yang sengaja dibuat Redis-only. Penulisannya
+     -- di-batch oleh leader admission-ctl (Bagian 6).
+```
+
+**Urutan 1 sebelum 2 itu wajib.** Rate limit adalah panggilan Redis lokal; verifikasi CAPTCHA
+adalah round trip ke pihak ketiga. Verifikasi dulu lalu membatasi berarti membayar satu
+panggilan eksternal untuk setiap percobaan yang akhirnya ditolak — penyerang memilih biaya
+kita, bukan kita.
+
+### CAPTCHA di `/join`: tak terlihat, diterbitkan sebelum gerbang buka
+
+Vektor bot yang nyata ada di `/join` — memborong **posisi antrian**, bukan tiket (tiket sudah
+dibatasi BR-02). Karena itu CAPTCHA diletakkan di sini, bukan sebelum Detail Ticket Page:
+di sana bot sudah mengambil posisinya, dan gesekannya justru memakan jam booking.
+
+> **CAPTCHA interaktif di `/join` akan MEMBALIK keadilan yang ia lindungi.** `ticket_no`
+> berasal dari `INCR issued` pada saat join. Manusia yang menghabiskan tiga detik pada teka-
+> teki visual sementara bot menembus layanan pemecah dalam 200 ms berarti **bot mendapat
+> nomor antrian lebih kecil**. Tantangan interaktif tepat di titik itu menghukum manusia
+> dalam urutan antrian.
+
+Dua hal yang membuatnya aman:
+
+1. **Hanya mode tak terlihat / berbasis skor.** Tidak pernah teka-teki interaktif di `/join`.
+2. **Token diterbitkan sebelum gerbang buka.** Halaman utama pra-buka (`queue_state:
+   NOT_OPEN` + `sale_starts_at`, Bagian 6) mengambil token saat halaman dimuat dan
+   menyegarkannya tiap ~60 detik selama menunggu, sehingga pada `sale_starts_at` klien sudah
+   memegang token segar. Join hanya membawanya; verifikasi murni server-side, jadi tidak ada
+   komponen berkecepatan-manusia yang masuk ke dalam perlombaan. Token CAPTCHA berumur
+   pendek dan sekali pakai, jadi loop penyegaran itu **wajib**, bukan opsional.
+
+**Fail-open, berbeda dari Dukcapil.** Provider CAPTCHA adalah dependensi eksternal **ketiga**,
+dan ia duduk di endpoint dengan trafik tertinggi. Aturannya:
+
+> **Fail-closed bila yang dipertaruhkan kebenaran; fail-open bila hanya keadilan.**
+
+Dukcapil fail-open akan menerbitkan tiket atas NIK yang belum terverifikasi — kebenaran.
+CAPTCHA fail-open hanya kehilangan gesekan terhadap bot: tidak ada stok yang oversell, tidak
+ada NIK yang lolos, tidak ada uang yang bergerak. Fail-closed di sini berarti **tidak seorang
+pun dapat bergabung** saat provider terganggu — sale mati sebelum dimulai, lebih buruk
+daripada gangguan Dukcapil yang setidaknya masih membiarkan antrian terbentuk.
+
+`CaptchaFailOpenSeconds` dialarmkan sehingga jendela tanpa proteksi terlihat, bukan diam.
+
+**Berlaku untuk tamu DAN user login.** Mengecualikan user login tampak masuk akal — mereka
+teridentifikasi — tetapi akun hanya berbiaya 5 per IP per jam, sehingga pengecualian itu
+menjadikan login sebagai jalur yang ramah bot. Itu persis kebalikan dari celah BR-07 di bawah.
+
+### BR-07: satu keterlibatan aktif per event, hanya untuk user login
+
+`acct:{ev}:{account_id}` memegang satu keterlibatan aktif per akun per event. Ia dilepas saat
+keterlibatan itu mencapai keadaan terminal:
+
+| Keadaan | `acct` key | Akibat |
+|---|---|---|
+| QUEUED, GRANTED, SELECTING, HELD, AWAITING_PAYMENT, PENDING_CANCELLATION | tetap | join kedua memulihkan yang ada, bukan membuat yang kedua |
+| **CONFIRMED** | `DEL` | **boleh antre lagi** untuk membeli lagi |
+| EXPIRED, LAPSED, ABANDONED | `DEL` | boleh antre lagi |
+
+> **Join kedua memulihkan, tidak menolak.** Menjawab 409 akan menghukum customer yang hanya
+> berpindah perangkat — login di ponsel setelah antre di laptop. Karena `acct:{ev}:{id}`
+> menyimpan `{uuid}` token yang ada, join kedua dapat menerbitkan ulang cookie untuk token
+> itu dan mengembalikan keadaannya. BR-07 tetap ditegakkan: ia tidak mendapat keterlibatan
+> kedua. Sebagai efek sampingnya, user login mendapat pemulihan lintas perangkat yang tidak
+> tersedia bagi tamu.
+
+> **Antre lagi berarti dari belakang.** `ticket_no` baru datang dari `INCR issued`; posisi
+> lama tidak dipulihkan. Kuota tetap dijaga BR-02 — pembelian kedua menuntut NIK yang
+> berbeda lagi, karena satu NIK hanya boleh satu kursi per event.
+
+**Backstop di Aurora**, karena `acct` adalah kunci Redis dan dapat hilang pada flush/failover:
+
+```sql
+CREATE UNIQUE INDEX br07_one_active_per_event
+    ON bookings (event_id, account_id)
+ WHERE account_id IS NOT NULL
+   AND status IN ('GRANTED','SELECTING','HELD',
+                  'AWAITING_PAYMENT','PENDING_CANCELLATION');
+```
+
+Indeks parsial ini mengecualikan `account_id IS NULL`, sehingga **customer tamu tidak
+terbatas** — sesuai keputusan. Ia juga mengecualikan status terminal, sehingga pembeli yang
+sudah `CONFIRMED` bebas memulai pembelian baru. Pola Redis-cepat/Aurora-otoritatif ini sama
+dengan `nik:used` terhadap `nik_claims` (Bagian 6).
+
+> **Kelemahan sisa, dinyatakan terang-terangan.** BR-07 hanya dapat ditegakkan terhadap user
+> yang teridentifikasi, sehingga strategi optimal pihak yang berniat buruk menjadi **jangan
+> login**. Ia membatasi pengguna yang kooperatif dan bukan yang adversarial. Itu dapat
+> diterima **hanya** karena CAPTCHA di `/join` kini menjadi proteksi nyata bagi semua orang;
+> BR-07 sendirian akan hampir sekadar hiasan.
 
 ```lua
 -- advance_now_serving.lua   (SCRIPT LOAD sekali, dipanggil via EVALSHA)
 -- KEYS[1]=now_serving KEYS[2]=slots:open KEYS[3]=state KEYS[4]=readmit KEYS[5]=by_ticket
--- ARGV[1]=MAX_CONCURRENT_SLOTS  ARGV[2]=remaining_stock
+-- KEYS[6]=sold_out_at   KEYS[7]=resume_flag
+-- ARGV[1]=MAX_CONCURRENT_SLOTS  ARGV[2]=remaining_stock  ARGV[3]=now (epoch detik)
 -- ARGV[2] adalah SISA STOK TOTAL seluruh kategori, bukan per kategori: admission-ctl
 -- tidak tahu kategori apa yang akan dipilih customer yang belum masuk.
 
 local stock = tonumber(ARGV[2])
+local state = redis.call('GET', KEYS[3])
+
 if stock <= 0 then
-  redis.call('SET', KEYS[3], 'SOLD_OUT')
+  -- SEMENTARA, bukan terminal. CLOSED disetel admission-ctl setelah
+  -- SOLD_OUT_HOLD_SECONDS, bukan di sini -- lihat Bagian 6.
+  if state == 'OPEN' then
+    redis.call('SET', KEYS[3], 'SOLD_OUT')
+    redis.call('SET', KEYS[6], ARGV[3])        -- sold_out_at
+  end
   return {0, 0, 'SOLD_OUT', {}}
 end
+
+-- Stok kembali (booking kedaluwarsa melepas kursinya): lanjutkan admission.
+-- by_ticket dan now_serving tidak disentuh, jadi FCFS melanjutkan dari posisi
+-- yang sama alih-alih membuat pendatang baru bersaing dengan yang menunggu.
+if state == 'SOLD_OUT' then
+  redis.call('SET', KEYS[3], 'OPEN')
+  redis.call('DEL', KEYS[6])
+  redis.call('SET', KEYS[7], 1)                -- tanda: broadcast state OPEN
+end
+if state == 'CLOSED' then return {0, 0, 'CLOSED', {}} end
 
 local open    = tonumber(redis.call('GET', KEYS[2]) or 0)
 local target  = math.min(tonumber(ARGV[1]), stock)
@@ -401,7 +564,7 @@ pelanggaran NFR-02 "Jangan PHP" paling langsung.
 | AWAITING_PAYMENT → CONFIRMED | **webhook inline**, fallback outbox (Bagian 9) | ✅ Terminal |
 | apa pun → EXPIRED | `rusuh-admission-ctl` | ✅ Terminal + `DEL nik:used` |
 | GRANTED → LAPSED | `rusuh-admission-ctl` | ✅ Terminal; token → `readmit` |
-| apa pun → ABANDONED | `booking-service` | ✅ Terminal + `DEL nik:used` |
+| apa pun → ABANDONED | `booking-service` | ✅ Terminal + `DEL nik:used` + `DEL acct:{ev}:{id}` |
 
 Double-DECR → `slots:open` negatif → `deficit = target − (−n)` → over-admission.
 
@@ -459,7 +622,12 @@ Tiap tick ke-120 (≈60 detik), per kategori:
       continue
 
   if |current_drift| >= STOCK_DRIFT_THRESHOLD and |last_drift| >= STOCK_DRIFT_THRESHOLD:
-      INCRBY stock:{ev}:{cat} (-current_drift)
+      -- COMPARE-AND-ADJUST, bukan INCRBY buta. Lua membaca ulang stok dan
+      -- hanya menerapkan delta bila nilainya MASIH sama dengan R yang diamati.
+      -- Dengan begitu dua eksekusi bersamaan tidak mengoreksi 2x, bahkan bila
+      -- leader lease kalah balapan (Bagian 11).
+      EVALSHA adjust_if_unchanged.lua  KEYS=stock:{ev}:{cat}
+                                       ARGV=R, -current_drift
       -- aturan yang sama dengan slots:open — INCRBY bukan SET, current_drift bukan
       -- last_drift, dan dua konfirmasi berturut-turut sebelum mengoreksi
   last_drift = current_drift
@@ -584,11 +752,15 @@ SCHEDULED  ← nilai AWAL. Sale belum dibuka; join ditolak 409.
    │
    │  job terjadwal pada sale_starts_at  (EventBridge, satu kali per event)
    ▼
-OPEN       ← antrian menerima join, admission berjalan
-   │
-   │  advance_now_serving.lua ketika remaining_stock <= 0
+OPEN   ◄───────────────┐   ← antrian menerima join, admission berjalan
+   │                  │
+   │ stok <= 0        │ stok > 0 lagi (booking kedaluwarsa
+   ▼                  │ melepas kursinya) — REVERSIBEL
+SOLD_OUT ─────────────┘   ← stream TETAP terbuka; admission lanjut
+   │                        begitu stok kembali
+   │  sold_out_at + SOLD_OUT_HOLD_SECONDS berlalu
    ▼
-SOLD_OUT   ← stream menjawab 410 Gone
+CLOSED     ← TERMINAL. sse-sold-out + 410 Gone; klien menutup stream.
 ```
 
 > **Ini menutup celah, bukan menambah fitur.** Sebelumnya `state` hanya punya dua nilai,
@@ -596,11 +768,50 @@ SOLD_OUT   ← stream menjawab 410 Gone
 > punya permulaan yang terdefinisi. Untuk sistem flash sale itu justru layar yang paling
 > padat: 300.000 orang berkumpul **sebelum** gerbang dibuka, bukan sesudah.
 
-> **`SOLD_OUT` masih satu arah, dan itu belum tentu benar.** Stok kembali dari booking yang
-> kedaluwarsa (BR-04, BR-06) dan `ExpiryRate` dipantau sebagai metrik, tetapi tidak ada yang
-> mengembalikan `state` ke `OPEN`. Setiap tiket yang dilepas setelah momen sold-out karena itu
-> tidak dapat terjual. Keputusan apakah `SOLD_OUT` dibuat reversibel **masih terbuka** — lihat
-> Bagian 17.
+### `SOLD_OUT` reversibel, `CLOSED` terminal
+
+Stok kembali dari booking yang kedaluwarsa (BR-04, BR-06), dan `ExpiryRate` dipantau justru
+karena angkanya tidak nol. Membuat sold-out satu arah berarti **setiap kursi yang dilepas
+setelah momen itu tidak akan pernah terjual** — kehilangan pendapatan yang langsung
+sebanding dengan expiry rate.
+
+Karena itu `SOLD_OUT` adalah keadaan **sementara**, dan keadaan terminalnya dipisah menjadi
+`CLOSED`:
+
+| | `SOLD_OUT` | `CLOSED` |
+|---|---|---|
+| Arti | tidak ada stok **saat ini** | tidak akan ada stok lagi |
+| Stream SSE | tetap terbuka, broadcast berlanjut | `sse-sold-out` lalu 410 Gone |
+| Admission | lanjut otomatis begitu stok kembali | berhenti |
+| Reversibel | ✅ → `OPEN` | ❌ |
+
+**Jendela `SOLD_OUT` punya batas yang diturunkan, bukan ditebak.** Tidak ada hold yang dapat
+kedaluwarsa lebih lambat dari satu perjalanan penuh setelah hold terakhir dibuat, sehingga
+setelah `BOOKING_TTL + PAYMENT_TTL + PAYMENT_GRACE` (930 detik) terlewat dari momen sold-out,
+tidak ada lagi kursi yang mungkin kembali:
+
+```
+SOLD_OUT_HOLD_SECONDS = BOOKING_TTL_SECONDS + PAYMENT_TTL_SECONDS
+                      + PAYMENT_GRACE_SECONDS = 930
+```
+
+Setelah itu admission-ctl menyetel `state = CLOSED`, mem-broadcast `sse-sold-out`, dan stream
+menjawab 410 untuk reconnect berikutnya.
+
+> **Klaim "tidak ada badai reconnect" tetap utuh, dan justru lebih kuat.** Badai itu berasal
+> dari 300.000 klien yang **diputus** lalu mencoba kembali. Di `SOLD_OUT` mereka tidak diputus
+> sama sekali — jadi tidak ada yang perlu reconnect. Pemutusan hanya terjadi sekali, di
+> `CLOSED`, dan di sana 410 menghentikan retry bawaan `EventSource` secara permanen seperti
+> sebelumnya.
+>
+> Harganya adalah memegang koneksi hingga 930 detik lebih lama pada event yang sold out.
+> Itu biaya egress dan task ECS yang nyata, dan ia dibayar untuk menjual kembali kursi yang
+> dilepas — sebanding dengan `ExpiryRate`.
+
+**FCFS tetap utuh melewati batas sold-out.** Token tidak dibuang saat `SOLD_OUT`: `by_ticket`
+tidak disentuh, `now_serving` tidak di-reset, dan saat stok kembali admission melanjutkan dari
+posisi yang sama. Customer di posisi 5 ketika sold-out terjadi tetap dilayani sebelum posisi
+6 — bukan bersaing ulang dengan pendatang baru.
 
 **Tidak ada `Session_TTL_Antrian`.** Yang melepas posisi hanyalah grace period setelah slot
 diberikan: customer yang tidak masuk ke Detail Ticket Page sebelum `booking_expires_at`
@@ -627,6 +838,8 @@ lapse:         n = HINCRBY token:{uuid} lapses 1
                if n <= 2 then SADD readmit:{ev} {uuid} else ZREM by_ticket end
 sale ditutup:  EXPIRE readmit:{ev} 86400 ; EXPIRE by_ticket 86400
 post-sale job: DEL readmit:{ev} by_ticket
+               -- token:{uuid} TIDAK di-DEL di sini: ia punya EX sendiri
+               -- (SALE_WINDOW_SECONDS) karena recovery bergantung padanya
 ```
 
 > **Slot yang terisi dari `readmit` tidak memajukan `now_serving`.** Lua menguras `readmit`
@@ -659,8 +872,45 @@ Keputusan pause tidak sensitif terhadap balapan: sebuah tick menjalankan advance
 > `slots:open` tetap terisi booking mati sehingga admission tidak dapat dimulai bersih
 > meskipun breaker sudah CLOSED.
 >
-> Perbaikan yang benar adalah **menggeser tenggatnya**, bukan berhenti menagih — masih
-> menunggu keputusan pemilik tender, Bagian 17 #4.
+Perbaikan yang benar adalah **menggeser tenggatnya**, bukan berhenti menagih — dan
+penggeseran itu dilakukan **saat pause dimulai**, bukan saat berakhir:
+
+```
+transisi → paused (sekali per pause, bukan tiap tick):
+  SET pause:{ev}:grace_applied 1 NX EX SALE_WINDOW_SECONDS
+    gagal → grace sudah diberikan untuk pause ini; LEWATI
+    -- Guard ini berdiri sendiri, terlepas dari leader lease: dua task yang
+    -- sama-sama mendeteksi transisi akan memberi +120 detik, bukan +60.
+  UPDATE bookings
+     SET booking_expires_at = booking_expires_at + PAUSE_TTL_GRACE_SECONDS,
+         payment_expires_at = payment_expires_at + PAUSE_TTL_GRACE_SECONDS
+   WHERE event_id = $ev
+     AND status IN ('GRANTED','SELECTING','HELD',
+                    'AWAITING_PAYMENT','PENDING_CANCELLATION')
+  ZADD expiries:{ev} <tenggat baru> untuk tiap baris yang terkena
+  emit PauseTtlGrantedSeconds
+```
+
+**Mengapa saat mulai, bukan saat selesai.** SWEEP tetap berjalan selama pause. Customer yang
+tenggatnya lewat **di tengah** pause sudah di-expire sebelum resume tiba, sehingga perpanjangan
+pada saat resume datang terlambat bagi justru orang-orang yang paling membutuhkannya.
+Menggeser di muka membuat sweep berjalan apa adanya tanpa perlakuan khusus, dan siapa pun yang
+akan kedaluwarsa dalam `PAUSE_TTL_GRACE_SECONDS` pertama terselamatkan.
+
+Konsekuensinya jelas dan dapat diuji: **sebuah pause membeli setiap customer yang sedang di
+dalam tepat `PAUSE_TTL_GRACE_SECONDS` tambahan waktu — tidak kurang, tidak lebih.** Gangguan
+yang lebih panjang dari itu tetap memakan waktu mereka; itu batas yang disengaja, bukan
+kelalaian. Bila sebuah gangguan melampauinya secara material, keputusannya naik ke operator:
+menunda sale, bukan memperpanjang tanpa batas.
+
+> **Ruang TTL token sudah cukup.** Perjalanan maksimum 930 detik + 60 detik grace = 990,
+> masih di bawah `GRANT_TOKEN_TTL_SECONDS` (1080). Tidak ada perubahan yang diperlukan di
+> sana — margin menyusut dari 150 ke 90 detik.
+
+> **Pause yang berkedip memperbanyak perpanjangan.** Setiap transisi masuk ke `paused`
+> memberi satu grace lagi. Pembatas alaminya adalah `PG_BREAKER_OPEN_SECONDS`: breaker tidak
+> membuka-menutup lebih cepat dari jendelanya sendiri. `PauseTransitions` dialarmkan agar
+> gangguan yang berkedip terlihat sebagai gangguan, bukan sebagai customer yang beruntung.
 
 Pause adalah **field pada payload broadcast**, bukan event tersendiri:
 
@@ -1077,10 +1327,47 @@ syarat yang mudah terlewat:
 - **Normalisasi sebelum HMAC**: buang spasi di awal/akhir dan pemisah apa pun, tolak bila
   hasilnya bukan tepat 16 digit ASCII. `"3171 1234 5678 9012"` dan `"3171123456789012"`
   harus menghasilkan hmac yang identik, bukan dua klaim berbeda.
-- **Pepper KMS tidak boleh dirotasi selama sale berjalan.** Rotasi mengubah seluruh hmac,
-  sehingga `nik_claims` dan `nik:used` yang sudah ada menjadi tidak dapat dicocokkan dan
-  BR-02 berhenti ditegakkan secara senyap. Rotasi dijadwalkan di luar jendela penjualan, dan
-  bila pernah dilakukan, klaim lama harus di-backfill dengan hmac baru.
+- **Pepper disimpan sebagai secret yang dikelola KMS**, diambil dan didekripsi oleh service,
+  lalu HMAC-SHA256 dihitung **di dalam proses** (keputusan 30 Oktober 2026 — lihat di bawah).
+- **Pepper tidak dapat dirotasi sama sekali, bukan hanya "tidak selama sale".** Rotasi
+  mengubah seluruh hmac, sehingga `nik_claims` dan `nik:used` yang ada menjadi tidak dapat
+  dicocokkan dan BR-02 berhenti ditegakkan secara senyap. Memperbaikinya menuntut **re-hash**
+  seluruh klaim lama — dan itu menuntut NIK **plaintext**, yang sengaja tidak pernah disimpan.
+  Jadi backfill bukan sekadar pekerjaan berat; ia **tidak mungkin** tanpa mengumpulkan ulang
+  NIK dari setiap customer.
+
+> **Versi sebelumnya dokumen ini keliru.** Ia menginstruksikan "klaim lama harus di-backfill
+> dengan hmac baru" seolah rotasi hanyalah soal penjadwalan. Dengan hanya hash yang tersimpan,
+> instruksi itu tidak dapat dijalankan.
+
+**Konsekuensinya: pepper bersifat permanen.** Ia tidak boleh hilang — kehilangannya membuat
+setiap `nik_hmac` tidak dapat dicocokkan dan BR-02 berhenti bekerja selamanya — dan ia tidak
+boleh bocor, karena **rotasi tidak tersedia sebagai remediasi**. Biasanya secret yang bocor
+dirotasi; di sini tidak bisa.
+
+### Penyimpanan pepper: secret yang dikelola KMS (bukan `GenerateMac`)
+
+Dua opsi dipertimbangkan:
+
+| | Pepper sebagai secret KMS (**dipilih**) | KMS HMAC key + `GenerateMac` |
+|---|---|---|
+| Letak kunci | didekripsi ke memori proses | tidak pernah keluar dari HSM |
+| Service dikompromikan | pepper ikut terambil → enumerasi seluruh NIK tersimpan **offline dan senyap** | hanya dapat meminta KMS mem-hash — ter-IAM, ter-rate-limit, tercatat CloudTrail |
+| Pepper hilang | **dapat dipulihkan** dari backup secret | tidak dapat diekspor → BR-02 rusak permanen |
+| Latensi per hash | nol | satu panggilan KMS (~5–10 ms) |
+
+**Dipilih: secret yang dikelola KMS.** Alasan utamanya bukan kesederhanaan melainkan
+**keterpulihan**: karena rotasi tidak mungkin, kehilangan pepper adalah kegagalan permanen
+atas BR-02 — dan opsi ini satu-satunya yang memungkinkan pepper di-backup dan dipulihkan.
+`GenerateMac` melindungi kerahasiaan lebih baik tetapi membuat kunci tidak dapat diekspor,
+yang menukar satu kegagalan permanen dengan kegagalan permanen yang lain.
+
+> **Risiko yang diterima secara sadar:** karena pepper berada di memori proses, kompromi pada
+> `nik-verify` atau `booking-service` memberi penyerang kemampuan **enumerasi offline** atas
+> seluruh NIK tersimpan — ruang NIK yang valid cukup kecil untuk itu (provinsi, kabupaten dan
+> tanggal lahir terkode di dalamnya). Dan karena rotasi tidak tersedia, kebocoran itu **tidak
+> dapat diremediasi**. Yang menahannya hanyalah kontrol akses pada secret itu dan pada kedua
+> service tersebut; `GenerateMac` adalah jalur hardening sebelum produksi, bukan POC.
 
 ### Persetujuan pemrosesan data pribadi
 
@@ -1093,6 +1380,47 @@ di checkout, dan keduanya wajib sebelum stok di-hold:
 
 `terms_version` dan `terms_accepted_at` merekam penerimaan, sehingga sengketa dapat dirujuk
 ke teks yang benar-benar berlaku saat itu. Klausa memerlukan **sign-off legal** sebelum rilis.
+
+### Retensi PII: tanpa batas waktu, dihapus atas permintaan
+
+**Keputusan (30 Oktober 2026): POC tidak menerapkan batas retensi berbasis waktu.** Data
+pribadi disimpan sampai pemilik datanya meminta penghapusan, dan penghapusan dijalankan
+**manual oleh tim operasional** — tidak ada endpoint self-service di POC.
+
+Tiga batasan harus ikut bersama keputusan itu, karena permintaan hapus tanpa syarat tidak
+kompatibel dengan skema ini.
+
+**1. Ada LANTAI waktu: tidak dapat dihapus sebelum event berlangsung.** Dua kolom NIK sedang
+menegakkan aturan bisnis selama event belum lewat:
+
+| Kolom | Mengapa tidak boleh hilang lebih awal |
+|---|---|
+| `nik_claims.nik_hmac` | `UNIQUE (event_id, nik_hmac)` **adalah** penegak BR-02. Menghapusnya membuat NIK yang sudah punya kursi dapat membeli lagi di event yang sama |
+| `tickets.nik_hmac` | pemeriksaan di gerbang mencocokkan KTP penonton terhadap hash ini. Menghapusnya membuat tiket tidak dapat divalidasi di pintu |
+
+Permintaan hapus yang masuk **sebelum** event karena itu dijadwalkan, bukan dieksekusi: data
+dihapus setelah event berlangsung dan jendela sengketa tertutup. Pemintanya diberi tahu kapan.
+
+**2. `consent_records` dikecualikan.** Ia adalah bukti bahwa persetujuan pernah diberikan —
+menghapusnya menghancurkan catatan kepatuhan yang justru dituntut UU PDP. Ia dipertahankan
+atas dasar kewajiban hukum, bukan atas dasar persetujuan, dan karena itu di luar cakupan
+penghapusan atas permintaan.
+
+**3. NIK pihak ketiga tidak punya jalur self-service.** `saved_niks` memuat NIK **orang lain**
+beserta labelnya. Pemilik akun dapat menghapus entrinya sendiri; orang yang NIK-nya disimpan
+tidak punya akun, tidak dapat login, dan tidak punya cara meminta apa pun. Permintaan dari
+pihak itu ditangani tim operasional — dan ini titik terlemah desain terhadap UU PDP, dicatat
+sebagai diterima untuk POC.
+
+> **`DELETE` bukan penghapusan sampai jendela PITR terlewat.** Aurora menyimpan baris yang
+> dapat dipulihkan selama masa retensi backup, sehingga permintaan hapus baru benar-benar
+> terpenuhi setelah jendela itu berakhir. Angka itu harus dinyatakan ke pemintanya, bukan
+> disembunyikan.
+
+> **Konsekuensi yang diterima: data bertumpuk tanpa batas.** Tanpa purge berbasis waktu,
+> `queue_entries` tumbuh 300.000 baris per event selamanya, dan setiap baris PII yang disimpan
+> memperbesar dampak bila terjadi kebocoran. Purge berjadwal adalah tindak lanjut sebelum
+> produksi, bukan POC.
 
 ### Siklus hidup NIK
 
@@ -1141,7 +1469,24 @@ JOIN_RATE_LIMIT  JOIN_RATE_WINDOW_SECONDS  SSE_CONN_RATE_LIMIT
 
 OUTBOX_LEASE_SECONDS=30     DRIFT_THRESHOLD=3        RECONCILE_EVERY_TICKS=20
 STOCK_DRIFT_THRESHOLD=2     STOCK_RECONCILE_EVERY_TICKS=120
+CAPTCHA_PROVIDER            CAPTCHA_SECRET_KEY       CAPTCHA_SITE_KEY
+CAPTCHA_VERIFY_TIMEOUT_MS=800    CAPTCHA_FAIL_OPEN=true
+  -- FAIL_OPEN=true disengaja: CAPTCHA melindungi keadilan, bukan kebenaran.
+QPERSIST_BATCH_SIZE=1000         -- baris per batch INSERT queue_entries
+QPERSIST_DRAIN_BUDGET_MS=200     -- anggaran drain per tick; drain adalah langkah
+  -- TERAKHIR agar dapat dipotong tanpa mengancam lease (Bagian 6, Bagian 11)
+CTL_LEADER_LEASE_SECONDS=5       -- TTL ctl:leader; diperpanjang tiap tick 500 ms.
+  -- Failover ≤ lease + 1 tick ≈ 5,5 detik. 10× margin terhadap periode tick.
+SSE_STALE_AFTER_SECONDS=30       -- keheningan sse-broadcast yang dibaca sebagai kegagalan
+  -- = 3 × BROADCAST_HEARTBEAT_SECONDS, dan > handover lease 5,5 detik sehingga
+  -- handover normal tidak pernah mencapai indikator customer (Bagian 11).
+PAUSE_TTL_GRACE_SECONDS=60       -- tambahan waktu bagi customer yang sedang di dalam
+  -- saat admission di-pause. Digeser SAAT PAUSE MULAI, sekali per pause (Bagian 6).
+SALE_WINDOW_SECONDS         -- TTL acct:{ev}:{id}; membatasi kebocoran BR-07
 SELLING_FAST_THRESHOLD_PCT=20    -- ambang badge "hampir habis" (Bagian 6)
+SOLD_OUT_HOLD_SECONDS=930        -- = BOOKING_TTL + PAYMENT_TTL + PAYMENT_GRACE.
+  -- Lama SOLD_OUT tetap reversibel. Diturunkan, bukan ditebak: tidak ada hold yang
+  -- dapat kedaluwarsa lebih lambat dari satu perjalanan penuh (Bagian 6).
 MAX_TICKETS_PER_TRANSACTION=3   -- total lintas kategori, bukan per kategori
 NIK_USED_TTL_SECONDS        -- durasi sale + margin; membatasi kebocoran nik:used
 BOOKING_TTL_SECONDS=300     PAYMENT_TTL_SECONDS=600
@@ -1157,19 +1502,32 @@ GRANT_TOKEN_TTL_SECONDS=1080    -- = BOOKING_TTL + PAYMENT_TTL + PAYMENT_GRACE +
 ```
 
 **Payment Gateway**: Midtrans **Core API**. Probe half-open read-only; breaker terbuka →
-**pause admission**. Tiga metode dibuka — `credit_card`, `bank_transfer` (BCA/BNI/BRI/CIMB
-saja), dan `gopay`; rinciannya di `payment-method/`.
+**pause admission**. **Dua** metode dibuka — `bank_transfer` (BCA/BNI/BRI/CIMB saja) dan
+`gopay`; rinciannya di `payment-method/`.
+
+> **Kartu kredit dan OTC dikeluarkan dari POC karena alasan yang sama: keduanya tidak dapat
+> menghormati TTL pembayaran di sisi gateway.** `custom_expiry` tidak berlaku untuk kartu
+> (dinyatakan eksplisit oleh Midtrans), sehingga BR-05 hanya ditegakkan sweep kita tanpa
+> dukungan gateway; OTC menuntut customer datang ke gerai fisik, yang tidak mungkin dalam 10
+> menit, dan Indomaret termasuk kanal yang dapat reversal. Dua metode yang tersisa keduanya
+> menerima `custom_expiry`, jadi **setiap** metode yang hidup menutup jendelanya pada detik
+> yang sama dengan jendela kita. Keluarnya kartu juga mengeluarkan cakupan PCI-DSS dan alur
+> tokenisasi di browser.
 
 > **Permata, Mandiri Bill dan Indomaret sengaja tidak dibuka.** Midtrans mendokumentasikan
 > `settlement → deny` (reversal, 1–5 menit, dana kembali ke customer) hanya untuk ketiganya.
 > Menutup mereka berarti kelas kegagalan itu tidak dapat terjadi, dan tidak perlu handler
 > yang menarik kembali tiket yang sudah terbit dan e-tiket yang sudah terkirim.
 
-**PCI-DSS (NFR-07) adalah batasan arsitektural, bukan asumsi.** Nomor kartu bergerak
-langsung dari browser ke Midtrans lewat Midtrans.js, dan backend hanya menerima `token_id`.
-Klaim "tidak ada data kartu yang melewati sistem ini" **hanya benar selama itu dipertahankan**:
-satu form yang mengirim nomor kartu ke backend kita akan meruntuhkannya dan memperluas
-cakupan PCI-DSS secara drastis. Tidak ada endpoint yang boleh menerima field nomor kartu.
+**PCI-DSS (NFR-07): keluar dari cakupan POC, dan itu harus dijaga.** Dengan kartu kredit
+tidak dibuka, tidak ada nomor kartu yang menyentuh sistem ini sama sekali — bukan karena
+ditokenisasi di browser, melainkan karena tidak pernah diminta. VA dan GoPay keduanya
+menyelesaikan pembayaran di luar halaman kita.
+
+> **Bila kartu ditambahkan sebelum produksi**, klaim itu menjadi bersyarat lagi: nomor kartu
+> harus bergerak langsung dari browser ke Midtrans lewat Midtrans.js dengan backend hanya
+> menerima `token_id`, dan **tidak satu endpoint pun boleh menerima field nomor kartu**. Satu
+> form yang mengirimkannya ke backend kita akan memperluas cakupan PCI-DSS secara drastis.
 
 **`order_id` = `{booking_id}:{payment_attempts}`** — diturunkan dari state Aurora, **tidak
 pernah dikirim klien**. Midtrans Core API membawa idempotency pada field `order_id`, bukan
@@ -1276,7 +1634,7 @@ POST /payments/{id}
        -- Tidak berlaku untuk kartu; jendelanya ditentukan batas waktu 3DS.
   5.   UPDATE bookings
           SET status = 'AWAITING_PAYMENT', payment_ref = $ref,
-              payment_method = $method        -- credit_card | bank_transfer | gopay
+              payment_method = $method        -- bank_transfer | gopay
         WHERE id = $1 AND status = 'HELD'
        -- payment_expires_at TIDAK ditulis di sini; sudah ada sejak HELD (Bagian 7)
        INSERT INTO outbox (type='payment.initiated', aggregate_id=$1, payload=…)
@@ -1369,9 +1727,6 @@ itu sendiri, yang memang harus diblokir. Timeout ke Midtrans dibuat pendek.
 **`cancel`, bukan `expire`.** Tidak ada yang kedaluwarsa saat customer berganti metode;
 merchant membatalkannya. Dashboard Midtrans melaporkan keduanya terpisah, sehingga sale yang
 penuh pergantian metode tidak terbaca sebagai sale yang penuh timeout.
-
-**Untuk kartu, klien wajib melakukan tokenisasi ulang** pada percobaan berikutnya: `token_id`
-Midtrans hanya berlaku untuk satu transaksi.
 
 **TTL tidak ikut mundur.** `custom_expiry.order_time` diisi `held_at`, bukan waktu request,
 sehingga VA baru mewarisi sisa jendela yang benar: anchor 10:15 + 10 menit tetap berakhir
@@ -1580,13 +1935,277 @@ Rentang 3,5× pada permintaan kuota berlead-time seminggu → pengukuran **tidak
 
 ```
 Scale out : > 70% kapasitas TERUKUR per task
-Scale in  : DINONAKTIFKAN selama sale aktif (selesai → desired_count = 0)
+Scale in  : DINONAKTIFKAN selama sale aktif
 Min / Max : 0 → N / 60 · Cooldown out 60 detik
+
+"sale aktif" = queue:{ev}:state ∈ { OPEN, SOLD_OUT }
+"selesai"    = queue:{ev}:state == CLOSED   → desired_count = 0
 ```
+
+### Tiga hal berbeda yang sering dikira satu
+
+Pertanyaan "berapa instance" sebenarnya tiga pertanyaan, dan masing-masing dijawab mekanisme
+yang berbeda. Menyelesaikan satu dengan alat yang lain adalah kesalahan yang paling mudah
+dibuat di sini:
+
+| | Masalahnya | Alatnya | Angkanya |
+|---|---|---|---|
+| **Warm floor** | cold start, image rusak, IAM salah, Redis tak terjangkau | `desired_count` minimum sebelum sale | 3 task, T-2 sampai T-6 **jam** |
+| **Pre-scale** | 300.000 koneksi datang dalam ~60 detik | `desired_count = N` terjadwal | 20–43 task, **T-30 menit** |
+| **HA** | satu task mati di tengah sale | **leader lease**, bukan jumlah instance | 2 task (1 leader + 1 standby) |
+
+**Autoscaling reaktif tidak dapat melayani flash crowd, dan itu bukan kelemahan konfigurasi.**
+Ramp di T=0 adalah ~5.000 koneksi/detik, sementara satu task Fargate butuh puluhan detik untuk
+hidup dan cooldown scale-out 60 detik. Bebannya datang lebih cepat daripada loop apa pun yang
+bereaksi terhadapnya. Karena itu `desired_count = N` **dijadwalkan**, dan autoscaling hanya
+berfungsi sebagai margin di atas armada yang sudah di-pre-scale — bukan sebagai mekanisme yang
+menangani kerumunan.
+
+**Warm floor dihitung dalam jam, bukan hari — dan alasannya bukan biaya.** Sebelum
+`sale_starts_at`, join dijawab 409 dan stream menolak `SCHEDULED`, sehingga **tidak ada trafik
+sama sekali**. Task yang menyala dua hari dalam keadaan idle tidak menjalankan satu pun jalur
+kode yang dipedulikan. Kegagalan yang memang butuh jendela panjang — pertumbuhan memori pada
+proses SSE berumur panjang, connection table yang membengkak, volume log, rotasi token — hanya
+muncul **di bawah beban**, dan idle tidak memunculkannya.
+
+Biayanya nyata meski bukan penentu:
+
+| Jendela warm floor | 3 task SSE | 2 task ctl | Per event | 2 event/bulan |
+|---|---|---|---|---|
+| T-30 menit | $0.15 | $0.02 | **$0.17** | $0.34 |
+| **T-6 jam** | $1.78 | $0.30 | **$2.08** | $4.16 |
+| T-2 hari | $14.21 | $2.37 | **$16.58** | $33.16 |
+
+T-2 hari adalah **+46% atas biaya variabel per event (~$36)** dan +5% atas total bulanan —
+dibayar untuk task yang tidak melakukan apa pun.
+
+> **Yang sebenarnya dibeli oleh lead time dua hari adalah WAKTU UNTUK MEMPERBAIKI, bukan waktu
+> menyala.** Jadwalkan **rehearsal** di T-2 hari — ramp sintetis 300.000 join, fan-out SSE,
+> sold-out lalu resume — kemudian turunkan kembali ke floor. Itu menemukan masalah dengan sisa
+> waktu untuk membenahinya, dan beberapa pemeriksaan di T-2 menit sebaiknya pindah ke sana.
+> Skenario dan thresholdnya adalah Bagian 17 #9.
+
+> **`IdleTaskCount > 0` harus mengecualikan jendela warm floor dan rehearsal.** Kalau tidak,
+> alarm itu menyala pada operasi yang normal, dan tim akan belajar mengabaikannya — yang
+> menghapus gunanya pada kasus yang sebenarnya, yaitu task tertinggal setelah sale.
+
+### `admission-ctl`: jumlah instance bukan jawabannya
+
+`rusuh-admission-ctl` adalah **control loop**, bukan request handler, dan karena itu
+`desired_count` dinaikkan ke **2 — 1 leader + 1 standby — dengan leader lease**:
+
+```
+AMBIL (bila belum punya):
+  SET ctl:leader {task_id} NX EX CTL_LEADER_LEASE_SECONDS
+  berhasil → my_epoch = INCR ctl:epoch        -- fencing token, monoton
+
+PERPANJANG (tiap tick, WAJIB bersyarat — Lua, atomik):
+  if redis.call('GET', KEYS[1]) == ARGV[1]
+    then redis.call('PEXPIRE', KEYS[1], ARGV[2]) ; return 1
+    else return 0                              -- kepemimpinan hilang
+  end
+
+LEPAS (shutdown, WAJIB bersyarat — Lua, atomik):
+  if redis.call('GET', KEYS[1]) == ARGV[1]
+    then redis.call('DEL', KEYS[1]) end
+
+bila BUKAN leader → lewati seluruh tick (standby diam, tetap hangat)
+```
+
+> **`PEXPIRE` dan `DEL` tanpa syarat adalah bug, bukan penyederhanaan.** `EXPIRE` buta
+> memperpanjang lease yang mungkin sudah bukan milik kita; `DEL` buta menghapus lease task
+> lain dan mengundang pemimpin kedua secara aktif. Keduanya **wajib** melalui Lua yang
+> memeriksa pemilik dalam operasi yang sama.
+
+Task ketiga menambah biaya tanpa menambah ketersediaan: hanya satu yang pernah bertindak.
+Failover turun dari 30–90 detik (deteksi ECS + start task + health check) menjadi
+≤ TTL lease + satu tick — sekitar **5,5 detik**.
+
+### Lease ganda tidak dicegah — ia dibuat tidak berbahaya
+
+Ini perlu dinyatakan tanpa basa-basi: **lock berbasis waktu di Redis tidak dapat menjamin
+pemegang tunggal.** Ada dua jalan menuju dua pemegang sekaligus, dan tidak satu pun dapat
+ditutup oleh Redis:
+
+| Jalan | Urutannya |
+|---|---|
+| **Holder tertahan** | A memegang lease EX 5 → A tertahan (GC, query SWEEP lambat, CPU throttle) → lease kedaluwarsa sendiri di t=5 → B mengambilnya secara sah → A bangun di t=7 **masih mengira ia leader** dan bertindak |
+| **Failover Redis** | Replikasi ElastiCache bersifat **asinkron**; failover primary di antara `SET` dan replikasinya membuat key itu tidak ada di primary baru → B mengambil lease yang menurut A masih dipegangnya |
+
+Redis tidak punya cara memberi tahu holder yang tertahan untuk berhenti, dan tidak dapat
+membuat replikasinya sinkron. Karena itu strateginya **bukan** mencegah dua pemegang,
+melainkan membuat keadaan itu tidak merusak apa pun:
+
+```
+sebelum tiap langkah non-idempoten:
+  masih pemilik?        GET ctl:leader == {task_id}
+  sisa TTL cukup?       PTTL ctl:leader > anggaran langkah ini
+  bawa {my_epoch} ke dalam write yang dijaga
+```
+
+**`ctl:epoch` adalah fencing token.** Ia naik monoton pada setiap pengambilan lease, sehingga
+leader yang tertahan membawa epoch yang **lebih kecil** daripada leader yang sah. Write yang
+dijaga menolak epoch yang basi dan `StaleLeaderRejected` dialarmkan — artinya dua pemegang
+terlihat sebagai peristiwa, bukan sebagai kerusakan senyap.
+
+> **Untuk dua operasi non-idempoten hari ini, CAS di sumber dayanya sudah cukup sendiri**
+> — compare-and-adjust pada rekonsiliasi stok dan `grace_applied NX` pada pause grace
+> menolak aktor kedua tanpa perlu melihat epoch sama sekali. Epoch ditambahkan karena ia
+> bersifat **umum**: operasi non-idempoten berikutnya yang ditambahkan seseorang tidak
+> otomatis menjadi lubang baru, dan alarmnya memberi tahu bahwa lease ganda benar-benar
+> terjadi di produksi.
+
+**Urutan klaim yang benar, dan ini yang harus dipegang saat membaca sisa dokumen:** lease
+menjawab *siapa yang sebaiknya bekerja* — ketersediaan dan efisiensi. Pengaman di sumber daya
+menjawab *apa yang terjadi bila dua tetap bekerja* — korektifitas. Bila lease dihapus besok,
+sistem tetap benar (hanya boros dan berisik). Bila pengamannya dihapus dan hanya lease yang
+tinggal, sistem menjadi **mungkin** benar — dan "mungkin" bukan sifat yang pantas dipegang
+oleh stok tiket.
+
+> **Jaminan sungguhan menuntut store lain.** Fencing token yang diperiksa oleh setiap write,
+> atau lock di store linearizable (DynamoDB conditional write, etcd, Zookeeper). Berlebihan
+> untuk POC ini karena pengaman di sumber daya sudah menutupnya — tetapi itulah jawabannya
+> bila kelak ada operasi yang tidak dapat dibuat idempoten.
+
+**Apa yang sebenarnya tidak aman bila dijalankan ganda.** Ini perlu dinyatakan tepat, karena
+sebagian besar loop ternyata sudah terlindungi dan hanya dua operasi yang benar-benar rapuh:
+
+| Operasi | Aman dijalankan ganda? | Mengapa |
+|---|---|---|
+| SWEEP | ✅ sudah | `UPDATE … WHERE id = $1 AND status = row.status` adalah CAS; yang kalah mendapat 0 baris dan berhenti sebelum efek sampingnya (Bagian 7) |
+| ADVANCE | ✅ sudah | Lua atomik dan `deficit` dihitung dari `slots:open` yang dibaca ulang; eksekusi kedua melihat angka yang sudah naik |
+| `SOLD_OUT → CLOSED` | ✅ praktis | `SET state CLOSED` idempoten; `sse-sold-out` ganda tidak berbahaya karena klien menutup pada yang pertama |
+| **Rekonsiliasi stok** | ❌ | `INCRBY -current_drift` tidak idempoten — dua eksekusi mengoreksi 2× |
+| **Pause TTL grace** | ❌ | `UPDATE … + PAUSE_TTL_GRACE_SECONDS` dua kali memberi +120 detik, bukan +60 |
+
+> **Koreksi atas pernyataan sebelumnya di dokumen ini.** Versi terdahulu menyebut SWEEP ikut
+> rusak bila dijalankan ganda. Itu berlebihan: guard CAS-nya sudah ada, dan komentarnya
+> ("pihak lain mendahului") memang mengantisipasi aktor bersamaan. Yang benar-benar rapuh
+> hanya dua baris di tabel di atas.
+
+**Kedua operasi rapuh itu diberi pengaman sendiri, bukan hanya mengandalkan lease.** Lease
+adalah kunci berbasis waktu, dan kunci berbasis waktu dapat kalah balapan: tick yang tertahan
+lebih lama dari TTL-nya (GC pause, query SWEEP yang lambat) kehilangan kepemimpinan sementara
+masih bertindak. Karena itu:
+
+| Operasi | Pengaman mandiri |
+|---|---|
+| Rekonsiliasi stok | `adjust_if_unchanged.lua` — compare-and-adjust: delta hanya diterapkan bila stok **masih** sama dengan nilai yang diamati (Bagian 6) |
+| Pause TTL grace | `SET pause:{ev}:grace_applied NX` — satu pemberian per pause, siapa pun yang menjalankannya (Bagian 6) |
+
+Dengan keduanya terpasang, lease menjadi **optimasi ketersediaan**, bukan satu-satunya hal
+yang berdiri antara sistem dan kerusakan stok. Itu urutan yang benar: korektifitas dijaga
+operasinya sendiri, ketersediaan dijaga lease.
+
+> **TTL lease 5 detik, diperpanjang tiap tick 500 ms.** Sepuluh kali margin: kehilangan
+> sepuluh perpanjangan berturut-turut berarti task itu memang sudah tidak sehat. Lebih pendek
+> mempercepat failover tetapi memicu handover pada hiccup Redis sesaat; `CtlLeaderHandovers`
+> dialarmkan agar handover yang sering terbaca sebagai gejala, bukan sebagai hal normal.
+
+### Pengawasan: lease memulihkan, pengawas membuktikan
+
+Matinya `admission-ctl` tidak terlihat siapa pun kecuali ada yang mengawasinya. Ia yang
+mem-publish `sse-broadcast` termasuk heartbeat 10 detik, sedangkan `status {stale:true}`
+selama ini hanya menyala ketika **sse-server kehilangan Redis**. Bila ctl mati, Redis sehat
+dan sse-server sehat: tidak ada event `stale`, `: keepalive` 15 detik tetap datang sehingga
+koneksi tampak hidup, dan angka antrian hanya membeku.
+
+Leader lease (di atas) **memulihkan** penyebab yang paling sering — task leader mati atau
+diganti ECS — dan memulihkannya dalam ≤ 5,5 detik, jauh di bawah ambang deteksi 30 detik,
+sehingga indikatornya tidak pernah punya waktu untuk muncul. Tetapi lease adalah mekanisme
+yang **kegagalannya sendiri senyap**:
+
+| Penyebab beku | Dipulihkan lease? |
+|---|---|
+| Leader crash / diganti ECS / rolling deploy | **Ya** — standby ≤ 5,5 detik |
+| Leader hidup, lease diperpanjang, **tick loop macet** | Tidak — standby tidak pernah terpicu |
+| **Kedua task hilang** (image buruk, kehilangan AZ, `desired_count` turun ke 0 terhadap event yang masih hidup) | Tidak — tidak ada yang mengambil lease |
+| Redis tak terjangkau dari ctl | Tidak — tetapi jalur kehilangan-Redis di sse-server sudah menyalakan `stale` |
+| Pub/Sub putus ke **satu** task sse-server | Tidak relevan — ctl sehat; hanya klien task itu yang basi |
+
+Pengawasan karena itu bukan duplikat lease. Ia yang **membuktikan lease bekerja** — justru
+pada situasi di mana paling sulit menyadari bahwa ia tidak bekerja.
+
+**Diputuskan: dua penutup, keduanya di backend.**
+
+| Penutup | Di mana | Yang hanya ia tangkap |
+|---|---|---|
+| sse-server mendeteksi keheningan `sse-broadcast` → `status {stale:true, reason}` | sse-server, memakai event `status` yang sudah ada | Pub/Sub putus ke satu task |
+| Metrik `CtlHeartbeatAge` + dua alarm | sse-server mengemisi, CloudWatch mengalarmkan | Leader macet, kedua task hilang |
+
+Keduanya **tidak menambah kode klien sama sekali**: `setStaleIndicator` sudah terpasang pada
+event `status` (Bagian 11, handler klien). Pengawas berbasis timer **di klien** sengaja
+**ditunda** — setelah lease terpasang, yang hanya ia tangkap adalah sse-server yang macet
+sendiri atau TCP half-open, dan itu tidak sebanding dengan menaruh timer liveness di
+frontend.
+
+**Detektor keheningan di sse-server.** Per event yang punya subscriber, in-memory:
+
+```
+last_broadcast_at[ev] ← disetel pada SETIAP sse-broadcast yang diterima
+                        (inisialisasi: waktu task mulai, bukan nol)
+
+tiap 1 detik:
+  age      := now − last_broadcast_at[ev]
+  expected := queue:{ev}:state ∈ { OPEN, SOLD_OUT }     -- cache ~1 detik
+
+  expected dan age > SSE_STALE_AFTER_SECONDS → status {stale:true,
+                                              reason:"no_admission_updates"}
+  sebelumnya stale, sekarang tidak           → status {stale:false}
+```
+
+Dikirim **hanya pada transisi**, tidak diulang. Nol trafik Redis tambahan —
+`last_broadcast_at` adalah efek samping dari subscription yang sudah dipegang. Dan
+cakupannya tepat: ia menyala ketika klien **task ini** basi, baik karena ctl mati maupun
+karena subscription task ini sendiri yang putus.
+
+`expected` ada supaya keheningan yang sah tidak dibaca sebagai kegagalan: pada `SCHEDULED`
+dan `CLOSED` tidak ada broadcast yang diharapkan. Bila sse-server kehilangan Redis sehingga
+`expected` tak terbaca, pertahankan nilai terakhir dan biarkan jalur kehilangan-Redis yang
+memiliki `stale` — keduanya tidak pernah bersaing.
+
+**`CtlHeartbeatAge` dan dua alarmnya.** Diemisi **sse-server**, bukan `admission-ctl`:
+proses yang mati tidak dapat melaporkan umurnya sendiri, dan sse-server sudah memegang
+angkanya. Nilai = `now − last_broadcast_at`, per event, tiap 10 detik. Statistiknya yang
+menentukan arti, dan itu dua insiden yang berbeda:
+
+| Statistik lintas task | > 30 detik berarti | Tindakan |
+|---|---|---|
+| **Minimum** | tidak ada task yang menerima → `admission-ctl` memang mati | **page** |
+| **Maximum** | subscription satu task putus → hanya klien task itu | ticket |
+
+> **Ambang 30 detik = tiga heartbeat terlewat** pada `BROADCAST_HEARTBEAT_SECONDS=10`. Satu
+> publish yang ter-jitter bukan gangguan; tiga yang hilang berturut-turut adalah kegagalan.
+> Ambang itu juga menyerap handover leader dengan nyaman (≤ 5,5 detik), sehingga handover
+> normal tidak pernah mencapai indikator customer — dan itulah alasan ia tidak dibuat lebih
+> rapat.
+
+> **Deteksi, bukan pemulihan.** Customer mengetahui antriannya membeku; antriannya tetap
+> membeku. Pemulihannya ada di lease. Satu kasus tidak punya pemulihan otomatis sama sekali
+> — leader yang masih memperpanjang lease-nya di satu thread timer sementara tick loopnya
+> macet — dan untuk itu alarm yang membangunkan operator adalah **keseluruhan** mitigasinya.
+> Itu argumen terkuat bagi `CtlHeartbeatAge`, lebih kuat daripada redundansi.
+
+> **`SOLD_OUT` BUKAN akhir sale, dan ini tidak boleh dibaca keliru.** Sejak `SOLD_OUT`
+> dibuat reversibel (Bagian 6), stok nol hanyalah keadaan sementara: kursi kembali dari
+> booking yang kedaluwarsa, admission melanjutkan dari posisi antrian yang sama, dan klien
+> **tetap tersambung** alih-alih diputus. Menurunkan `desired_count` ke 0 pada momen sold-out
+> karena itu akan:
+>
+> | Akibat | Mengapa |
+> |---|---|
+> | Tidak ada yang menyetel `CLOSED` | transisinya ada di tick admission-ctl langkah 5 |
+> | Kursi yang dilepas tidak terjual | tidak ada admission yang berjalan untuk melayaninya |
+> | ~300.000 koneksi SSE kehilangan servernya | mereka sengaja dipertahankan selama `SOLD_OUT` |
+>
+> Kedua service karena itu **wajib tetap menyala hingga `SOLD_OUT_HOLD_SECONDS` (930 detik)
+> berlalu dari `sold_out_at`**, bukan sampai stok menyentuh nol. Dampak biayanya ~15,5 menit
+> ekstra per event yang sold out — sekitar 13% pada jendela 2 jam, dan itu harga untuk
+> menjual kembali kursi yang dilepas.
 
 > `desired_count = 0` setelah sale bukan optimasi opsional: 20 task yang tertinggal menyala
 > berbiaya ~$425/bulan tanpa ada yang menyadarinya. Alarm `IdleTaskCount > 0` di luar jendela
-> sale.
+> sale — ambangnya memakai `state == CLOSED`, bukan stok nol.
 
 ### Pre-Sale Checklist
 
@@ -1594,16 +2213,18 @@ Min / Max : 0 → N / 60 · Cooldown out 60 detik
 |---|---|
 | **T-14 hari** | Load test single-task → kapasitas koneksi per task |
 | **T-7 hari** | Service Quota: Lambda concurrent executions → 6.000 (lead time 3–5 hari kerja) |
+| **T-7 hari** | Kuota dan rate limit provider CAPTCHA dikonfirmasi untuk **300.000 verifikasi dalam ~60 detik**. Pada volume ini pilihan provider menjadi penentu biaya, bukan selera: harga per-assessment akan setara atau melampaui seluruh biaya variabel per event (~$36) |
 | **T-7 hari** | Service Quota: Fargate On-Demand vCPU → 120 |
 | **T-7 hari** | Cek burst concurrency region; kuota API Gateway (default 10.000 RPS) |
 | **T-7 hari** | Konfirmasi `DUKCAPIL_RATE_LIMIT_RPS` riil vs kebutuhan ~40/s burst **dan SLA ketersediaannya** — kini ia SPOF |
 | **T-7 hari** | Daftarkan URL `/payments/webhook`; uji tanda tangan dan resource policy IP |
 | **T-7 hari** | Klausa T&C + persetujuan PDP final; sign-off legal; `TERMS_VERSION` dipasang |
 | T-1 hari | Konfirmasi semua kuota naik di AWS Console |
-| T-30 menit | ECS `desired_count` = N; Provisioned Concurrency `queue-service`, `nik-verify`, `payment-api` |
-| T-10 menit | `rusuh-admission-ctl` healthy; subscriber Redis aktif; kedua breaker tertutup; `SlotsOpenDrift` = 0 |
+| T-30 menit | ECS `desired_count` = N; Provisioned Concurrency `queue-service`, `nik-verify`, `payment-api`. Cukup awal karena halaman pra-buka tidak memakai ECS sama sekali — join ditolak 409 dan stream menolak `SCHEDULED`, sehingga 300.000 orang yang menunggu dilayani Lambda + CloudFront |
+| T-10 menit | `rusuh-admission-ctl` healthy (**kedua task**); tepat **satu** pemegang `ctl:leader`; subscriber Redis aktif; kedua breaker tertutup; `SlotsOpenDrift` = 0 |
 | T-5 menit | Semua task healthy; `OutboxLag` = 0 |
-| T-2 menit | Smoke test: 100 koneksi SSE + admission + grace lapse + NIK valid + NIK ditolak + **Dukcapil down → pause** + charge sandbox + **charge ganda bersamaan → satu charge, dua respons identik** + **webhook diputar ulang → 200 tanpa efek** + **webhook settled setelah EXPIRED → payment.refund** + rekonsiliasi `slots:open` + **rollback Aurora setelah Lua berhasil → stok dan NIK kembali** + **NIK yang sama di dua booking → ditolak** + **flush `nik:used` → rekonsiliasi memulihkan dari `nik_claims`** + resume + sold-out 410 + bypass antrian kosong |
+| Pasca-sale | Turunkan `desired_count` ke 0 **hanya setelah `state == CLOSED`** — bukan saat stok menyentuh nol (Bagian 11) |
+| T-2 menit | Smoke test: 100 koneksi SSE + admission + grace lapse + NIK valid + NIK ditolak + **Dukcapil down → pause** + charge sandbox + **charge ganda bersamaan → satu charge, dua respons identik** + **webhook diputar ulang → 200 tanpa efek** + **webhook settled setelah EXPIRED → payment.refund** + rekonsiliasi `slots:open` + **rollback Aurora setelah Lua berhasil → stok dan NIK kembali** + **NIK yang sama di dua booking → ditolak** + **flush `nik:used` → rekonsiliasi memulihkan dari `nik_claims`** + resume + sold-out 410 + bypass antrian kosong + **provider CAPTCHA mati → join tetap lolos (fail-open) + alarm menyala** + **join kedua user login → memulihkan token yang sama, bukan token baru** + **CONFIRMED → join lagi diizinkan** + **leader di-kill → standby mengambil alih ≤ 5,5 detik, `now_serving` lanjut** + **KEDUA task ctl di-kill → `status {stale:true, reason:"no_admission_updates"}` sampai ke klien ≤ 30 detik, `CtlHeartbeatAge` Minimum mem-page, dan klien TIDAK menutup stream maupun mereset posisi** + **satu task sse-server diputus dari Pub/Sub → hanya klien task itu yang stale, `CtlHeartbeatAge` Maximum naik tanpa Minimum naik** + **dua task dipaksa aktif → rekonsiliasi tetap mengoreksi sekali (compare-and-adjust menolak yang kedua)** + **leader di-SIGSTOP melewati TTL lease → standby mengambil alih, dan write leader lama ditolak saat ia bangun (`StaleLeaderRejected` naik)** + **flush Redis setelah 1.000 join → rebuild dari `queue_entries` memulihkan `by_ticket`, `issued` dan `now_serving`; tidak ada token yang di-grant dua kali** |
 | T-0 | Sale dibuka |
 
 **Join storm**: 300.000 dalam 60 detik = 5.000 rps ≈ 5.000 eksekusi Lambda bersamaan; default
@@ -1665,6 +2286,10 @@ es.addEventListener('grant', async () => {
   goToDetailTicketPage(accessToken);
 });
 
+// TIDAK berubah oleh detektor keheningan (Bagian 11): `reason` hanya diagnostik,
+// satu indikator melayani kedua pemicu. JANGAN close(), reset posisi, atau
+// reconnect sendiri — 300.000 klien reconnect pada satu sinyal bersama adalah
+// badai yang dihindari seluruh desain ini.
 es.addEventListener('status', e => setStaleIndicator(JSON.parse(e.data).stale));
 
 es.addEventListener('sold-out', e => {
@@ -1694,6 +2319,182 @@ memakai cookie/header — dan mengapa perilaku yang sama dipakai **dengan sengaj
 |---|---|---|
 | **Login** | `account_id` | FR-29 opsional |
 | **Anonim** | `queue_token` + device fingerprint | FR-29, FR-30 |
+
+### Posisi antrian durabel: buffer di Redis, tulis ter-batch ke Aurora
+
+Posisi antrian yang belum di-grant adalah satu-satunya state yang dulu tidak punya salinan
+durabel: `ticket_no` hanya ada di `token:{uuid}` dan `by_ticket`, sementara baris Aurora baru
+lahir saat GRANT. Pada antrian 300.000 dengan 10.000 tiket itu berarti ~290.000 posisi yang
+akan hilang total bila Redis hilang.
+
+**Insert sinkron saat join adalah implementasi yang jelas dan salah.** 300.000 join dalam ~60
+detik adalah ~5.000 insert/detik ke satu tabel, tepat pada instan beban tertinggi sistem. Ia
+akan menaruh Aurora di jalur kritis flash crowd, menciptakan contention tepi-kanan B-tree
+(karena `ticket_no` monoton), menahan satu koneksi RDS Proxy per join pada ~5.000 Lambda
+bersamaan, dan membuat **join gagal ketika Aurora lambat** — SPOF baru pada satu-satunya jalur
+yang sengaja dibuat Redis-only justru demi ketahanan.
+
+Karena itu penulisannya **di-buffer**:
+
+```
+join            : RPUSH qpersist:{ev} <...>          -- O(1), jalur cepat
+leader tiap tick: LRANGE qpersist:{ev} 0 N-1         -- baca, JANGAN pop
+                  INSERT INTO queue_entries (...) VALUES (...), (...)
+                    ON CONFLICT (event_id, queue_token) DO NOTHING
+                  COMMIT
+                  LTRIM qpersist:{ev} N -1           -- buang HANYA setelah commit
+```
+
+**Baca-lalu-trim, bukan pop-lalu-tulis.** Pop lebih dulu akan kehilangan batch itu bila insert
+gagal. Dengan trim sesudah commit, kegagalan berarti batch yang sama dibaca ulang pada tick
+berikutnya, dan `ON CONFLICT DO NOTHING` membuat pengulangan tidak berbahaya — at-least-once
+dengan sink yang idempoten, pola yang sama dengan outbox di Bagian 9.
+
+> **Drain adalah langkah TERAKHIR pada tick, dan beranggaran waktu.** Tick yang tertahan lebih
+> lama dari TTL lease kehilangan kepemimpinan sementara masih bertindak (Bagian 11). Drain
+> karena itu dibatasi `QPERSIST_DRAIN_BUDGET_MS` dan diletakkan paling akhir, sehingga ia dapat
+> dipotong tanpa memengaruhi admission atau sweep. Tertinggal sebentar jauh lebih murah
+> daripada kehilangan lease.
+
+**Panjang buffer ADALAH RPO, dan ia paling buruk tepat saat badai join.** Pada ~5.000 join/detik
+masuk dan kapasitas drain ~2.000/detik (1.000 per batch, 2 tick/detik), antrian buffer tumbuh
+~3.000/detik selama badai 60 detik — memuncak di ~180.000 entri — lalu terkuras dalam ~90
+detik sesudahnya. Artinya jendela kehilangan data terbesar justru ketika data paling banyak:
+
+| Fase | Jendela RPO |
+|---|---|
+| Badai join (T+0 s/d ~T+2,5 menit) | hingga ~90 detik join |
+| Steady state sesudahnya | < 1 detik |
+
+`QPersistLag` (panjang list) dan `QPersistAgeSeconds` (umur entri tertua) dialarmkan, karena
+keduanya **adalah** angka RPO yang berjalan — bukan proksi untuknya. Bila benchmark menuntut
+jendela lebih sempit, naikkan batch dan ganti multi-row INSERT dengan `COPY` ke tabel temp
+lalu `INSERT … SELECT … ON CONFLICT`; `COPY` menangani 5.000 baris tanpa kesulitan.
+
+> **`queue_entries` bersifat TULIS-SAJA pada operasi normal.** Ia tidak pernah dibaca kecuali
+> saat rebuild. Seluruh jalur `ticket_no` tetap Redis sepenuhnya:
+>
+> | Operasi | Sumber | Aurora? |
+> |---|---|---|
+> | Menerbitkan `ticket_no` | `INCR queue:{ev}:issued` | tidak |
+> | Menyimpannya | `HSET token:{uuid}` + `ZADD by_ticket` | tidak |
+> | Menampilkan posisi | `ticket_no − nowServing`, keduanya dari Redis | tidak |
+> | Pemulihan, perangkat sama | cookie → `HGET token:{uuid}` | tidak |
+> | Pemulihan, lintas perangkat | JWT → `acct:{ev}:{account_id}` → `HGET` | tidak |
+> | Grant | `by_ticket` di dalam Lua | ditulis sesudahnya, tidak dibaca |
+> | Rebuild setelah Redis hilang | `queue_entries` | **hanya di sini** |
+>
+> Konsekuensinya penting dan mudah disalahpahami: **lag drain tidak punya efek fungsional
+> apa pun.** Customer yang barisnya belum mendarat tetap punya posisi yang berfungsi penuh —
+> terlihat, dapat dipulihkan, dapat di-grant. Lag hanya menentukan apa yang bertahan bila
+> Redis hilang total, bukan apa yang bekerja hari ini. Tidak ada pembacaan yang bisa basi,
+> karena tidak ada pembacaan.
+
+> **Jendela ~90 detik selama badai join DITERIMA** (keputusan 30 Oktober 2026). Multi-row
+> INSERT dipertahankan; `COPY` tetap menjadi jalur eskalasi bila benchmark T-14 menunjukkan
+> lag jauh melampaui perkiraan. `QPersistAgeSeconds` adalah angka yang diawasi terhadap
+> keputusan ini.
+
+### RTO: antrian membeku, tidak kehilangan data — diterima
+
+Target RTO diterima sebagai **perilaku, bukan angka** (keputusan 30 Oktober 2026): selama
+failover dependensi, antrian **berhenti maju** dan tidak ada yang kehilangan posisinya di luar
+jendela RPO yang sudah diterima. Tidak ada target yang lebih ketat, dan karena itu **tidak ada
+perubahan infrastruktur**.
+
+| Kegagalan | Antrian membeku selama | Perilaku |
+|---|---|---|
+| Handover leader `admission-ctl` | ≤ 5,5 detik | `now_serving` berhenti sesaat; tidak ada yang hilang |
+| Kedua task ctl mati | 30–90 detik (penggantian ECS) | idem, lebih lama |
+| Failover ElastiCache | puluhan detik | state dari replika, atau rebuild dari `queue_entries` |
+| Failover Aurora | puluhan detik | INSERT grant gagal → kompensasi `DECRBY slots:open` + `readmit`, **tanpa** publish `grant` (Bagian 6). Admission berhenti alih-alih salah memberi slot |
+
+Yang membuat ini dapat diterima adalah bahwa setiap jalur kegagalan berhenti **aman**: tidak
+ada grant yang terbit tanpa slot, tidak ada stok yang oversell, tidak ada posisi yang
+diserobot. Sistem menunggu, lalu melanjutkan dari tempat yang sama.
+
+> **Pembekuan itu HARUS terlihat customer, dan itu menuntut pengawasan.**
+> Antrian yang membeku tanpa tanda apa pun tidak dapat dibedakan dari halaman yang rusak —
+> angka yang tidak bergerak dengan koneksi yang tampak sehat. Menerima "antrian membeku"
+> karena itu memaksa keputusan yang menyertainya: detektor keheningan di sse-server plus
+> `CtlHeartbeatAge` dengan dua alarmnya, keduanya **sudah diputuskan** (Bagian 11). Leader
+> lease memulihkan penyebab yang paling sering; pengawaslah yang menangkap sisanya dan
+> membuktikan lease benar-benar menyala.
+
+> **Harga yang dibayar customer yang sedang di dalam: jam mereka tetap berjalan.**
+> `PAUSE_TTL_GRACE_SECONDS` hanya menyala pada transisi `paused`, yang digerakkan **breaker**
+> (payment gateway / Dukcapil). Failover Redis atau Aurora bukan peristiwa breaker, sehingga
+> customer yang sedang `SELECTING` saat failover 45 detik kehilangan 45 detik dari 300 detiknya
+> tanpa penggantian. Mitigasi termurahnya memakai mesin yang sudah ada: perlakukan **N tick
+> `admission-ctl` yang gagal berturut-turut** sebagai transisi `paused`, sehingga grace yang
+> sama diberikan. Belum diputuskan — diterima apa adanya untuk saat ini.
+
+> **RPO data berbayar sudah nol, dan itu bukan hal yang perlu diputuskan.** `CONFIRMED`,
+> `tickets`, `nik_claims` dan baris pembayaran hidup di Aurora, yang mereplikasi setiap commit
+> ke enam salinan di tiga AZ pada lapisan storage sebelum mengakui transaksinya. Transaksi
+> yang sudah commit karena itu bertahan terhadap kehilangan satu AZ tanpa kehilangan data.
+> Yang tersisa untuk diputuskan hanyalah jendela posisi antrian di atas dan target RTO —
+> Bagian 17 #7.
+
+### Rebuild Redis dari Aurora setelah kehilangan total
+
+Tabel saja tidak memberi pemulihan — prosedurnya harus ada dan dilatih:
+
+```
+1. state, sold_out_at  ← event_queue_state
+2. issued              ← MAX(ticket_no) FROM queue_entries WHERE event_id = $ev
+3. now_serving         ← MAX(qe.ticket_no)
+                            FROM bookings b
+                            JOIN queue_entries qe ON qe.queue_token = b.queue_token
+                           WHERE b.event_id = $ev
+4. by_ticket           ← ZADD dari queue_entries WHERE ticket_no > now_serving
+5. token:{uuid}        ← HSET per baris queue_entries
+6. slots:open, stock, nik:used ← rekonsiliasi yang sudah ada (Bagian 6)
+```
+
+> **`now_serving` sengaja TIDAK dipersistenkan.** Ia diturunkan dari nomor antrian tertinggi
+> yang punya baris `bookings` — dan itu **lebih benar** daripada nilai tersimpan, yang bisa
+> tertinggal satu tick dan menyebabkan token yang sudah di-grant di-grant ulang. Turunannya
+> mengoreksi dirinya sendiri: apa pun yang sudah pernah di-grant punya baris, jadi
+> watermarknya tepat. Token yang di-readmit tidak memajukannya, dan itu benar — ia memang
+> sudah pernah mendapat gilirannya.
+
+### Pemulihan antrian: dua lapis, dan yang kedua harus berupa READ
+
+Customer menutup tab, berganti perangkat, atau aplikasinya di-install ulang. Posisi antrian
+tidak boleh hilang karena itu (BR-09, NFR-01). Dua lapis menanganinya:
+
+| Lapis | Berlaku saat | Mekanisme |
+|---|---|---|
+| **Cookie / header** | perangkat yang sama — tab ditutup, refresh, kembali dari aplikasi bank | `queue_token` → `HGET token:{uuid}` → state + posisi |
+| **Identitas akun** | perangkat berbeda, cookie dibersihkan, incognito, app di-install ulang | identity token (JWT) → `acct:{ev}:{account_id}` → uuid token → state yang sama |
+
+**Lapis kedua WAJIB lewat `GET …/queue/me`, bukan `POST …/queue/join`.** Keduanya secara
+teknis dapat memulihkan — join memang mengembalikan keterlibatan yang ada (BR-07) — tetapi
+join adalah jalur tulis yang membawa **CAPTCHA** dan dua rate limit (`rl:join:{ip}` 20 per 5
+menit, plus 3 join per customer per menit). Memaksa customer yang sekadar kembali untuk
+melewati semua itu berarti:
+
+- ia harus menyediakan token CAPTCHA segar hanya untuk mengambil posisi yang sudah dimilikinya
+- di belakang NAT kantor atau operator seluler, 20 join per 5 menit habis dengan mudah — dan
+  yang menghabiskannya justru orang-orang yang sedang reconnect
+- pemulihan diperlakukan sebagai serangan
+
+Karena itu `GET …/queue/me` menerima **identity token ATAU cookie**, dan menjadi satu-satunya
+jalur pemulihan yang disarankan. `POST …/queue/join` tetap memulihkan sebagai jaring pengaman
+BR-07, bukan sebagai jalur normal.
+
+> **Umur kunci adalah bagian dari kontrak pemulihan, bukan detail implementasi.**
+> `token:{uuid}` diberi `EX SALE_WINDOW_SECONDS` — tanpa TTL ia membocorkan 300.000 hash per
+> event yang tidak pernah direklamasi; dengan TTL yang lebih pendek dari masa tunggu,
+> pemulihan rusak diam-diam. `Max-Age` cookie **diturunkan dari nilai yang sama**, bukan
+> dipatok 7200 detik, supaya cookie dan kunci yang dirujuknya tidak pernah kedaluwarsa pada
+> waktu yang berbeda.
+
+> **Kedua lapis ini mengandaikan Redis masih ada.** `token:{uuid}` dan `by_ticket` keduanya
+> hanya hidup di Redis, sehingga pada kehilangan Redis total cookie menunjuk ke sesuatu yang
+> tidak ada lagi dan customer yang belum di-grant kehilangan posisinya — login maupun tamu.
+> Itu pertanyaan RPO, bukan pertanyaan pemulihan sesi; lihat Bagian 17 #7.
 
 ### Kepemilikan: token yang valid ≠ token untuk booking ini
 
@@ -1857,9 +2658,9 @@ yang diterbitkan `outbox-publisher`.
 | NFR-02 | Jangan PHP | Bagian 6 INSERT-sebelum-PUBLISH; Bagian 8 gagal-hold tidak menghilangkan slot; Bagian 8 pause saat dependensi mati |
 | NFR-03 | Flash crowd 200.000+ | Bagian 11 — disiapkan 300.000 |
 | NFR-04 | Stok atomic, tidak oversell | Bagian 8 Lua `DECRBY` dalam satu skrip |
-| NFR-05 | FCFS, tidak dapat dilangkahi | Bagian 6 `INCR` + `by_ticket` — lihat batasan WAF Bagian 16 |
+| NFR-05 | FCFS, tidak dapat dilangkahi | Bagian 6 `INCR` + `by_ticket`, CAPTCHA tak terlihat + rate limit per IP di `/join`, dan BR-07 untuk user login — sisa celahnya (tanpa WAF, tamu tak terbatas) di Bagian 16 |
 | NFR-06 | p95 < 1 detik | Bagian 10 |
-| NFR-07 | Token proteksi; PCI-DSS via gateway | Bagian 12; Bagian 8 — tokenisasi Midtrans.js, backend hanya menerima `token_id` |
+| NFR-07 | Token proteksi; PCI-DSS via gateway | Bagian 12; Bagian 8 — kartu tidak dibuka di POC, sehingga tidak ada data kartu yang masuk sistem. Syaratnya bila kartu ditambahkan ada di Bagian 8 |
 | NFR-08 | REST/JSON platform-agnostic | Bagian 13 |
 | NFR-09 | Observability real-time | Bagian 4 EMF; Bagian 13 dashboard |
 | NFR-10 | Kegagalan email tidak membatalkan | Bagian 9 langkah 5 |
@@ -1876,7 +2677,9 @@ yang diterbitkan `outbox-publisher`.
 1. **FR-15a** sebelumnya menyebut Dukcapil memvalidasi *"nama, status aktif"*. **Telah diputuskan: implementasi mengirim NIK saja** — form tidak mengumpulkan nama. `requirements.md` FR-15a dan Bagian 12 Asumsi telah diperbarui sesuai.
 2. **Bagian 5 dan Bagian 11** sebelumnya mencatat transport sebagai adaptive polling. Telah diperbarui ke SSE.
 
-BR-07 dihapus dan tidak diimplementasikan; konsekuensinya ada di Bagian 16.
+BR-07 **dipulihkan** sebagai batas satu keterlibatan aktif per event untuk user login —
+alasannya okupansi slot, bukan scalping (Bagian 8); tamu tidak terbatas, konsekuensinya
+ada di Bagian 16.
 
 ---
 
@@ -1885,7 +2688,7 @@ BR-07 dihapus dan tidak diimplementasikan; konsekuensinya ada di Bagian 16.
 | Komponen | Per sale event |
 |---|---|
 | ECS Fargate SSE (43 task × 2,5 jam @7.000 conn/task) | ~$10.61 |
-| ECS Fargate admission-ctl | ~$0.06 |
+| ECS Fargate admission-ctl (2 task: leader + standby) | ~$0.12 |
 | Egress SSE (payload 90 B, ~1 update/detik) | ~$17.50 |
 | ALB (LCU aktif + burst koneksi) | ~$3.00 |
 | API Gateway HTTP (~2,5 juta request) | ~$2.50 |
@@ -1948,8 +2751,10 @@ Working set Redis pada 300.000 ≈ 80 MB terhadap 13 GB per node: sizing didasar
 |---|---|
 | **Dukcapil adalah SPOF.** Gangguan menghentikan penjualan, bukan memperlambatnya | Diterima secara sadar. Breaker OPEN mem-pause admission agar tidak ada yang masuk funnel buntu; `DukcapilBlockedSales` dialarmkan; SLA Dukcapil dikonfirmasi T-7 |
 | **Customer yang sedang di dalam saat Dukcapil mati** tetap kehilangan TTL-nya | **BELUM TERTUTUP** — Bagian 17 #4. Opsi: bekukan TTL selama pause, atau perpanjang otomatis sebesar durasi pause |
-| **Tanpa WAF, tidak ada proteksi bot di `/events/{ev}/queue/join`** | Rate limit Redis per IP (20 / 5 menit) menahan percobaan naif, **bukan** botnet terdistribusi. Dengan BR-07 dihapus, satu pihak dapat memborong slot antrian dan menggeser posisi orang lain — **degradasi NFR-05 yang diterima untuk POC**, harus dipulihkan sebelum produksi |
-| Tanpa WAF, tidak ada CAPTCHA dan tidak ada managed rule | Idem. Diterima untuk POC |
+| **Tanpa WAF, proteksi bot di `/join` tidak lengkap** | Kini tiga lapis: rate limit Redis per IP (20 / 5 menit), **CAPTCHA tak terlihat**, dan **BR-07** untuk user login. Yang masih hilang: managed rule, reputasi IP, dan mitigasi DDoS L7 — **degradasi NFR-05 yang diterima untuk POC**, harus dipulihkan sebelum produksi |
+| **Customer tamu tidak dibatasi BR-07** | Tidak ada identitas stabil untuk ditegakkan; batas tamu hanya CAPTCHA + rate limit per IP. Konsekuensinya strategi optimal penyerang adalah tidak login, sehingga BR-07 membatasi pengguna kooperatif — diterima, dengan CAPTCHA sebagai proteksi sebenarnya (Bagian 8) |
+| **Provider CAPTCHA tidak tersedia** | **Fail-open** dengan alarm `CaptchaFailOpenSeconds`. Fail-closed akan mematikan sale sebelum dimulai, dan CAPTCHA melindungi keadilan, bukan kebenaran — tidak ada oversell, NIK, atau uang yang terpengaruh (Bagian 8) |
+| `acct:{ev}:{id}` hilang pada flush/failover | Join ganda lolos di Redis, tetapi indeks parsial `br07_one_active_per_event` di Aurora menolaknya pada GRANT (Bagian 8) |
 | Okupansi slot naik ke maks 15 menit (5 + 10) | Hanya ekor yang terpengaruh: median selesai 2–4 menit. Slot yang ditinggalkan terkunci 15 menit, bukan 10 — dipantau lewat `ExpiryRate` per tahap |
 | Crash antara COMMIT dan `ZADD` | Deadline otoritatif di Aurora; sweep me-rescore; `ExpiryRescored` dipantau (Bagian 7) |
 | Klien lama tanpa `es.close()` pada sold-out | Server menjawab `410 Gone`; `SoldOutStreamRejections` dipantau |
@@ -1961,8 +2766,13 @@ Working set Redis pada 300.000 ≈ 80 MB terhadap 13 GB per node: sizing didasar
 | Outbox at-least-once merusak `slots:open` | Lease guard (Bagian 9) + rekonsiliasi (Bagian 6) |
 | **Rollback Aurora setelah `hold_booking.lua` berhasil** | Redis di luar transaksi: stok dan NIK bocor, dan jalur expiry `SELECTING` tidak mengembalikannya. Kompensasi eksplisit (Bagian 8) + rekonsiliasi stok tiap 60 detik (Bagian 6) + `HoldCompensated` dialarmkan |
 | `nik:used` bocor di Redis | Direkonsiliasi terhadap `nik_claims` tiap 60 detik + `EX` sepanjang sale (Bagian 6) |
+| Posisi antrian yang belum di-grant hilang saat Redis hilang | **Ditutup**: `queue_entries` ditulis ter-batch oleh leader; rebuild di Bagian 6. Sisa eksposurnya adalah lag drain — paling lebar tepat saat badai join, `QPersistLag` dialarmkan (Bagian 17 #7) |
+| Drain `qpersist` tidak mengejar laju join | Buffer tumbuh dan RPO melebar; tidak ada data yang rusak. Naikkan `QPERSIST_BATCH_SIZE` atau pindah ke `COPY`. `QPersistAgeSeconds` adalah angka RPO yang berjalan |
+| Batch insert gagal di tengah drain | `LTRIM` hanya setelah COMMIT, jadi batch yang sama dibaca ulang pada tick berikutnya; `ON CONFLICT DO NOTHING` membuat pengulangan tidak berbahaya |
 | **Redis flush / failover menghapus `nik:used`** | BR-02 tetap ditegakkan `UNIQUE (event_id, nik_hmac)` di Aurora; rekonsiliasi memulihkan kunci Redis dan `NikClaimRestored` dialarmkan |
-| Pepper KMS dirotasi saat sale berjalan | Seluruh hmac berubah dan BR-02 gagal senyap — rotasi dijadwalkan di luar jendela penjualan (Bagian 8) |
+| **Pepper dirotasi, kapan pun** | Seluruh hmac berubah dan BR-02 gagal senyap; backfill **tidak mungkin** karena menuntut NIK plaintext yang tidak disimpan. Pepper diperlakukan permanen (Bagian 8) |
+| **Pepper hilang** | Setiap `nik_hmac` tidak dapat dicocokkan dan BR-02 berhenti bekerja selamanya. Mitigasi: pepper disimpan sebagai secret yang dapat di-backup — alasan utama `GenerateMac` ditolak (Bagian 8) |
+| **Pepper bocor** | Enumerasi offline seluruh NIK tersimpan; ruang NIK valid cukup kecil. **Tidak dapat diremediasi** karena rotasi tidak tersedia — diterima untuk POC; hardening `GenerateMac` sebelum produksi (Bagian 8) |
 | Rekonsiliasi memakai drift basi | `current_drift`, bukan `last_drift` (Bagian 6) |
 | **Redis flush menghapus `stock:{ev}:{cat}`** | `GET` mengembalikan `false`, bukan 0 — skrip menjawab `STOCK_UNINITIALIZED` (503) alih-alih mengumumkan sold-out, dan rekonsiliasi menanam ulang **segera** tanpa aturan dua-tick (Bagian 6, 8) |
 | **`stock` menjadi negatif** | Redis tidak punya `CHECK (stock >= 0)`; Fase 3 memeriksa hasil `DECRBY` dan mengembalikan seluruh pengurangan plus kunci NIK bila negatif, lalu `StockNegativeGuard` dialarmkan (Bagian 8) |
@@ -1985,14 +2795,24 @@ Working set Redis pada 300.000 ≈ 80 MB terhadap 13 GB per node: sizing didasar
 | Outbox retry menerbitkan QR ganda | `UNIQUE (booking_item_id)` pada `tickets` (Bagian 4) |
 | Submit ulang `/bookings` menolak NIK sendiri | Guard `FOR UPDATE` mengembalikan booking yang ada (Bagian 8) |
 | Task ECS tertinggal menyala setelah sale | Alarm `IdleTaskCount > 0` di luar jendela sale (Bagian 11) |
+| **ECS diturunkan ke 0 pada momen sold-out, bukan pada `CLOSED`** | `SOLD_OUT` reversibel: kursi yang dilepas tidak akan terjual, `CLOSED` tidak pernah disetel, dan 300.000 koneksi yang sengaja dipertahankan kehilangan servernya. Definisi "selesai" dipatok ke `state == CLOSED` di Bagian 11 |
 | Kuota Fargate vCPU / Lambda concurrency | Service Quota Request T-7 hari |
+| **Tick tertahan lebih lama dari TTL lease** — leader kehilangan kunci sementara masih bertindak | Kedua operasi non-idempoten punya pengaman mandiri: compare-and-adjust pada rekonsiliasi stok, `grace_applied NX` pada pause grace. Lease menjaga ketersediaan, bukan satu-satunya penjaga korektifitas (Bagian 11) |
+| **Failover Redis membuat lease dipegang dua task** | Replikasi ElastiCache asinkron, jadi `SET` dapat hilang saat failover primary. Tidak dapat dicegah — ditutup oleh pengaman di sumber daya + fencing token `ctl:epoch`, dengan `StaleLeaderRejected` dialarmkan (Bagian 11) |
+| `EXPIRE` / `DEL` buta pada lease | Keduanya wajib lewat Lua bersyarat (`GET == task_id` dalam operasi yang sama); `DEL` buta akan menghapus lease task lain dan justru mengundang pemimpin kedua (Bagian 11) |
+| Handover leader terlalu sering karena hiccup Redis | TTL 5 detik memberi 10× margin atas tick 500 ms; `CtlLeaderHandovers` dialarmkan |
+| Kedua task ctl mati bersamaan | ECS mengganti keduanya; selama itu antrian membeku. **Lease tidak menolong** — tidak ada yang mengambilnya. Detektor keheningan sse-server menyalakan `status {stale:true}` ke customer, dan `CtlHeartbeatAge` statistik **Minimum** mem-page operasi (Bagian 11) |
+| **Leader hidup tetapi tick loop macet** | Lease tetap diperpanjang oleh thread timer, jadi standby tidak pernah terpicu dan tidak ada pemulihan otomatis sama sekali. Satu-satunya mitigasi adalah alarm `CtlHeartbeatAge` yang membangunkan operator (Bagian 11) |
 | ALB ramp 5.000 conn/s di T=0 | Uji pada ramp |
 | Mobile background tidak menerima grant | `readmit` maks 2× atas `LAPSED`. **Degradasi yang diterima**: tanpa grace antrian, jam booking 300 detik sudah berjalan saat push terlewat, sehingga waktu memilih customer itu berkurang — lihat Bagian 7 |
-| Redis Pub/Sub kehilangan pesan saat failover | Resync + re-broadcast; `status {stale:true}`; heartbeat 10 detik |
+| Redis Pub/Sub kehilangan pesan saat failover | Resync + re-broadcast; `status {stale:true}`; heartbeat 10 detik. Bila yang putus hanya **satu** task sse-server, `admission-ctl` sehat dan hanya detektor per-task yang menangkapnya — `CtlHeartbeatAge` statistik **Maximum** (Bagian 11) |
 | `readmit` livelock | Batas 2× per token; `EXPIRE` + job post-sale |
 | Kontensi kategori saat tekan Pay | Aturan gagal-hold: slot tidak hilang (Bagian 8) |
 | NIK terkunci oleh booking kedaluwarsa | `DEL nik:used` pada jalur expiry (Bagian 8) |
-| PII pihak ketiga ke API eksternal | Persetujuan dicatat terpisah dari T&C; HMAC + KMS; retensi (Bagian 17) |
+| PII pihak ketiga ke API eksternal | Persetujuan dicatat terpisah dari T&C; HMAC + KMS; retensi di Bagian 8 |
+| **NIK pihak ketiga di `saved_niks` tidak punya jalur hapus self-service** | Pemilik akun dapat menghapus; orang yang NIK-nya disimpan tidak punya akun untuk memintanya. Ditangani operasional — **titik terlemah terhadap UU PDP**, diterima untuk POC (Bagian 8) |
+| Permintaan hapus masuk sebelum event | Dijadwalkan, bukan dieksekusi: `nik_claims` menegakkan BR-02 dan `tickets.nik_hmac` dipakai di gerbang. Dihapus setelah event + jendela sengketa (Bagian 8) |
+| PII bertumpuk tanpa batas tanpa purge berjadwal | Diterima untuk POC; `queue_entries` tumbuh 300.000 baris/event. Purge berjadwal adalah tindak lanjut sebelum produksi (Bagian 8) |
 
 ---
 
@@ -2003,23 +2823,50 @@ Working set Redis pada 300.000 ≈ 80 MB terhadap 13 GB per node: sizing didasar
 | 1 | `DUKCAPIL_RATE_LIMIT_RPS` dan **SLA ketersediaan** Dukcapil | **Pemilik tender / Dukcapil** |
 | 2 | Biaya per panggilan Dukcapil | **Pemilik tender** |
 | 3 | Cap antrian / pesan jujur saat 300.000 : 10.000 tiket | **Pemilik tender** |
-| 4 | Perlakuan TTL customer yang sedang aktif saat admission di-pause — biarkan berjalan, bekukan selama pause, atau geser tenggat sebesar durasi pause (dengan batas atas, karena `grant:{token}` hanya hidup 1200 detik) | **Pemilik tender** |
-| 5 | Kapasitas koneksi per ECS task | Tim — **T-14 hari** |
-| 6 | `MAX_CONCURRENT_SLOTS` + maksimum okupansi slot | Tim |
-| 6a | Apakah `SOLD_OUT` dibuat **reversibel** sehingga tiket dari booking yang kedaluwarsa dapat terjual kembali — menuntut `advance_now_serving.lua` mengembalikan `state` ke `OPEN` dan perilaku `410 Gone` ditinjau ulang | **Pemilik tender** |
-| 7 | Kebijakan retensi PII (NIK, `contact_email`, `holder_email`) | Tim |
-| 8 | RPO / RTO | Tim |
-| 9 | Daftar skenario load test + threshold | Tim + QA |
-| 10 | Aksesibilitas (`aria-live` pada angka antrian dan banner pause) | Tim FE |
+| 4 | Kapasitas koneksi per ECS task | Tim — **T-14 hari** |
+| 5 | `MAX_CONCURRENT_SLOTS` + maksimum okupansi slot | Tim |
+| 6 | Daftar skenario load test + threshold, **termasuk rehearsal T-2 hari** (ramp sintetis 300.000 join, fan-out SSE, sold-out lalu resume) — Bagian 11 | Tim + QA |
+| 7 | Aksesibilitas (`aria-live` pada angka antrian dan banner pause) | Tim FE |
+| 8 | Kuota provider CAPTCHA untuk 300.000 verifikasi dalam ~60 detik | Tim — **T-7 hari** |
+| 9 | Alamat IP webhook Midtrans untuk allowlist | Tim — **T-7 hari** |
 
-**Diputuskan dan ditutup**: transport SSE; perlakuan Dukcapil fail-closed; penghapusan WAF
-untuk POC; TTL berurutan dengan anchor `granted_at` dan `held_at`, tanpa grace antrian; target kapasitas
-300.000; Dukcapil memvalidasi NIK saja; penomoran kursi tidak diimplementasikan di POC —
-tiket berisi QR code, kategori, dan NIK pemegang; push notification TIDAK dibangun di POC;
-Session_TTL_Antrian TIDAK dipakai — grace period setelah alokasi slot sudah menutupinya;
-refund disputed dicatat dan direkonsiliasi manual, tidak otomatis;
-bukti verifikasi NIK berlaku permanen tanpa revalidasi berkala; kontrak API per endpoint — `api-contracts.md`
-v2.0 berstatus Accepted dan mencakup seluruh endpoint.
+**Diputuskan dan ditutup**: pengawasan kesegaran antrian — **sse-server** mendeteksi
+keheningan `sse-broadcast` > `SSE_STALE_AFTER_SECONDS` (30 detik, = 3 heartbeat) selama
+`state ∈ {OPEN, SOLD_OUT}` dan menyalakan `status {stale:true, reason}` lewat event yang
+sudah ada, sementara `CtlHeartbeatAge` diemisi sse-server dengan dua alarm (**Minimum** >
+30 detik mem-page = ctl mati; **Maximum** = subscription satu task putus); pengawas
+berbasis timer **di klien ditunda** karena setelah leader lease yang tersisa hanya
+sse-server macet sendiri atau TCP half-open, dan nol kode klien lebih berharga; pepper
+NIK disimpan sebagai secret yang dikelola KMS dan
+di-HMAC di dalam proses — `GenerateMac` ditolak karena kunci yang tidak dapat diekspor
+menukar satu kegagalan permanen dengan yang lain, sementara rotasi pepper memang tidak
+mungkin; retensi PII — tanpa batas waktu, dihapus manual atas permintaan
+pemilik data, dengan lantai "tidak sebelum event berlangsung" karena `nik_claims` menegakkan
+BR-02 dan `tickets.nik_hmac` memvalidasi di gerbang; RTO diterima sebagai perilaku — **antrian membeku, tidak
+kehilangan data** — tanpa perubahan infrastruktur; RPO — nol untuk data berbayar, dan
+jendela ~90 detik selama
+badai join diterima untuk posisi antrian; posisi antrian dipersistenkan ke `queue_entries`
+lewat buffer
+Redis yang dikuras ter-batch oleh leader (bukan insert sinkron saat join, yang akan
+menaruh Aurora di jalur kritis flash crowd); `admission-ctl` berjalan **2 task, 1 leader + 1 standby, dengan
+leader lease** — perpanjangan dan pelepasannya bersyarat lewat Lua, dengan fencing token
+`ctl:epoch`; lease ganda **tidak dicegah melainkan dibuat tidak berbahaya** oleh pengaman
+di sumber daya (compare-and-adjust pada rekonsiliasi stok, `grace_applied NX` pada pause
+TTL grace); transport SSE; Dukcapil fail-closed dengan pause admission penuh;
+`SOLD_OUT` reversibel selama 930 detik dengan `CLOSED` sebagai keadaan terminal;
+`PAUSE_TTL_GRACE_SECONDS` digeser saat pause **mulai**, bukan saat berakhir; dua metode
+pembayaran (`bank_transfer` + `gopay`) — kartu kredit dan OTC keluar karena tidak dapat
+menghormati TTL di sisi gateway; CAPTCHA tak terlihat di `/join`, fail-open; BR-07 dipulihkan
+sebagai satu keterlibatan aktif per event untuk user login; penghapusan WAF untuk POC; TTL
+berurutan dengan anchor `granted_at` dan `held_at` **tanpa grace antrian** (perjalanan maksimum
+15,5 menit); stok Redis-otoritatif dengan rekonsiliasi Aurora; hold multi-kategori
+all-or-nothing; target kapasitas 300.000; Dukcapil memvalidasi NIK saja; penomoran kursi tidak
+diimplementasikan di POC — tiket berisi QR code, kategori, dan NIK pemegang; push notification
+TIDAK dibangun di POC; `Session_TTL_Antrian` TIDAK dipakai — slot yang diberikan tapi tidak
+diklaim direbut kembali oleh TTL Booking itu sendiri; refund disputed dicatat dan
+direkonsiliasi manual, tidak otomatis; bukti verifikasi NIK berlaku permanen tanpa revalidasi
+berkala; kontrak API per endpoint — `api-contracts.md` v2.1 berstatus Accepted dan mencakup
+seluruh endpoint.
 
 ---
 
@@ -2028,13 +2875,15 @@ v2.0 berstatus Accepted dan mencakup seluruh endpoint.
 - `requirement/requirements.md` v1.0 (Finalized) — FR-01..35, NFR-01..10, BR-01..10
 - `Tender Rusuh Booking Ticket.pdf` — baseline
 - `requirement/update-requirement-rusuh-booking-tiket.md` — login opsional, BR-01/BR-02, BR-07
-- `payment-method/` — tiga metode Midtrans Core API, diagram alur dan tautan sumber
+- `payment-method/` — dua metode Midtrans Core API, diagram alur dan tautan sumber
 - [Midtrans Core API](https://docs.midtrans.com/docs/custom-interface-core-api) ·
   [Transaction Status Cycle](https://docs.midtrans.com/docs/transaction-status-cycle) ·
   [Signature notifikasi](https://docs.midtrans.com/reference/receiving-notifications) ·
   [custom_expiry](https://docs.midtrans.com/docs/coreapi-advanced-features)
-- ADR-001 — Teknologi Antrian untuk Virtual Waiting Room
-- ADR-002 — Mekanisme Penentuan Posisi Antrian per Customer
+- ADR-001 — Teknologi Antrian untuk Virtual Waiting Room *(keputusan berlaku; skema key
+  dan TTL di dalamnya digantikan dokumen ini)*
+- ADR-002 — Mekanisme Penentuan Posisi Antrian per Customer *(model counter berlaku;
+  ilustrasi polling + CDN di dalamnya digantikan SSE pada dokumen ini)*
 - ADR-003 — Mekanisme Pengiriman Update Posisi Antrian ke Client *(superseded by ADR-005)*
 - ADR-004 — Pemilihan Compute Service *(superseded by ADR-005)*
 - [HTML Living Standard: Server-sent events](https://html.spec.whatwg.org/multipage/server-sent-events.html)

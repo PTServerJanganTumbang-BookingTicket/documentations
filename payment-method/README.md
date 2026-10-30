@@ -5,19 +5,22 @@
 **Status**: Accepted
 **Selaras dengan**: ADR-005 Bagian 9, `api/api-contracts.md` §5
 
-POC ini membuka **tiga** metode pembayaran dari katalog Midtrans. Masing-masing punya
+POC ini membuka **dua** metode pembayaran dari katalog Midtrans. Masing-masing punya
 dokumen sendiri karena bentuk alurnya berbeda — bukan sekadar nilai `payment_type` yang
 berbeda.
 
 | Metode | `payment_type` | Dokumen | Sifat |
 |---|---|---|---|
-| Kartu Kredit/Debit | `credit_card` | [01-credit-card.md](./01-credit-card.md) | Sinkron, hasil langsung, butuh 3DS |
-| Transfer Bank (VA) | `bank_transfer` | [02-bank-transfer-va.md](./02-bank-transfer-va.md) | Asinkron, customer bayar di ATM/m-banking |
-| E-Wallet (GoPay) | `gopay` | [03-e-wallet-gopay.md](./03-e-wallet-gopay.md) | Asinkron, customer bayar di aplikasi |
+| Transfer Bank (VA) | `bank_transfer` | [01-bank-transfer-va.md](./01-bank-transfer-va.md) | Asinkron, customer bayar di ATM/m-banking |
+| E-Wallet (GoPay) | `gopay` | [02-e-wallet-gopay.md](./02-e-wallet-gopay.md) | Asinkron, customer bayar di aplikasi |
+
+> **Keduanya asinkron, dan itu bukan kebetulan.** Kartu kredit dikeluarkan dari POC justru
+> karena ia satu-satunya metode yang tidak dapat menghormati TTL pembayaran di sisi
+> gateway — lihat keputusan 3 di bawah.
 
 ---
 
-## Yang berlaku untuk ketiganya
+## Yang berlaku untuk keduanya
 
 **Satu endpoint charge.** `POST /v2/charge` dengan Basic Auth (`base64(ServerKey:)`).
 Yang berbeda hanya isi body dan bentuk respons.
@@ -28,7 +31,7 @@ sehingga percobaan ulang **wajib** memakai nilai baru. Sistem ini memakai
 customer menekan coba lagi menjadi `RB-00912:2`. Lihat ADR-005 Bagian 8.
 
 **Status tidak pernah dipercaya dari frontend.** Midtrans menyatakannya eksplisit untuk
-kartu maupun e-wallet: callback di browser dapat mengembalikan `pending` sementara verifikasi
+e-wallet: callback di browser dapat mengembalikan `pending` sementara verifikasi
 masih berjalan. Kebenaran hanya datang dari **webhook** atau **Get Status API**.
 
 **Verifikasi tanda tangan webhook**:
@@ -48,12 +51,15 @@ Konkatenasi polos, tanpa pemisah. Tidak cocok → **abaikan notifikasi**, jangan
 
 | `transaction_status` | `fraud_status` | Perlakuan |
 |---|---|---|
-| `capture` | `accept` | **Lunas** (kartu) |
-| `capture` | `deny` / `challenge` | **Bukan lunas** — jangan terbitkan tiket |
-| `settlement` | `accept` | **Lunas** (semua metode) |
+| `settlement` | `accept` | **Lunas** — satu-satunya jalur sukses untuk VA dan GoPay |
+| `settlement` | `deny` / `challenge` | **Bukan lunas** — jangan terbitkan tiket |
 | `pending` | — | Belum dibayar; booking tetap `AWAITING_PAYMENT` |
 | `deny`, `cancel`, `failure` | — | Gagal; kembali ke `HELD`, customer boleh pilih metode lain |
 | `expire` | — | Kedaluwarsa; lepas stok dan NIK |
+
+> **`capture` tidak akan muncul.** Ia khusus kartu kredit, yang di luar cakupan POC. Namun
+> `fraud_status` **tetap wajib dibaca** bersama `transaction_status`: Midtrans mengirimkannya
+> pada metode apa pun, dan `settlement` + `deny` bukan pembayaran yang sah.
 
 ---
 
@@ -106,7 +112,7 @@ ganti metode — bergerak di antara keduanya.
 | State | Isi layar |
 |---|---|
 | **A — memilih** | Daftar metode (§5.1), tombol "Bayar Sekarang", countdown |
-| **B — instruksi** | Nomor VA / QR / iframe 3DS, countdown, polling status tiap 2 detik |
+| **B — instruksi** | Nomor VA atau QR/deeplink GoPay, countdown, polling status tiap 2 detik |
 
 `POST /payments/{booking_id}` membawa A → B. Yang mengembalikan B → A ada dua, dan keduanya
 berbeda di kode:
@@ -182,16 +188,9 @@ membacanya sebagai *"waktu habis"* dan mengarahkan ke layar kedaluwarsa — **bu
 generik. Bentuk 409-nya sama dengan ketidakcocokan status lain, jadi handler membaca status
 dari respons, bukan menebak penyebabnya.
 
-### Ganti metode ke kartu
-
-`requires_tokenization: true` pada respons §5.1 memberi tahu frontend untuk menjalankan
-Midtrans.js sebelum memanggil charge. Tidak ada perlakuan khusus untuk pergantian itu
-sendiri — `token_id` hanyalah bagian dari request charge biasa, dan selalu baru karena token
-Midtrans sekali pakai.
-
 ---
 
-## Dua keputusan POC yang mempersempit cakupan
+## Tiga keputusan POC yang mempersempit cakupan
 
 ### 1. Hanya BCA, BNI, BRI, CIMB untuk VA
 
@@ -231,9 +230,28 @@ Sebagai lapis kedua, sweep memanggil `POST /v2/{order_id}/expire` saat meng-expi
 Keduanya dipasang karena jam Midtrans dan jam kita tidak dijamin identik, dan selisih
 beberapa detik cukup untuk menerima pembayaran atas kursi yang sudah dijual ulang.
 
-> **`custom_expiry` tidak berlaku untuk kartu kredit.** Midtrans menyatakannya eksplisit.
-> Jendela kartu ditentukan batas waktu 3DS, dan untuk kartu lapisan pelindungnya adalah
-> pemanggilan `/expire` dari sweep.
+### 3. Kartu kredit dan Over the Counter dikeluarkan dari POC
+
+Keduanya gagal pada syarat yang sama: **tidak dapat menghormati TTL pembayaran 10 menit.**
+
+**Kartu kredit** — Midtrans menyatakan eksplisit bahwa `custom_expiry` **tidak berlaku**
+untuknya. Jendelanya ditentukan batas waktu 3DS, yang bukan milik kita, sehingga BR-05 hanya
+dapat ditegakkan oleh sweep kita sendiri tanpa dukungan gateway. Dua metode yang tersisa
+keduanya menerima `custom_expiry`, jadi mengeluarkan kartu membuat **setiap** metode yang
+hidup di POC menutup jendelanya pada detik yang sama dengan jendela kita.
+
+Keluarnya kartu sekaligus mengeluarkan cakupan PCI-DSS, alur tokenisasi Midtrans.js di
+browser, penanganan `client_key`, dan iframe 3DS — permukaan yang tidak dibutuhkan POC
+antrian.
+
+**Over the Counter** (Indomaret/Alfamart) — customer harus datang ke gerai secara fisik.
+Tidak ada jendela 10 menit yang masuk akal untuk itu; kanal OTC lazimnya berjendela 24 jam.
+Indomaret juga salah satu dari tiga kanal yang tercatat dapat **reversal** (keputusan 1), jadi
+memasukkannya akan membatalkan penyederhanaan itu sekaligus.
+
+> **Sebelum produksi**: kartu kredit hampir pasti wajib ada secara komersial. Menambahkannya
+> menuntut keputusan eksplisit tentang BR-05 — memperpanjang TTL khusus kartu, atau menerima
+> bahwa untuk kartu tenggatnya ditegakkan sepihak oleh sweep tanpa jaminan gateway.
 
 ---
 

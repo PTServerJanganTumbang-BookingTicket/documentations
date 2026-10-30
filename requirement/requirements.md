@@ -53,6 +53,9 @@ menangani lonjakan trafik ekstrem (flash crowd) saat penjualan tiket dibuka.
 | FR-09  | Waiting Room  | Menampilkan estimasi waktu tunggu berdasarkan laju antrian            | COULD    |
 | FR-10  | Waiting Room  | Posisi tetap konsisten saat refresh halaman                           | MUST     |
 | FR-10a | Waiting Room  | Join antrian ditolak **`QUEUE_FULL`** (fail fast) saat kapasitas antrian event penuh — tanpa buffering | MUST     |
+| FR-10d | Waiting Room  | Join antrian menuntut **CAPTCHA tak terlihat**, berlaku untuk tamu dan user login | MUST     |
+| FR-10e | Waiting Room  | Token CAPTCHA diambil **sebelum** sale dibuka dan disegarkan berkala; tidak ada tantangan interaktif saat join | MUST     |
+| FR-10f | Waiting Room  | Provider CAPTCHA tidak tersedia → join **tetap diterima** (fail-open) dengan alarm | MUST     |
 | FR-11  | Detail Ticket | Menampilkan detail event beserta kategori tempat                      | MUST     |
 | FR-12  | Detail Ticket | Setiap kategori menampilkan stok available dan harga                  | MUST     |
 | FR-13  | Detail Ticket | Customer dapat membeli maksimal **3 tiket per transaksi**, dijumlahkan **lintas kategori** | MUST     |
@@ -68,6 +71,8 @@ menangani lonjakan trafik ekstrem (flash crowd) saat penjualan tiket dibuka.
 | FR-18  | Detail Ticket | TTL habis → booking batal, hold dilepas, slot ke antrian berikutnya   | MUST     |
 | FR-19  | Detail Ticket | Timer booking berjalan di server (server-authoritative)               | MUST     |
 | FR-20  | Payment       | Customer dapat memilih metode pembayaran dari mitra tersedia          | MUST     |
+| FR-20a | Payment       | **Dua** metode di POC: Transfer Bank VA (BCA/BNI/BRI/CIMB) dan E-Wallet GoPay | MUST     |
+| FR-20b | Payment       | Kartu kredit dan Over the Counter **di luar cakupan POC** — keduanya tidak dapat menghormati TTL 10 menit di sisi gateway | MUST     |
 | FR-21  | Payment       | Menampilkan countdown TTL Pembayaran (10 menit)                       | MUST     |
 | FR-22  | Payment       | Pembayaran berhasil → email e-tiket ke customer                       | MUST     |
 | FR-23  | Payment       | Pembayaran tidak selesai dalam 10 menit → booking batal, stok dilepas | MUST     |
@@ -109,7 +114,7 @@ menangani lonjakan trafik ekstrem (flash crowd) saat penjualan tiket dibuka.
 | NFR-02 | Reliability   | "Jangan PHP": customer yang sudah dapat slot dijamin selesai journey          |
 | NFR-03 | Scalability   | Menangani flash crowd 200.000+ user dengan auto-scaling layer stateless; target rancangan **300.000 concurrent** |
 | NFR-04 | Consistency   | Stok tidak oversell; pengurangan stok harus atomic                            |
-| NFR-05 | Fairness      | Antrian FCFS; posisi adil dan tidak dapat dilangkahi                          |
+| NFR-05 | Fairness      | Antrian FCFS; posisi adil dan tidak dapat dilangkahi. Proteksi: rate limit per IP + CAPTCHA tak terlihat di join + BR-07 untuk user login. Tanpa WAF, botnet terdistribusi tetap di luar jangkauan — degradasi yang diterima untuk POC |
 | NFR-06 | Performance   | Pembaruan posisi antrian dan halaman utama memiliki latensi rendah (p95 < 1 detik) di bawah beban tinggi — **semua posisi**, sesuai tender asli |
 | NFR-07 | Security      | Detail/Payment page diproteksi token; PCI-DSS via gateway                     |
 | NFR-08 | Portability   | API platform-agnostic (REST/JSON) untuk web dan mobile                        |
@@ -118,6 +123,7 @@ menangani lonjakan trafik ekstrem (flash crowd) saat penjualan tiket dibuka.
 | NFR-11 | Compliance    | Pemrosesan NIK pihak ketiga tunduk **UU PDP No. 27/2022**: persetujuan eksplisit, rekam immutable, NIK disimpan sebagai HMAC (bukan plaintext) |
 | NFR-12 | Cost          | Dukcapil berbayar per panggilan; NIK Terdaftar dan Daftar NIK Teman ada untuk menekan volume. Volume aktual **bergantung pada rasio login** — estimasi tender memakai skenario tamu-berat |
 | NFR-13 | Capacity      | Kapasitas antrian dibatasi **300.000 per event**; kelebihan ditolak fail-fast, tidak di-buffer |
+| NFR-14 | Observability | Kesegaran data antrian terpantau di **dua arah**: hilangnya broadcast > 30 detik menyalakan indikator stale ke customer, dan `CtlHeartbeatAge` mem-page operasi. Ini deteksi, bukan pemulihan — pemulihannya ada di leader lease `admission-ctl` |
 
 ---
 
@@ -131,7 +137,7 @@ menangani lonjakan trafik ekstrem (flash crowd) saat penjualan tiket dibuka.
 | BR-04 | —          | TTL Booking habis → booking batal, hold dilepas, slot ke antrian berikutnya       |
 | BR-05 | —          | TTL Pembayaran = **10 menit** sejak booking dibuat                                |
 | BR-06 | —          | TTL Pembayaran habis → booking batal, stok dilepas, email expired dikirim         |
-| BR-07 | ❌ DELETED | ~~Satu customer satu slot aktif~~ — tidak berlaku lagi                            |
+| BR-07 | ✔ RESTORED | **Satu keterlibatan aktif per event** untuk customer login (antrian ATAU booking). Dilepas saat terminal — setelah `CONFIRMED` boleh antre lagi, dari belakang. **Tidak berlaku untuk tamu** |
 | BR-08 | —          | Stok yang sudah dibayar bersifat final; stok di-hold tidak bisa dibeli orang lain |
 | BR-09 | ➕ NEW     | Re-entrant user dalam TTL kembali ke halaman yang sama dengan token yang sama     |
 | BR-10 | ➕ NEW     | **Server time** sebagai source of truth untuk semua operasi waktu                 |
@@ -146,6 +152,8 @@ menangani lonjakan trafik ekstrem (flash crowd) saat penjualan tiket dibuka.
 | BR-18 | ❌ REJECTED | ~~Push notification giliran tiba~~ — tidak dibangun di POC                        |
 | BR-20 | ❌ REMOVED | ~~Grace antrian 120 detik antara GRANT dan klaim~~ — jam booking mulai saat slot diberikan |
 | BR-19 | ➕ NEW     | Refund Disputed **tidak otomatis** di POC — ditandai, dilaporkan, dieksekusi manual |
+| BR-21 | ➕ NEW     | Sold out bersifat **sementara**: kursi dari booking kedaluwarsa dijual kembali pada posisi antrian yang sama. Final setelah 930 detik |
+| BR-22 | ➕ NEW     | Pause admission menambah **60 detik** (`PAUSE_TTL_GRACE_SECONDS`) ke tenggat booking dan pembayaran yang sedang berjalan |
 
 ---
 
@@ -165,7 +173,10 @@ menangani lonjakan trafik ekstrem (flash crowd) saat penjualan tiket dibuka.
 | Anchor TTL           | Booking dari `granted_at`, pembayaran dari `held_at` — berurutan, maksimum **15,5 menit** |
 | NIK verification     | **Fail-closed**; bukti verifikasi tersimpan (akun + Daftar NIK Teman + cache 24 jam) dipakai ulang untuk menekan biaya Dukcapil |
 | Degradasi dependensi | Circuit breaker Dukcapil **atau** payment gateway OPEN (= dependensi sedang tidak dapat dipakai) → **pause admission**: tidak ada grant baru, antrian berhenti maju, tidak ada posisi yang hilang. Berlaku sama untuk kedua dependensi, tanpa pengecualian |
-| Payment gateway      | **Midtrans Core API** — Credit Card, Bank Transfer VA (BCA/BNI/BRI/CIMB), E-Wallet GoPay |
+| TTL saat pause       | Tenggat yang sedang berjalan digeser **+60 detik** (`PAUSE_TTL_GRACE_SECONDS`, dapat dikonfigurasi) **saat pause dimulai** — bukan saat berakhir, karena sweep tetap berjalan dan yang kedaluwarsa di tengah pause sudah terlambat ditolong |
+| Sold out             | **Reversibel** selama 930 detik: kursi yang dilepas booking kedaluwarsa dijual kembali pada posisi antrian yang sama. Sesudah itu `CLOSED`, stream ditutup `410 Gone` |
+| Payment gateway      | **Midtrans Core API** — Bank Transfer VA (BCA/BNI/BRI/CIMB) dan E-Wallet GoPay. Kartu kredit dan OTC di luar cakupan: keduanya tidak dapat menghormati TTL 10 menit di sisi gateway |
+| Proteksi bot         | Rate limit Redis per IP **lalu** CAPTCHA tak terlihat di join (urutan itu wajib), plus BR-07 untuk user login. Provider CAPTCHA mati → fail-open |
 | Disputed refund      | Dicatat dan dilaporkan; **eksekusi manual** di POC |
 
 ---
@@ -244,7 +255,7 @@ antrian penuh sebelum mengklik.
     ↓
 [Payment Page]
     │
-    ├── Pilih metode pembayaran (Credit Card / VA / GoPay)
+    ├── Pilih metode pembayaran (VA / GoPay)
     ├── Countdown TTL Pembayaran (10 menit)
     ├── Polling status pembayaran
     ├── Ganti metode → batalkan transaksi lama ke gateway, buat yang baru
@@ -325,8 +336,14 @@ antrian penuh sebelum mengklik.
 | Disputed            | Callback "berhasil" tiba setelah booking dibatalkan final; perlu rekonsiliasi dan refund manual |
 | Kapasitas Antrian   | Batas maksimum posisi antrian per event (300.000); kelebihan ditolak `QUEUE_FULL`     |
 | State Antrian       | `queue_state`: `NOT_OPEN` / `DIRECT` / `OPEN` / `FULL` per event — sumbu izin masuk    |
+| CAPTCHA Tak Terlihat | Verifikasi berbasis skor tanpa teka-teki; token diambil sebelum sale buka agar tidak menambah waktu manusia ke dalam perlombaan `INCR issued` |
+| Keterlibatan Aktif  | Satu posisi antrian atau booking yang belum terminal; dasar penegakan BR-07 untuk customer login |
 | Status Event        | `status`: `AVAILABLE` / `SELLING_OUT_FAST` / `SOLD_OUT` — sumbu stok, terpisah dari antrian |
+| Sold Out Sementara  | Stok nol tetapi kursi masih dapat kembali dari booking yang kedaluwarsa; stream SSE tetap terbuka dan antrian tidak kehilangan posisinya |
+| Sale Ditutup        | Keadaan terminal setelah 930 detik tanpa kemungkinan kursi kembali; stream ditutup dan koneksi baru ditolak `410 Gone` |
+| Pause TTL Grace     | Tambahan 60 detik pada tenggat booking dan pembayaran yang sedang berjalan, diberikan saat admission di-pause agar gangguan sistem tidak memakan waktu customer |
 | Display Block       | Jawaban siap-render dari server (`enabled`, `action`, `label_key`, `badge_key`); frontend tidak menghitung presedensi |
+| CAS                 | *Compare-And-Swap* — mengubah nilai hanya bila ia **masih** sama dengan yang dibaca, dalam satu operasi atomik; pihak yang kalah balapan mendapat 0 baris dan berhenti sebelum efek sampingnya, sehingga dua proses bersamaan tetap aman tanpa lock |
 
 ---
 
@@ -337,7 +354,7 @@ antrian penuh sebelum mengklik.
 | Login         | ✏️ UPDATED | Dari implisit wajib → **opsional** (dikonfirmasi CEO)     |
 | BR-01         | ✏️ UPDATED | Kuota 3 tiket: dari per-NIK kumulatif → **per transaksi** |
 | BR-02         | ✏️ UPDATED | Kuota NIK: dari 3 tiket per NIK → **1 NIK per seat**      |
-| BR-07         | ❌ DELETED | Satu slot aktif per customer tidak lagi berlaku           |
+| BR-07         | ✔ RESTORED | Satu keterlibatan aktif per event, user login saja — alasannya okupansi slot, bukan scalping |
 | BR-09         | ➕ NEW     | Re-entrant user dalam TTL kembali ke halaman yang sama    |
 | BR-10         | ➕ NEW     | Server time sebagai source of truth                       |
 | FR-26..28     | ➕ NEW     | Email ke pemegang NIK, bukan hanya pembeli                |
@@ -348,9 +365,12 @@ antrian penuh sebelum mengklik.
 | Fail-closed   | 🔧 DECIDED | Dukcapil gagal/timeout → booking diblokir (BR-13)         |
 | Pause         | 🔧 DECIDED | Breaker Dukcapil / gateway OPEN → pause admission (BR-13a) |
 | Grace antrian | ❌ REMOVED | Jam booking mulai saat slot diberikan (BR-03, BR-20)      |
+| Sold out      | 🔧 DECIDED | Reversibel 930 detik, lalu `CLOSED` (BR-21)              |
+| TTL saat pause| 🔧 DECIDED | +60 detik saat pause mulai, dapat dikonfigurasi (BR-22)  |
 | Event status  | 🔧 DECIDED | Dua field + `display` server-side (FR-03a..e)             |
 | Multi-kategori| 🔧 DECIDED | Satu transaksi boleh lintas kategori, all-or-nothing (FR-13a..b) |
-| Gateway       | 🔧 DECIDED | Midtrans Core API — tiga metode pembayaran                |
+| Gateway       | 🔧 DECIDED | Midtrans Core API — dua metode (VA + GoPay)              |
+| CAPTCHA       | 🔧 DECIDED | Tak terlihat, di join antrian, fail-open (FR-10d..f)      |
 
 ### Tambahan v1.1 — usulan tim 25 Oktober 2026, butir 1–8
 

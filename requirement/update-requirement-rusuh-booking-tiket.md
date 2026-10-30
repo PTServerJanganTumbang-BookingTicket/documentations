@@ -92,24 +92,60 @@ yang valid dan unik untuk setiap kursi — bukan hanya satu NIK untuk beberapa t
 
 ---
 
-### 3.3 BR-07 — Dihapus
+### 3.3 BR-07 — Diluruskan, bukan dihapus
 
 | | Sebelum | Sesudah |
 |---|---|---|
-| **Rumusan** | Satu customer hanya memegang satu slot aktif pada satu waktu untuk event yang sama. | **Dihapus.** |
-| **Status** | Aktif | Tidak berlaku lagi |
+| **Rumusan** | Satu customer hanya memegang satu slot aktif pada satu waktu untuk event yang sama. | **Satu keterlibatan aktif per event** — posisi antrian **atau** booking yang belum terminal. Berlaku untuk customer **login**; tidak berlaku untuk customer tamu. |
+| **Status** | Aktif | **Aktif, dengan cakupan yang dipersempit** |
+| **Jumlah event** | Tidak dibatasi | **Tidak dibatasi** — satu keterlibatan per event, berapa pun jumlah eventnya |
 
-**Alasan penghapusan:**
+**Mengapa versi "dihapus" perlu dikoreksi.**
 
-Dengan login yang kini opsional dan kuota yang dikendalikan per-NIK per-tiket (BR-02 baru),
-pembatasan satu-slot-per-customer tidak lagi relevan dan justru menghambat pengalaman
-pengguna. Setiap user kini **berkesempatan untuk mendaftar antrian sebanyak mungkin**.
+Pembacaan sebelumnya menilai BR-07 sebagai aturan **anti-scalping**, lalu menyimpulkan
+dengan benar bahwa BR-02 sudah menanganinya: memborong tiket menuntut NIK unik per kursi,
+sehingga slot tambahan tidak menghasilkan tiket tambahan. Kesimpulan itu tetap benar.
 
-Batasan efektif tetap ada melalui mekanisme berikut:
+Yang terlewat adalah bahaya yang berbeda. Slot bukan hanya pintu menuju tiket — ia adalah
+**sumber daya yang terbatas**. Jumlah customer yang boleh berada di Detail Ticket Page secara
+bersamaan dibatasi `MAX_CONCURRENT_SLOTS`. Satu orang yang memegang lima slot sekaligus
+memakai lima unit dari kuota itu dan **memperlambat masuknya semua orang lain**, meskipun ia
+tidak akan pernah bisa menukarnya menjadi lebih banyak tiket. Itu kerugian *throughput* dan
+keadilan, bukan kerugian scalping — dan itulah yang BR-07 lindungi di arsitektur ini.
+
+**Rumusan baru, dan apa yang dilepasnya.**
+
+Satu akun boleh memegang satu keterlibatan aktif per event. Keterlibatan itu dilepas begitu
+mencapai keadaan terminal:
+
+| Keadaan | Boleh antre lagi? |
+|---|---|
+| Masih mengantre, atau booking belum selesai | Tidak — join kedua memulihkan yang sudah ada |
+| **Pembayaran selesai (`CONFIRMED`)** | **Ya** — boleh antre lagi untuk pembelian berikutnya |
+| Kedaluwarsa / dibatalkan | Ya |
+
+Antre lagi berarti **dari belakang**: nomor antrian baru, posisi lama tidak dipulihkan. Kuota
+tetap dijaga BR-02 — pembelian kedua menuntut NIK yang berbeda lagi.
+
+Join kedua dari akun yang sama **tidak ditolak**, melainkan memulihkan keterlibatan yang ada
+dan menerbitkan ulang tokennya. Menolak akan menghukum customer yang hanya berpindah
+perangkat; sebagai efek sampingnya, customer login mendapat pemulihan antrian lintas
+perangkat yang tidak tersedia bagi tamu.
+
+**Batasan yang tetap berlaku dari pembacaan sebelumnya:**
 - **Tiket dibatasi** oleh aturan 1 NIK per tiket (BR-02)
 - **NIK yang sama tidak bisa didaftarkan lebih dari satu kali** untuk suatu event yang sama
-- Seorang user yang memiliki lebih dari satu slot aktif tetap tidak bisa mendapatkan lebih
-  banyak tiket, karena setiap tiket membutuhkan NIK unik yang berbeda
+- Slot tambahan tidak menghasilkan tiket tambahan, karena setiap kursi menuntut NIK unik
+
+**Kelemahan yang diterima secara sadar.**
+
+BR-07 hanya dapat ditegakkan terhadap customer yang teridentifikasi. Customer tamu tidak
+punya identitas stabil, sehingga strategi optimal pihak yang berniat buruk adalah **tidak
+login** — artinya BR-07 membatasi pengguna yang kooperatif dan bukan yang adversarial.
+
+Ini dapat diterima **hanya** karena proteksi sebenarnya bagi semua orang berada di tempat
+lain: **CAPTCHA tak terlihat pada join antrian**, ditambah rate limit per IP. BR-07 adalah
+lapis kedua, bukan pertahanan utama. Tanpa CAPTCHA, memulihkan BR-07 hampir tidak berarti.
 
 ---
 
@@ -120,5 +156,6 @@ Batasan efektif tetap ada melalui mekanisme berikut:
 | Login | **Diubah** | Dari implisit wajib → opsional (dikonfirmasi CEO) |
 | BR-01 | **Diubah** | Kuota 3 tiket: dari per-NIK kumulatif → per transaksi |
 | BR-02 | **Diubah** | Kuota NIK: dari 3 tiket per NIK → 1 NIK per tiket/seat |
-| BR-07 | **Dihapus** | Satu slot aktif per customer tidak lagi berlaku |
+| BR-07 | **Diluruskan** | Satu keterlibatan aktif **per event**, customer login saja; jumlah event tidak dibatasi. Alasannya okupansi slot, bukan scalping |
+| Proteksi bot | **Ditambahkan** | CAPTCHA tak terlihat pada join antrian — pertahanan utama yang membuat BR-07 bermakna |
 

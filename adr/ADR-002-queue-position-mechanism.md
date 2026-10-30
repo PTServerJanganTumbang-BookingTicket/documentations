@@ -1,8 +1,16 @@
 # ADR-002: Mekanisme Penentuan Posisi Antrian per Customer
 
-**Status**: Accepted  
+**Status**: **Accepted — sebagian digantikan ADR-005** (30 Oktober 2026)  
 **Tanggal**: 2026  
 **Decider**: SJT Team
+
+> **Keputusannya berlaku; transport dan ilustrasinya tidak.** Model counter global
+> (`posisi = ticket_no − now_serving`) tetap menjadi dasar ADR-005, dan justru itulah yang
+> membuat satu nilai dapat disiarkan ke semua orang. Yang berubah: pengirimannya memakai
+> **SSE**, bukan polling ber-cache CDN, sehingga perhitungan `ZRANK` vs cache TTL 3 detik,
+> field `interval`, dan "Expiry Sweeper Lambda" di dokumen ini tidak lagi menggambarkan
+> sistem yang dibangun — sweep dan admission berjalan dalam satu loop ECS 500 ms.
+> Untuk mekanisme yang mengikat, pakai **ADR-005 Bagian 4 dan Bagian 6**.
 
 ---
 

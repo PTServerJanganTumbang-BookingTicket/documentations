@@ -1,8 +1,14 @@
 # ADR-001: Teknologi Antrian untuk Virtual Waiting Room
 
-**Status**: Accepted  
+**Status**: **Accepted — sebagian digantikan ADR-005** (30 Oktober 2026)  
 **Tanggal**: 2026  
 **Decider**: Backend Team
+
+> **Keputusannya berlaku; rincian implementasinya tidak.** Model counter Redis yang
+> dipilih di sini tetap menjadi dasar ADR-005. Yang sudah bergerak sejak dokumen ini:
+> `queue:{event_id}:state` kini bernilai `SCHEDULED | OPEN | SOLD_OUT | CLOSED` (bukan
+> `"open" | "closed_sold_out"`), dan `grant:{token}` hidup `EX 1080`, bukan `EX 900`.
+> Untuk skema key dan TTL yang mengikat, pakai **ADR-005 Bagian 4 dan Bagian 7**.
 
 ---
 
@@ -238,8 +244,11 @@ grant:{token}                 STR   ← EX 900, tanda slot telah diberikan
   akibat customer abandoned. Customer bisa melihat posisinya lebih besar dari posisi nyata.
   Mitigasi: komunikasikan ke product bahwa ini adalah *upper bound*, bukan posisi eksak.
 - **Redis adalah in-memory store.** Kegagalan Redis dapat menyebabkan kehilangan data antrian.
-  Mitigasi: Aurora PostgreSQL berperan sebagai *system of record*; state Redis dapat dibangun
-  ulang dari Aurora jika terjadi failover (lihat ADR tentang storage strategy).
+  Mitigasi **sebagian**: Aurora PostgreSQL berperan sebagai *system of record*, dan stok,
+  `nik_claims` serta booking yang sudah di-grant memang dapat dibangun ulang dari Aurora.
+  **Posisi antrian yang belum di-grant tidak dapat** — `ticket_no` hanya ada di Redis dan
+  baris Aurora baru dibuat saat GRANT. Pernyataan "state Redis dapat dibangun ulang" pada
+  versi awal dokumen ini terlalu luas; lihat ADR-005 Bagian 16 dan Bagian 17 #7.
 - **Admission controller harus atomic.** Dua invokasi bersamaan dapat memajukan `now_serving`
   dua kali jika tidak dilindungi.
   Mitigasi: gunakan Lua script untuk membungkus operasi read-advance-write menjadi satu

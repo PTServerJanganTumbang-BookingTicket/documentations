@@ -382,7 +382,7 @@ Menampilkan daftar event. UI: Home Page "Daftar Event".
 |---|---|
 | `AVAILABLE` | `available > threshold` |
 | `SELLING_OUT_FAST` | `0 < available <= threshold` |
-| `SOLD_OUT` | `available == 0` |
+| `SOLD_OUT` | `available == 0` — **reversibel**: kursi dari booking yang kedaluwarsa dapat membuatnya `AVAILABLE` lagi |
 
 `threshold = capacity × SELLING_FAST_THRESHOLD_PCT / 100` (bawaan 20).
 
@@ -410,13 +410,16 @@ Menampilkan daftar event. UI: Home Page "Daftar Event".
 |---|---|
 | `enabled` | bool — tombol dapat ditekan |
 | `action` | `JOIN_QUEUE` \| `GO_TO_TICKETS` \| `NONE` |
-| `label_key` | `sold_out` \| `coming_soon` \| `queue_full` \| `buy_now` \| `join_queue` |
+| `label_key` | `sold_out` \| `sold_out_may_return` \| `coming_soon` \| `queue_full` \| `buy_now` \| `join_queue` |
 | `badge_key` | `selling_out_fast` \| `null` |
 
 Aturan resolusi, dijalankan **server-side**, kecocokan pertama menang:
 
 ```
-status == SOLD_OUT         → enabled=false  action=NONE           label=sold_out
+status == SOLD_OUT
+  dan queue state CLOSED   → enabled=false  action=NONE           label=sold_out
+status == SOLD_OUT
+  dan belum CLOSED         → enabled=false  action=NONE           label=sold_out_may_return
 queue_state == NOT_OPEN    → enabled=false  action=NONE           label=coming_soon
 queue_state == FULL        → enabled=false  action=NONE           label=queue_full
 queue_state == DIRECT      → enabled=true   action=GO_TO_TICKETS  label=buy_now
@@ -480,6 +483,10 @@ Detail event untuk sidebar info dan breadcrumb.
       "label_key": "join_queue",
       "badge_key": null
     },
+    "captcha": {
+      "provider": "turnstile",
+      "site_key": "0x4AAAAAAA..."
+    },
     "ticket_categories": [
       {
         "id": "cat_vip",
@@ -510,6 +517,12 @@ Detail event untuk sidebar info dan breadcrumb.
 }
 ```
 
+> **`captcha.site_key` ada di sini supaya token dapat diambil lebih awal.** Klien memuat
+> widget CAPTCHA pada halaman ini — termasuk saat `queue_state: NOT_OPEN` — dan menyegarkan
+> tokennya tiap ~60 detik, sehingga pada `sale_starts_at` ia sudah memegang token segar untuk
+> dibawa ke `POST …/queue/join` (§3.1). Site key bersifat publik; secret key tidak pernah
+> dikirim ke klien.
+
 **Requirement Coverage**: FR-11, FR-12
 
 ---
@@ -522,7 +535,31 @@ User bergabung ke antrian. Dipanggil saat klik "Beli Tiket" pada event dengan an
 
 **Endpoint**: `POST /events/{event_id}/queue/join`
 
-**Request**: (empty body)
+**Request**:
+```json
+{ "captcha_token": "0.AbCdEf..." }
+```
+
+| Field | Wajib | Catatan |
+|---|---|---|
+| `captcha_token` | ✅ | Token CAPTCHA **tak terlihat**, diperoleh klien sebelum gerbang buka — lihat di bawah. Berlaku untuk tamu **dan** user login |
+
+> **Token diperoleh SEBELUM `sale_starts_at`, bukan saat klik.** `ticket_no` berasal dari
+> `INCR issued` pada saat join; bila klien harus menyelesaikan tantangan lebih dulu, manusia
+> yang butuh tiga detik akan mendapat nomor antrian **lebih besar** daripada bot yang
+> menembus layanan pemecah dalam 200 ms. Jadi:
+>
+> 1. Halaman pra-buka (`queue_state: NOT_OPEN`, §2.1) mengambil token saat dimuat
+> 2. Token disegarkan tiap ~60 detik selama menunggu — **wajib**, karena token CAPTCHA
+>    berumur pendek dan sekali pakai
+> 3. Pada `sale_starts_at` klien sudah memegang token segar; join hanya membawanya
+>
+> Verifikasi murni server-side, sehingga tidak ada komponen berkecepatan-manusia di dalam
+> perlombaan. Mode interaktif (teka-teki visual) **tidak boleh** dipakai di endpoint ini.
+
+> **Urutan pemeriksaan server: rate limit dulu, CAPTCHA kemudian.** Rate limit adalah
+> panggilan Redis lokal; verifikasi CAPTCHA adalah round trip eksternal. Membaliknya berarti
+> membayar satu panggilan pihak ketiga untuk tiap percobaan yang akhirnya ditolak.
 
 **Response** (200):
 ```json
@@ -547,7 +584,8 @@ User bergabung ke antrian. Dipanggil saat klik "Beli Tiket" pada event dengan an
 
 > Server sets cookie on join:
 > ```
-> Set-Cookie: queue_token=qt_xyz789; HttpOnly; Secure; SameSite=Strict; Max-Age=7200
+> Set-Cookie: queue_token=qt_xyz789; HttpOnly; Secure; SameSite=Strict;
+>             Max-Age={SALE_WINDOW_SECONDS}
 > ```
 
 **Response** (200 - Already in Queue / Rejoined):
@@ -563,10 +601,27 @@ User bergabung ke antrian. Dipanggil saat klik "Beli Tiket" pada event dengan an
     "position": 1228,
     "estimated_wait_minutes": 4,
     "sse_url": "/queue/stream",
-    "rejoined": true
+    "rejoined": true,
+    "state": "QUEUED"
   }
 }
 ```
+
+> **Dua jalan menuju response ini.** Pertama, `queue_token` yang sama kembali — re-entrancy
+> BR-09. Kedua, **BR-07**: pemanggil sudah login dan akunnya sudah punya keterlibatan aktif
+> untuk event ini, mungkin dari perangkat lain. Keduanya memulihkan keterlibatan yang ada
+> dan menerbitkan ulang cookie untuknya; tidak ada keterlibatan kedua yang dibuat.
+>
+> `state` mengikuti nilai §3.3 (`QUEUED`, `GRANTED`, `SELECTING`, `AWAITING_PAYMENT`, …).
+> Bila bukan `QUEUED`, field posisi diabaikan dan frontend merutekan sesuai `state` —
+> customer sudah melewati antrian.
+>
+> **Menolak dengan 409 ditolak sebagai desain**: itu akan menghukum customer yang hanya
+> berpindah perangkat. BR-07 tetap tegak — ia tidak mendapat slot kedua — dan user login
+> mendapat pemulihan lintas perangkat sebagai efek samping.
+>
+> **Customer tamu tidak terkena BR-07.** Tanpa identitas stabil tidak ada yang dapat
+> ditegakkan; batas bagi tamu adalah CAPTCHA + rate limit per IP.
 
 **Response** (503 - `QUEUE_FULL`): antrian sudah mencapai `QUEUE_CAPACITY` (300.000).
 ```json
@@ -580,7 +635,24 @@ User bergabung ke antrian. Dipanggil saat klik "Beli Tiket" pada event dengan an
 > terlayani. Halaman utama sudah menampilkan `queue_state` (§2.1), jadi penolakan di sini
 > adalah jaring pengaman untuk perlombaan di detik yang sama, bukan jalur normal.
 
-**Requirement Coverage**: FR-04, FR-10 (posisi konsisten saat refresh), NFR-05 (FCFS fairness)
+**Response** (400 - `CAPTCHA_REQUIRED`): `captcha_token` tidak disertakan.
+
+**Response** (403 - `CAPTCHA_FAILED`): token tidak valid, sudah dipakai, atau kedaluwarsa.
+Klien mengambil token baru dan mencoba lagi — **tanpa** mendapat `ticket_no`, sehingga
+percobaan yang gagal tidak memakan posisi antrian.
+
+**Response** (429): melewati `rl:join:{ip}` (20 / 5 menit).
+
+> **Provider CAPTCHA tidak tersedia → join tetap diterima (fail-open).** Aturannya:
+> *fail-closed bila yang dipertaruhkan kebenaran, fail-open bila hanya keadilan.* Dukcapil
+> fail-open akan menerbitkan tiket atas NIK yang belum terverifikasi; CAPTCHA fail-open hanya
+> kehilangan gesekan terhadap bot — tidak ada oversell, tidak ada NIK yang lolos, tidak ada
+> uang yang bergerak. Fail-closed di sini akan membuat **tidak seorang pun** dapat bergabung
+> saat provider terganggu, mematikan sale sebelum dimulai. `CaptchaFailOpenSeconds`
+> dialarmkan agar jendela tanpa proteksi terlihat.
+
+**Requirement Coverage**: FR-04, FR-10 (posisi konsisten saat refresh), NFR-05 (FCFS fairness),
+BR-07 (satu keterlibatan aktif per event untuk user login)
 
 ---
 
@@ -616,13 +688,18 @@ data: {"nowServing":31604,"state":"OPEN","ratePerMin":318,"paused":false,"server
 | Field | Tipe | Arti |
 |---|---|---|
 | `nowServing` | int | Nomor antrian global yang sedang dilayani |
-| `state` | string | `SCHEDULED` \| `OPEN` \| `SOLD_OUT` |
+| `state` | string | `SCHEDULED` \| `OPEN` \| `SOLD_OUT` \| `CLOSED` |
 | `ratePerMin` | int | Laju antrian untuk estimasi waktu tunggu (FR-09) |
 | `paused` | bool | Admission dihentikan sementara (gangguan Dukcapil / payment gateway) |
 | `serverTime` | string | Waktu server ISO-8601 — klien menyinkronkan jamnya (BR-10) |
 
 > Frontend menghitung `position = ticket_no - nowServing`. Saat `paused = true`, tampilkan
 > banner; jangan tampilkan error — antrian tidak hilang.
+
+> **Heartbeat 10 detik TIDAK bersyarat** — ia terbit juga saat `paused: true` dan saat
+> `state: SOLD_OUT`. Keheningan karena itu berarti satu hal saja: sisi server berhenti
+> bekerja. Itulah yang membuat `status {stale:true, reason:"no_admission_updates"}` di bawah
+> dapat dipercaya.
 
 **Event: `grant`** — giliran customer tiba. Payload kosong; token **tidak** dikirim lewat SSE.
 
@@ -635,14 +712,40 @@ data: {}
 > Grant hanya diterbitkan **setelah** slot diamankan dan baris booking tertulis, sehingga
 > `/queue/me` tidak pernah menolak customer yang sudah menerima `grant` (NFR-02).
 
-**Event: `status`** — indikator koneksi ke Redis, bukan status antrian.
+**Event: `status`** — indikator **kesegaran data** antrian, bukan status antrian dan bukan
+status koneksi. Dua pemicu, satu payload, satu indikator.
 
 ```
 event: status
-data: {"stale": true}
+data: {"stale": true, "reason": "no_admission_updates"}
 ```
 
-**Event: `sold-out`** — tiket habis saat menunggu.
+| Field | Tipe | Arti |
+|---|---|---|
+| `stale` | bool | Data antrian tidak lagi segar |
+| `reason` | string | Diagnostik saja. `redis_disconnected` \| `no_admission_updates` |
+
+Kedua pemicunya:
+
+| `reason` | Pemicu |
+|---|---|
+| `redis_disconnected` | sse-server kehilangan Redis |
+| `no_admission_updates` | tidak ada broadcast > 30 detik padahal `state ∈ {OPEN, SOLD_OUT}` — `admission-ctl` diam, atau Pub/Sub ke task ini putus |
+
+> **Yang basi adalah DATA, bukan koneksinya.** Pada `no_admission_updates` koneksinya justru
+> sehat — `: keepalive` tetap datang tiap 15 detik — tetapi `nowServing` berhenti maju. Itu
+> sebabnya keheningan tidak dapat dideteksi dari keepalive, dan sebabnya indikator ini ada.
+
+> **Klien TIDAK BOLEH** menutup stream, mereset posisi, atau reconnect sendiri karena
+> `stale`. 300.000 klien yang reconnect pada satu sinyal bersama adalah badai yang dihindari
+> seluruh desain ini. Yang benar: pertahankan angka posisi di layar, redupkan, tampilkan
+> "Memperbarui…". Satu indikator melayani kedua `reason`; tidak ada cabang baru di klien.
+
+> Dikirim **hanya pada transisi**, tidak diulang selama tetap basi. `{"stale": false}`
+> menyusul saat data mengalir lagi, dan posisinya berlanjut tanpa kode transisi khusus.
+
+**Event: `sold-out`** — sale ditutup permanen. Dikirim saat `state` menjadi **`CLOSED`**,
+bukan saat stok pertama kali mencapai nol.
 
 ```
 event: sold-out
@@ -652,6 +755,17 @@ data: {"message":"Tiket sudah habis"}
 > **Klien WAJIB memanggil `eventSource.close()`** pada event ini. Tanpa itu `EventSource`
 > reconnect otomatis dan seluruh crowd membanjiri ALB setelah sold out. Server menolak
 > koneksi baru dengan `410 Gone` sebagai jaring pengaman.
+
+> **`state: SOLD_OUT` BUKAN event ini, dan klien tidak boleh menutup stream karenanya.**
+> `SOLD_OUT` berarti "tidak ada stok saat ini" dan **reversibel**: booking yang kedaluwarsa
+> melepaskan kursinya kembali, dan admission melanjutkan dari posisi antrian yang sama. Klien
+> menampilkan "Tiket sedang habis — kursi dapat kembali dari booking yang dibatalkan" dan
+> **tetap tersambung**; bila `state` kembali ke `OPEN`, hitung mundur dan posisinya berlanjut
+> tanpa kode transisi khusus.
+>
+> `SOLD_OUT` berumur paling lama `SOLD_OUT_HOLD_SECONDS` (930 detik — satu perjalanan penuh,
+> setelah itu tidak ada hold yang mungkin kedaluwarsa lagi), lalu server menyetel `CLOSED`
+> dan mengirim `sold-out`. Jadi satu-satunya pemutusan terjadi sekali, di akhir.
 
 **Event: `reconnect`** — task sedang shutdown; `retry:` berisi jeda berjitter 1–15 detik.
 
@@ -679,7 +793,24 @@ kembali dari aplikasi bank. Mengembalikan **token yang sama** selama TTL belum h
 
 **Endpoint**: `GET /events/{event_id}/queue/me`
 
-**Cookies**: `queue_token=qt_xyz789`
+**Auth — salah satu dari dua**, dan itu yang membuat endpoint ini cukup untuk semua
+skenario kembali:
+
+| | Dipakai saat | Resolusi server |
+|---|---|---|
+| `Cookie: queue_token=qt_xyz789` | perangkat sama — tab ditutup, refresh, kembali dari aplikasi bank | `HGET token:{uuid}` |
+| `Authorization: Bearer <identity token>` | perangkat berbeda, cookie dibersihkan, incognito, app di-install ulang | `acct:{ev}:{account_id}` → uuid token → `HGET token:{uuid}`; cookie diterbitkan ulang pada respons |
+
+> **Pemulihan adalah READ, dan itu disengaja.** `POST …/queue/join` juga memulihkan
+> keterlibatan yang ada (BR-07), tetapi ia jalur tulis yang membawa **CAPTCHA** dan dua rate
+> limit (`rl:join:{ip}` 20 per 5 menit, plus 3 join per customer per menit). Customer yang
+> sekadar kembali tidak boleh diminta menyelesaikan CAPTCHA untuk mengambil posisi yang sudah
+> dimilikinya — dan di belakang NAT kantor atau operator seluler, batas 20 join per 5 menit
+> habis justru karena orang-orang yang reconnect. Endpoint ini **tidak** menuntut
+> `captcha_token` dan **tidak** dihitung terhadap batas join.
+>
+> **Hanya untuk customer login.** Tamu tidak punya identity token, sehingga pemulihan mereka
+> berhenti pada cookie — lintas perangkat memang di luar cakupan untuk tamu.
 
 **Response** (200): bentuk `data` mengikuti keadaan customer.
 
@@ -696,6 +827,16 @@ kembali dari aplikasi bank. Mengembalikan **token yang sama** selama TTL belum h
 > `your_turn`, dan bisa menerima `429 Slot penuh` — memberi tahu customer bahwa gilirannya
 > tiba lalu menolaknya, pelanggaran langsung NFR-02 "Jangan PHP". Pada v2.0 grant hanya
 > diterbitkan setelah slot diamankan, jadi tidak ada jalur penolakan setelah `grant`.
+
+> **Tenggat dapat BERGESER, jadi baca ulang — jangan hanya menghitung turun.** Saat
+> admission di-pause, server menambahkan `PAUSE_TTL_GRACE_SECONDS` (60 detik) ke
+> `booking_expires_at` dan `payment_expires_at` setiap booking yang masih berjalan, supaya
+> customer tidak kehilangan waktu karena gangguan yang bukan kesalahannya. Klien yang
+> menghitung turun dari nilai lama akan meleset 60 detik.
+>
+> Aturannya: **ketika `paused` berubah pada payload SSE, panggil endpoint ini lagi** dan
+> hitung ulang hitung mundur dari `booking_expires_at` yang baru. Ini perluasan aturan yang
+> sudah ada — hitung mundur selalu diturunkan dari tenggat, bukan dikurangi sendiri.
 
 **Requirement Coverage**: FR-08, FR-10, BR-09, NFR-02, NFR-07
 
@@ -1218,21 +1359,11 @@ Authorization: Bearer {access_token}
   "data": {
     "methods": [
       {
-        "id": "credit_card",
-        "name": "Kartu Kredit/Debit",
-        "description": "Verifikasi 3D Secure, hasil langsung.",
-        "icon_url": "https://cdn.rusuh.id/icons/card.svg",
-        "enabled": true,
-        "requires_tokenization": true,
-        "client_key": "SB-Mid-client-xxxxxxxxxxxx"
-      },
-      {
         "id": "bank_transfer",
         "name": "Transfer Bank / Virtual Account",
         "description": "Verifikasi otomatis, tanpa unggah bukti.",
         "icon_url": "https://cdn.rusuh.id/icons/bank.svg",
         "enabled": true,
-        "requires_tokenization": false,
         "banks": [
           { "code": "bca",  "name": "BCA",  "icon_url": "https://cdn.rusuh.id/icons/bca.svg" },
           { "code": "bni",  "name": "BNI",  "icon_url": "https://cdn.rusuh.id/icons/bni.svg" },
@@ -1245,8 +1376,7 @@ Authorization: Bearer {access_token}
         "name": "E-Wallet (GoPay / QRIS)",
         "description": "Scan QR atau buka aplikasi GoPay.",
         "icon_url": "https://cdn.rusuh.id/icons/ewallet.svg",
-        "enabled": true,
-        "requires_tokenization": false
+        "enabled": true
       }
     ]
   }
@@ -1256,16 +1386,25 @@ Authorization: Bearer {access_token}
 | Field | Arti |
 |---|---|
 | `id` | Dikirim kembali sebagai `method` pada §5.2. Nilainya sama dengan `payment_type` Midtrans |
-| `requires_tokenization` | `true` → klien **wajib** memanggil Midtrans.js lebih dulu dan mengirim `token_id` |
-| `client_key` | Hanya untuk kartu. Client key Midtrans untuk tokenisasi di browser. **Server key tidak pernah dikirim ke klien** |
 | `banks` | Hanya untuk `bank_transfer`. Daftar bank yang dibuka |
 | `enabled` | `false` saat breaker payment gateway terbuka; UI menonaktifkan pilihan |
+
+**Dua metode saja di POC: `bank_transfer` dan `gopay`.** Kartu kredit dan Over the Counter
+dikeluarkan karena alasan yang sama — keduanya tidak dapat menghormati TTL pembayaran 10
+menit di sisi gateway. `custom_expiry` **tidak berlaku** untuk kartu (dinyatakan eksplisit
+oleh Midtrans), dan OTC menuntut customer datang ke gerai fisik. Dua metode yang tersisa
+keduanya menerima `custom_expiry`, sehingga jendela Midtrans dan jendela kita berakhir pada
+detik yang sama untuk **setiap** metode yang hidup.
+
+> Tidak ada `requires_tokenization` maupun `client_key` pada respons ini: keduanya hanya
+> dibutuhkan kartu. Dengan kartu di luar cakupan, tokenisasi Midtrans.js di browser dan
+> seluruh permukaan PCI-DSS ikut keluar dari POC.
 
 **Keputusan lingkup POC — hanya empat bank.** Midtrans mendokumentasikan kasus *reversal*
 (`settlement` berubah menjadi `deny` dalam 1–5 menit, dana kembali ke customer) **hanya**
 untuk Permata, Mandiri Bill Payment, dan Indomaret. Ketiganya tidak dibuka, sehingga kelas
 kegagalan itu tidak dapat terjadi dan handler reversal tidak diperlukan. Lihat
-`payment-method/02-bank-transfer-va.md`.
+`payment-method/01-bank-transfer-va.md`.
 
 > "Virtual Account" dan "Transfer Bank" adalah **satu** metode di Core API, bukan dua.
 > Customer memilih bank dan menerima nomor VA; tidak ada jalur transfer manual dengan
@@ -1288,11 +1427,6 @@ Authorization: Bearer {access_token}
 
 Bentuk request berbeda per metode:
 
-**Kartu** — `token_id` diperoleh klien dari Midtrans.js sebelum memanggil endpoint ini:
-```json
-{ "method": "credit_card", "token_id": "48111111sHfSakAvHvFQFEjTivUV1114" }
-```
-
 **Transfer Bank**:
 ```json
 { "method": "bank_transfer", "bank": "bca" }
@@ -1305,23 +1439,10 @@ Bentuk request berbeda per metode:
 
 **Response** (200) — bentuk `data.instructions` mengikuti metode:
 
-**Kartu, 3DS diperlukan**:
-```json
-{
-  "meta": { "code": 200, "message": "Payment initiated" },
-  "data": {
-    "payment_id": "RB-00912:1",
-    "method": "credit_card",
-    "status": "PENDING",
-    "instructions": { "redirect_url": "https://api.midtrans.com/v2/3ds/redirect/..." },
-    "ttl": { "expires_at": "2026-10-25T10:25:00Z", "ttl_seconds": 540, "server_time": "2026-10-25T10:16:00Z" }
-  }
-}
-```
-
 **Transfer Bank**:
 ```json
 {
+  "meta": { "code": 200, "message": "Payment initiated" },
   "data": {
     "payment_id": "RB-00912:1",
     "method": "bank_transfer",
@@ -1371,9 +1492,6 @@ Bentuk request berbeda per metode:
 > `payment_attempts` sendiri, sehingga `order_id` yang diturunkan sudah baru dan Midtrans
 > menerimanya. `/retry` hanya untuk membatalkan pembayaran yang masih `pending` (§5.3).
 
-**Response** (422 - `token_id` tidak valid atau sudah dipakai): token Midtrans **sekali
-pakai**; klien harus melakukan tokenisasi ulang.
-
 **Response** (503 - `ADMISSION_PAUSED`): breaker payment gateway terbuka.
 
 ### Expiry yang dikirim ke Midtrans
@@ -1389,9 +1507,11 @@ Tanpa ini, expiry VA bawaan Midtrans adalah **24 jam** — VA tetap dapat dibaya
 hari setelah sweep melepas stoknya dan menjualnya ke orang lain. `order_time` diisi
 `held_at`, bukan waktu request, agar jendela Midtrans berakhir bersama jendela kita (BR-05).
 
-`custom_expiry` **tidak berlaku untuk kartu**; jendelanya ditentukan batas waktu 3DS.
-Untuk ketiga metode, sweep juga memanggil `POST /v2/{order_id}/expire` saat meng-expire
-booking, sebagai lapis kedua terhadap selisih jam.
+**Kedua metode POC menerima `custom_expiry`**, dan itu alasan kartu dikeluarkan: Midtrans
+menyatakan eksplisit bahwa `custom_expiry` tidak berlaku untuk kartu, sehingga BR-05 hanya
+akan ditegakkan sweep kita tanpa dukungan gateway. Untuk kedua metode, sweep juga memanggil
+`POST /v2/{order_id}/expire` saat meng-expire booking, sebagai lapis kedua terhadap selisih
+jam.
 
 **Requirement Coverage**: FR-20, FR-21, FR-24 (API shared web/mobile), FR-25 (idempoten)
 
@@ -1901,6 +2021,7 @@ Diamankan sama seperti dashboard operasional: terpisah dari jalur customer, tida
 | BR-02 | Satu entri per kursi, satu NIK masing-masing; `UNIQUE (event_id, nik_hmac)` menolak NIK yang sudah dipakai booking lain di event yang sama | ✅ |
 | BR-03/04 | `booking_expires_at` = `granted_at` + 5 menit — tidak ada grace antrian, jam mulai saat slot diberikan | ✅ |
 | BR-05/06 | `payment_expires_at` = `held_at` + 10 menit — berurutan setelah TTL booking, penuh bagi setiap customer | ✅ |
+| BR-07 | `POST …/queue/join` memulihkan keterlibatan yang ada untuk akun yang sama — satu per event, user login saja | ✅ |
 | BR-09 | `GET /events/{id}/queue/me` mengembalikan token yang sama | ✅ |
 | BR-10 | `server_time` pada tiap respons; klien menghitung offset jam sekali dan merender semua countdown terhadapnya | ✅ |
 
@@ -1913,7 +2034,8 @@ Legenda: ✅ terpenuhi di kontrak · ⚙️ di luar permukaan API (backend atau 
 
 | Aspect | Implementation |
 |--------|----------------|
-| Queue Token | `queue_token` cookie (HttpOnly, Secure), set via `Set-Cookie` on queue join |
+| Queue Token | `queue_token` cookie (HttpOnly, Secure), set via `Set-Cookie` on queue join; `Max-Age` diturunkan dari `SALE_WINDOW_SECONDS`, sama dengan TTL `token:{uuid}` yang dirujuknya |
+| Identity Token | JWT akun, diterima `GET …/queue/me` sebagai alternatif cookie untuk pemulihan lintas perangkat (§3.3) |
 | Access Token | JWT, returned in response body; client stores and sends via `Authorization: Bearer` |
 | Refresh Token | Returned in response body on login; client stores securely (Keychain/Keystore/memory) |
 | NIK | Masked in responses (3171********xx22), stored encrypted |
@@ -1944,12 +2066,13 @@ Legenda: ✅ terpenuhi di kontrak · ⚙️ di luar permukaan API (backend atau 
 | `TICKETS_UNAVAILABLE` | Tiket sudah habis |
 | `TERMS_NOT_ACCEPTED` | Syarat & ketentuan dan persetujuan PDP belum diterima |
 | `PAYMENT_ALREADY_INITIATED` | Charge sudah berjalan; respons sebelumnya diputar ulang |
-| `CARD_TOKEN_INVALID` | `token_id` Midtrans tidak valid atau sudah dipakai — tokenisasi ulang |
 | `BANK_NOT_SUPPORTED` | Bank di luar bca/bni/bri/cimb |
 | `MAX_ATTEMPTS_EXCEEDED` | Melewati batas percobaan pembayaran per booking |
 | `PAYMENT_ALREADY_SETTLED` | Pembayaran lama sudah lunas; pembatalan tidak dilakukan |
 | `PAYMENT_WINDOW_CLOSED` | TTL pembayaran habis atau sisanya terlalu pendek untuk ganti metode |
 | `QUEUE_FULL` | Antrian mencapai kapasitas maksimum |
+| `CAPTCHA_REQUIRED` | `captcha_token` tidak disertakan pada `POST …/queue/join` |
+| `CAPTCHA_FAILED` | Token CAPTCHA tidak valid, sudah dipakai, atau kedaluwarsa |
 | `NIK_ALREADY_REGISTERED` | NIK sudah terikat ke akun lain (satu NIK = satu akun, global) |
 | `NIK_ALREADY_SAVED` | NIK sudah ada di Daftar NIK Teman akun ini |
 | `MAX_SAVED_NIKS_REACHED` | Daftar NIK Teman sudah mencapai 5 entri |
@@ -1976,7 +2099,8 @@ Legenda: ✅ terpenuhi di kontrak · ⚙️ di luar permukaan API (backend atau 
 | Keepalive | Komentar `: keepalive` tiap **15 detik** (bukan event bernama) |
 | Snapshot awal | Ya — dikirim saat koneksi terbuka (FR-10) |
 | Reconnect | Otomatis dengan `Last-Event-ID`; `retry:` berjitter saat shutdown |
-| Sold out | Event `sold-out` → klien **wajib** `close()`; koneksi baru ditolak `410 Gone` |
+| Sold out sementara | `state: SOLD_OUT` pada payload biasa → klien **tetap tersambung**; stok dapat kembali |
+| Sale ditutup | `state: CLOSED` + event `sold-out` → klien **wajib** `close()`; koneksi baru ditolak `410 Gone` |
 
 ### Payment Status: Polling
 
@@ -2055,3 +2179,13 @@ Penyelarasan dengan ADR-005. Yang memutus kompatibilitas ditandai **BREAKING**.
 | 21 | SSE `state`: `OPEN \| closed_sold_out` → `SCHEDULED \| OPEN \| SOLD_OUT` | Casing tidak konsisten dalam satu enum, dan tidak ada nilai awal — sale tidak punya permulaan yang terdefinisi |
 | 22 | `booking_expires_at` dihitung dari `granted_at`, bukan `slot_claimed_at` | Grace antrian dihapus; tanpa anchor baru tidak ada apa pun yang merebut kembali slot yang di-grant tapi tidak pernah diklaim |
 | 23 | `POST /bookings` menyatakan multi-kategori all-or-nothing + 4 kode error baru | `hold_booking.lua` sebelumnya hanya menerima satu kategori, padahal `tickets[]` sudah mengizinkan beberapa |
+| 24 | **BREAKING** `POST …/queue/join` mewajibkan `captcha_token`; `CAPTCHA_REQUIRED` / `CAPTCHA_FAILED` ditambahkan | Vektor bot ada di `/join` (memborong posisi), bukan di Detail Ticket Page. Token diterbitkan pra-gerbang karena tantangan interaktif di titik `INCR issued` akan memberi bot nomor antrian lebih kecil daripada manusia |
+| 25 | `GET /events/{id}` menambah `captcha.site_key` | Agar klien dapat memuat widget dan menyegarkan token selama `queue_state: NOT_OPEN`, sebelum gerbang buka |
+| 26 | Response "Rejoined" menambah `state` dan kini juga melayani BR-07 | Akun yang sudah punya keterlibatan aktif memulihkannya alih-alih ditolak 409 — menolak akan menghukum perpindahan perangkat, sementara BR-07 tetap tegak |
+| 27 | `credit_card` dihapus dari §5.1/§5.2; `requires_tokenization`, `client_key`, `token_id`, `CARD_TOKEN_INVALID` ikut hilang | `custom_expiry` tidak berlaku untuk kartu, sehingga kartu adalah satu-satunya metode yang tidak dapat menghormati TTL 10 menit di sisi gateway. Keluarnya kartu juga mengeluarkan cakupan PCI-DSS dari POC |
+| 28 | SSE `state` menambah `CLOSED`; `SOLD_OUT` kini **reversibel** dan **tidak** menutup stream | Stok kembali dari booking yang kedaluwarsa, dan sold-out satu arah membuat kursi itu tidak pernah terjual. Pemutusan dipindahkan ke `CLOSED`, sekali, setelah 930 detik |
+| 29 | `label_key` menambah `sold_out_may_return` | Customer perlu tahu bedanya "habis, mungkin kembali" dari "sale ditutup" — halaman utama di-refresh manual, jadi perbedaan itu menentukan apakah layak dicoba lagi |
+| 30 | `GET …/queue/me` wajib dibaca ulang saat `paused` berubah | Server menambah `PAUSE_TTL_GRACE_SECONDS` ke tenggat yang sedang berjalan; klien yang menghitung turun dari nilai lama akan meleset 60 detik |
+| 31 | `GET …/queue/me` menerima identity token selain cookie | Pemulihan lintas perangkat sebelumnya hanya mungkin lewat `POST …/queue/join`, yang membawa CAPTCHA dan dua rate limit — memperlakukan customer yang kembali sebagai serangan |
+| 32 | Cookie `Max-Age` diturunkan dari `SALE_WINDOW_SECONDS`, bukan 7200 | Cookie dan `token:{uuid}` yang dirujuknya harus kedaluwarsa bersamaan; 7200 adalah angka yang tidak terikat apa pun |
+| 33 | Event `status` menambah `reason` (`redis_disconnected` \| `no_admission_updates`) dan pemicu kedua: keheningan `sse-broadcast` > 30 detik | `status` sebelumnya hanya menyala saat sse-server kehilangan Redis. Bila `admission-ctl` yang mati, Redis dan sse-server dua-duanya sehat — tidak ada sinyal apa pun sementara antrian membeku di balik koneksi yang tampak hidup dan keepalive yang tetap datang. Deteksinya di server, bukan timer di klien, sehingga nol kode klien bertambah |

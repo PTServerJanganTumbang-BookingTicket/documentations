@@ -148,7 +148,7 @@ VA: `order_time` = `held_at`, durasi 10 menit. Sweep tetap memanggil
 `POST /v2/{order_id}/expire` sebagai lapis kedua.
 
 Action `cancel` dari respons charge adalah alternatif yang setara untuk metode ini; sweep
-memakai `/expire` agar satu jalur yang sama berlaku untuk ketiga metode.
+memakai `/expire` agar satu jalur yang sama berlaku untuk kedua metode.
 
 ---
 
