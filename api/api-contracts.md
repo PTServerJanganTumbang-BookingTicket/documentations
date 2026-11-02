@@ -1,11 +1,42 @@
 # Rusuh Booking Tiket — API Contracts
 
-**Versi**: 2.1  
-**Tanggal**: 24 Oktober 2026  
+**Versi**: 2.4  
+**Tanggal**: 3 November 2026  
 **Status**: Draft  
 **Base URL**: `https://api.rusuh.id/v1`  
 **Selaras dengan**: ADR-005 (Keputusan Arsitektur Final — SSE + ECS Fargate)
 
+> **v2.4** menutup lima hal yang v2.3 tinggalkan terbuka. `expires_in` **1080 → 22740**
+> detik: sesi akun dimulai saat login, *sebelum* antrian, jadi 1080 — yang diturunkan dari
+> perjalanan — mati di ruang tunggu untuk hampir seluruh antrian; ia sekarang diturunkan dari
+> `SALE_WINDOW_SECONDS` (§1.3). `bookings.account_id` diambil dari **keterlibatan** saat
+> GRANT, bukan dari header saat checkout, sehingga `Authorization` hilang dari §4 dan §5
+> seluruhnya. Kredensial antrian **dihapus** pada keadaan terminal, dengan nisan pada
+> `CONFIRMED` supaya customer yang baru membayar tidak melihat layar kedaluwarsa (§3.3).
+> §6.2 menerima token dari tautan email, karena FR-26 mengirim tiket ke pemegang NIK yang
+> umumnya tidak punya akun dan tombol di email mereka sebelumnya menjawab 401. Dan pengikatan
+> device untuk grant anonim akhirnya **didefinisikan** — ADR-005 mengklaimnya sejak awal tanpa
+> menyebut header, algoritma, atau apa pun. Rinciannya di Appendix C.
+>
+> **v2.3** memisahkan tiga kredensial yang sebelumnya berbagi satu header.
+> `Authorization: Bearer` kini **selalu dan hanya** token sesi akun. Grant slot pindah ke
+> header `X-Grant-Token`, dan token ruang tunggu untuk klien mobile pindah ke
+> `X-Queue-Token`. Sebelumnya ketiganya dikirim sebagai `Authorization: Bearer
+> {access_token}` dan tidak satu pun endpoint menyatakan mana yang ia terima — §9
+> mengikatnya ke `queue_token` sementara §6.1 hanya mungkin berarti JWT akun.
+>
+> Akibatnya bukan soal nama. Dengan satu slot saja, `POST /bookings` tidak punya tempat
+> untuk JWT akun, sehingga booking customer login **tidak dapat diatribusikan ke akunnya
+> pada saat dibuat** — padahal §6.1 menyelesaikan kepemilikan lewat `account_id`. Dua
+> header menutup lubang itu: grant membuktikan slot, JWT menyatakan milik siapa.
+> Rinciannya di §7, §9 dan Appendix C.
+>
+> **v2.2** menambahkan `POST /auth/refresh` dan menaikkan `expires_in` dari 300 ke
+> **1080** detik. Nilai 300 tidak pernah diturunkan dari apa pun; 1080 adalah angka
+> yang sama dengan `GRANT_TOKEN_TTL_SECONDS` dan diturunkan dari perjalanan customer
+> (ADR-005 §7), sehingga sesi hidup lebih lama daripada journey dan tidak ada refresh
+> yang jatuh di tengah pembayaran. Rinciannya di §1.3, §1.4 dan Appendix C.
+>
 > **v2.0** menyelaraskan kontrak ini dengan ADR-005. Perubahan yang memutus kompatibilitas:
 > `POST /queue/claim-token` **dihapus** (grant kini didorong lewat SSE setelah slot aman),
 > payload dan nama event SSE berubah, webhook mendapat switch per tipe event, dan validasi
@@ -140,8 +171,8 @@ access_token={access_token}
   },
   "data": {
     "access_token": "eyJhbG...",
-    "refresh_token": "eyJhbG...",
-    "expires_in": 300,
+    "refresh_token": "8Kq2mN9vL4wX1yB6cF3dH5jG0aZpR7tS",
+    "expires_in": 22740,
     "user": {
       "id": "usr_123",
       "email": "you@example.com",
@@ -157,11 +188,154 @@ access_token={access_token}
 }
 ```
 
+| Field | Catatan |
+|---|---|
+| `access_token` | JWT HS256 **sesi akun**. `expires_in` **22740** detik (6 jam 19 menit) — diturunkan dari `SALE_WINDOW_SECONDS + 990 + 150` (ADR-005 §7). **Bukan** sama dengan `GRANT_TOKEN_TTL_SECONDS`: keduanya mengukur interval berbeda. Perpanjangannya lewat §1.4. Dikirim di `Authorization: Bearer` dan **tidak pernah diterima sebagai grant slot** — §4 dan §5 dijaga `X-Grant-Token` (§7) |
+| `refresh_token` | **Opaque, bukan JWT.** Nilai acak; server menyimpan hash-nya saja, sehingga membaca basis data tidak cukup untuk menerbitkan sesi |
+| `redirect_context` | **Dihilangkan** (bukan dikirim kosong) bila akun tidak punya keterlibatan aktif. Pemeriksaan frontend adalah "apakah field-nya ada", bukan "apakah isinya kosong" |
+
+> **Dari mana 22740 datang, dan mengapa bukan 1080.** Sesi akun dimulai saat
+> **login**, yang terjadi *sebelum* antrian. Jadi ia harus mencakup penantian
+> **dan** perjalanan:
+>
+> ```
+> SALE_WINDOW_SECONDS   21600   login → giliran tiba  (env; fallback 6 jam)
+> journey + pause BR-22    990   930 + 60
+> margin                   150
+>                       ─────── = 22740 detik
+> ```
+>
+> Versi 2.3 memakai 1080, yang diturunkan dari perjalanan — benar untuk **grant**,
+> dan hanya kebetulan untuk sesi. Pada `ratePerMin` 318 dan antrian 300.000,
+> customer di posisi terakhir menanti sekitar **15,7 jam**. Sesi 18 menit mati di
+> ruang tunggu untuk hampir seluruh antrian.
+>
+> Yang rusak bukan ruang tunggunya — stream memakai cookie dan §3.3 memulihkan
+> lewat cookie. Yang rusak adalah **§1.6 pada Detail Ticket Page**: Daftar NIK
+> Teman menjawab 401 tepat ketika customer membukanya, memaksa NIK diketik
+> manual, memaksa panggilan Dukcapil, dan Dukcapil *fail closed* (BR-13). Satu
+> gangguan Dukcapil kemudian memblokir booking yang seharusnya lolos dari bukti
+> tersimpan — di dalam TTL booking 300 detik.
+>
+> **Harganya tertulis di §9**: angka ini sekaligus jendela pencabutan, karena
+> access token adalah JWT stateless dan tidak ada store yang dibaca saat
+> verifikasi. Pada 22740 detik claim `nik_verified` adalah **otorisasi** yang
+> ter-cache enam jam, bukan hanya identitas. Mengeluarkan claim itu adalah
+> pasangan yang semestinya menyertai perubahan ini, dan masih terbuka
+> (ADR-005 Bagian 17 #11).
+
+> **`redirect_context` diturunkan dari keterlibatan aktif akun** (BR-07: satu posisi
+> antrian **atau** satu booking yang belum terminal). Booking mengalahkan antrian —
+> begitu slot diberikan, booking adalah tempat customer sebenarnya berada.
+> `type` bernilai `booking` atau `queue`; `booking_id` hanya ada pada yang pertama.
+>
+> Pencariannya *best-effort*: kegagalannya menghilangkan field, bukan menggagalkan
+> login. Mendarat di halaman utama adalah degradasi; login yang gagal adalah kerusakan.
+
 **Requirement Coverage**: FR-31, BR-09 (re-entrant user kembali ke halaman yang sama)
 
 ---
 
-### 1.4 Register Account
+### 1.4 Refresh Session
+
+Menukar refresh token dengan pasangan token baru. Dipanggil klien saat access
+token mendekati kedaluwarsa, atau setelah menerima `401 TOKEN_EXPIRED`.
+
+Access token berlaku 22740 detik (§1.3) — mencakup penantian antrian **dan**
+perjalanan 930 detik — sehingga endpoint ini **tidak** dipanggil di tengah
+journey, dan juga tidak di ruang tunggu. Ia ada untuk sesi yang berumur hari,
+bukan untuk menambal token yang terlalu pendek.
+
+**Endpoint**: `POST /auth/refresh`
+
+**Request**:
+```json
+{
+  "refresh_token": "8Kq2mN9vL4wX1yB6cF3dH5jG0aZpR7tS"
+}
+```
+
+> Token dikirim di **body**, bukan header `Authorization`. Pada endpoint ini ia
+> bukan kredensial pembawa melainkan objek permintaannya sendiri, dan menjauhkannya
+> dari `Authorization` mencegahnya tercatat oleh proxy yang me-log header itu.
+
+**Response** (200):
+```json
+{
+  "meta": {
+    "code": 200,
+    "message": "Session refreshed"
+  },
+  "data": {
+    "access_token": "eyJhbG...",
+    "refresh_token": "wB3nT8kM2pQ7vF1xJ9cL5gH4dZ6yA0sR",
+    "expires_in": 22740
+  }
+}
+```
+
+**Cookies**: `access_token` ikut di-set ulang (HttpOnly, Secure, SameSite=Strict)
+untuk klien web. Klien mobile membaca dari body.
+
+#### Rotasi: token lama hangus setiap kali dipakai
+
+Setiap panggilan mengembalikan refresh token **baru** dan menghanguskan yang
+dikirim. Klien **wajib** mengganti salinan simpanannya — bila tidak, panggilan
+berikutnya akan terbaca sebagai pemutaran ulang dan sesi berakhir.
+
+| Keadaan token yang dikirim | Respons | Kode |
+|---|---|---|
+| Valid, belum pernah dipakai | 200 + pasangan baru | — |
+| **Sudah pernah dipakai** (replay) | 401, **seluruh rantai dicabut** | `TOKEN_INVALID` |
+| Kedaluwarsa, dicabut, atau tidak dikenal | 401 | `TOKEN_EXPIRED` |
+| Akun sudah tidak ada | 401 | `TOKEN_INVALID` |
+| Field `refresh_token` kosong/absen | 400 | `VALIDATION_ERROR` |
+
+> **Mengapa replay mencabut seluruh rantai, bukan hanya mata rantai itu.**
+> Token sekali-pakai yang muncul dua kali berarti ada dua pihak memegangnya —
+> tanda kredensial bocor. Yang menggenggam mata rantai **terbaru** bisa jadi
+> penyerang, bukan customer, sehingga mencabut satu token saja justru
+> mempertahankan akses penyerang. Mengakhiri sesi dan meminta login ulang adalah
+> respons termurah yang benar (OAuth 2.0 BCP §4.13).
+>
+> **Replay dan token kedaluwarsa dibedakan di kode, tetapi tidak di pesan.**
+> Keduanya 401; `TOKEN_INVALID` tidak memberi tahu pemanggil bahwa ia baru
+> memicu deteksi pencurian.
+
+#### Keluarga token (rotation family)
+
+Setiap login membuka **keluarga** tersendiri. Pencabutan karena replay hanya
+mengenai keluarga itu, sehingga customer tidak ikut keluar dari perangkat lain
+yang sesinya sehat.
+
+| Properti | Nilai |
+|---|---|
+| Masa berlaku refresh token | **30 hari** |
+| Masa berlaku access token | **22740 detik** (§1.3) — diturunkan dari `SALE_WINDOW_SECONDS` + perjalanan, bukan konstanta lepas |
+| Bentuk | Opaque acak 256-bit; server menyimpan **hash** saja |
+| Pemakaian | **Sekali**; redeem menerbitkan penggantinya dalam satu transaksi |
+
+> **`nik_verified` dibaca ulang dari akun, bukan disalin dari token lama.** NIK yang
+> baru terverifikasi sejak refresh terakhir harus langsung berlaku, dan NIK yang
+> dicabut tim operasional harus berhenti diklaim.
+
+**Response** (401):
+```json
+{
+  "meta": {
+    "code": 401,
+    "message": "Session ended; please sign in again"
+  },
+  "data": {}
+}
+```
+
+**Requirement Coverage**: FR-31, BR-09, NFR-02 (customer tidak diputus sepihak),
+NFR-07
+
+---
+
+### 1.5 Register Account
 
 Buat akun baru dengan email dan NIK.
 
@@ -208,7 +382,7 @@ Buat akun baru dengan email dan NIK.
 > Dukcapil lagi untuk NIK pembeli. Itulah tujuan utama `NIK_Terdaftar`: Dukcapil berbayar
 > per panggilan, dan pola pemakaian tiket adalah NIK yang sama berulang kali.
 >
-> **Consent diperlukan karena akun boleh menyimpan NIK orang lain** (§1.5). Rekamnya
+> **Consent diperlukan karena akun boleh menyimpan NIK orang lain** (§1.6). Rekamnya
 > immutable — timestamp, versi kebijakan, identitas akun — dan pencabutan hanya lewat tim
 > operasional (UU PDP No. 27/2022).
 
@@ -231,7 +405,7 @@ hanya dapat didaftarkan pada satu akun secara global.
 
 ---
 
-### 1.5 Daftar NIK Teman
+### 1.6 Daftar NIK Teman
 
 NIK yang sering diajak hadir bersama, disimpan sekali dan dipakai berulang **tanpa
 memanggil Dukcapil lagi**. Maksimal 5 per akun. Tidak tersedia untuk guest.
@@ -272,7 +446,7 @@ memanggil Dukcapil lagi**. Maksimal 5 per akun. Tidak tersedia untuk guest.
 
 **Response** (409 - `NIK_ALREADY_SAVED`): NIK sudah ada di daftar akun ini.
 
-**Response** (422 - `CONSENT_REQUIRED`): akun belum memberi persetujuan §1.4.
+**Response** (422 - `CONSENT_REQUIRED`): akun belum memberi persetujuan §1.5.
 
 **Response** (422 - NIK ditolak Dukcapil): tidak disimpan.
 
@@ -535,6 +709,12 @@ User bergabung ke antrian. Dipanggil saat klik "Beli Tiket" pada event dengan an
 
 **Endpoint**: `POST /events/{event_id}/queue/join`
 
+**Headers**:
+```
+X-Device-Id: {device_id}               # wajib bila customer TIDAK login
+Authorization: Bearer {access_token}   # bila login — mengaktifkan BR-07 dan atribusi
+```
+
 **Request**:
 ```json
 { "captcha_token": "0.AbCdEf..." }
@@ -543,6 +723,17 @@ User bergabung ke antrian. Dipanggil saat klik "Beli Tiket" pada event dengan an
 | Field | Wajib | Catatan |
 |---|---|---|
 | `captcha_token` | ✅ | Token CAPTCHA **tak terlihat**, diperoleh klien sebelum gerbang buka — lihat di bawah. Berlaku untuk tamu **dan** user login |
+
+> **`X-Device-Id` adalah tempat pengikatan grant dimulai.** Nilai acak 128 bit yang dibuat
+> klien sekali dan disimpan di `localStorage` / secure store. Server menyimpan
+> `HMAC(DEVICE_PEPPER, device_id)` pada keterlibatan, lalu mencocokkannya pada setiap
+> panggilan ber-grant (§4, §5). Tamu yang tidak mengirimnya ditolak di sini, bukan nanti —
+> grant tanpa pengikatan tidak dapat diikat belakangan.
+>
+> **`Authorization` di sini, dan hanya di sini di antara jalur antrian.** Ia mengaktifkan dua
+> hal yang keduanya butuh identitas akun pada saat join: penegakan BR-07 lewat
+> `acct:{ev}:{account_id}`, dan `account_id` pada keterlibatan — yang kemudian menjadi
+> `bookings.account_id` saat GRANT, tanpa pernah menanyakan klien lagi (§4).
 
 > **Token diperoleh SEBELUM `sale_starts_at`, bukan saat klik.** `ticket_no` berasal dari
 > `INCR issued` pada saat join; bila klien harus menyelesaikan tantangan lebih dulu, manusia
@@ -587,6 +778,9 @@ User bergabung ke antrian. Dipanggil saat klik "Beli Tiket" pada event dengan an
 > Set-Cookie: queue_token=qt_xyz789; HttpOnly; Secure; SameSite=Strict;
 >             Max-Age={SALE_WINDOW_SECONDS}
 > ```
+>
+> `Max-Age` adalah **batas atas, bukan umur yang diharapkan.** Sejak v2.4 keterlibatan yang
+> mencapai keadaan terminal menghapus kredensialnya lebih cepat daripada TTL — lihat §3.3.
 
 **Response** (200 - Already in Queue / Rejoined):
 ```json
@@ -663,7 +857,12 @@ Server-Sent Events stream untuk update posisi real-time. Client connect setelah 
 **Endpoint**: `GET /events/{event_id}/queue/stream`
 
 **Cookies** (web): `queue_token=qt_xyz789`
-**Headers** (mobile): `Authorization: Bearer qt_xyz789`
+**Headers** (mobile): `X-Queue-Token: qt_xyz789`
+
+> **Web memakai cookie, dan itu bukan pilihan gaya.** `EventSource` tidak dapat menyetel
+> header request, sehingga stream ini satu-satunya endpoint yang *harus* diautentikasi lewat
+> cookie. Klien mobile menyetel header, jadi mereka memakai `X-Queue-Token`. Yang **tidak**
+> dipakai di sini adalah `Authorization: Bearer` — slot itu milik token sesi akun saja (§7).
 
 > Token **tidak pernah** dikirim lewat query string — ia akan tercatat di access log ALB,
 > CloudWatch, dan history browser.
@@ -708,7 +907,7 @@ event: grant
 data: {}
 ```
 
-> Klien merespons dengan `GET /events/{event_id}/queue/me` untuk mengambil `access_token`.
+> Klien merespons dengan `GET /events/{event_id}/queue/me` untuk mengambil `grant_token`.
 > Grant hanya diterbitkan **setelah** slot diamankan dan baris booking tertulis, sehingga
 > `/queue/me` tidak pernah menolak customer yang sudah menerima `grant` (NFR-02).
 
@@ -799,7 +998,8 @@ skenario kembali:
 | | Dipakai saat | Resolusi server |
 |---|---|---|
 | `Cookie: queue_token=qt_xyz789` | perangkat sama — tab ditutup, refresh, kembali dari aplikasi bank | `HGET token:{uuid}` |
-| `Authorization: Bearer <identity token>` | perangkat berbeda, cookie dibersihkan, incognito, app di-install ulang | `acct:{ev}:{account_id}` → uuid token → `HGET token:{uuid}`; cookie diterbitkan ulang pada respons |
+| `X-Queue-Token: qt_xyz789` | perangkat sama, klien mobile — tidak ada cookie store | `HGET token:{uuid}` |
+| `Authorization: Bearer <token sesi akun>` | perangkat berbeda, cookie dibersihkan, incognito, app di-install ulang | `acct:{ev}:{account_id}` → uuid token → `HGET token:{uuid}`; cookie diterbitkan ulang pada respons |
 
 > **Pemulihan adalah READ, dan itu disengaja.** `POST …/queue/join` juga memulihkan
 > keterlibatan yang ada (BR-07), tetapi ia jalur tulis yang membawa **CAPTCHA** dan dua rate
@@ -809,7 +1009,7 @@ skenario kembali:
 > habis justru karena orang-orang yang reconnect. Endpoint ini **tidak** menuntut
 > `captcha_token` dan **tidak** dihitung terhadap batas join.
 >
-> **Hanya untuk customer login.** Tamu tidak punya identity token, sehingga pemulihan mereka
+> **Hanya untuk customer login.** Tamu tidak punya token sesi akun, sehingga pemulihan mereka
 > berhenti pada cookie — lintas perangkat memang di luar cakupan untuk tamu.
 
 **Response** (200): bentuk `data` mengikuti keadaan customer.
@@ -817,11 +1017,43 @@ skenario kembali:
 | Keadaan | `data` | Halaman tujuan |
 |---|---|---|
 | Masih mengantre | `{"state":"QUEUED","ticket_no":31842,"now_serving":31600}` | Waiting Room |
-| Giliran tiba | `{"state":"GRANTED","access_token":"at_abc123","booking_expires_at":"…","server_time":"…"}` | Detail Ticket, countdown **sudah berjalan** |
-| Sedang memilih | `{"state":"SELECTING","access_token":"at_abc123","booking_id":"RB-00912","booking_expires_at":"…","server_time":"…"}` | Detail Ticket, countdown dilanjutkan |
-| Menunggu bayar | `{"state":"AWAITING_PAYMENT","access_token":"at_abc123","booking_id":"RB-00912","payment_expires_at":"…","payment_ref":"pay_123","server_time":"…"}` | Payment, countdown dilanjutkan |
+| Giliran tiba | `{"state":"GRANTED","grant_token":"gt_abc123","booking_expires_at":"…","server_time":"…"}` | Detail Ticket, countdown **sudah berjalan** |
+| Sedang memilih | `{"state":"SELECTING","grant_token":"gt_abc123","booking_id":"RB-00912","booking_expires_at":"…","server_time":"…"}` | Detail Ticket, countdown dilanjutkan |
+| Menunggu bayar | `{"state":"AWAITING_PAYMENT","grant_token":"gt_abc123","booking_id":"RB-00912","payment_expires_at":"…","payment_ref":"pay_123","server_time":"…"}` | Payment, countdown dilanjutkan |
 | Selesai | `{"state":"CONFIRMED","booking_id":"RB-00912"}` | Halaman tiket |
 | Kedaluwarsa | `{"state":"EXPIRED"}` | Layar expired |
+
+#### Kapan kredensial antrian berhenti ada
+
+Cookie dan `token:{uuid}` punya TTL (`SALE_WINDOW_SECONDS`), tetapi TTL saja berarti
+kredensial tetap hidup lama setelah ia berhenti berarti apa pun. Sejak v2.4 keadaan terminal
+menghapusnya aktif:
+
+| Keadaan | Kredensial antrian | Akibat pada §3.3 |
+|---|---|---|
+| grant diterbitkan | **tetap** | pemulihan setelah grant justru bergantung padanya — `GRANTED`, `SELECTING`, `AWAITING_PAYMENT`, termasuk "kembali dari aplikasi bank" |
+| `EXPIRED`, `LAPSED`, `ABANDONED` | dihapus | `{"state":"EXPIRED"}` — tidak ada apa pun untuk kembali ke sana. `LAPSED` bersifat final: tidak ada kesempatan kedua (ADR-005 Bagian 7) |
+| `CONFIRMED` | dihapus, diganti **nisan** | tetap `{"state":"CONFIRMED","booking_id":…}` selama `SETTLED_TOMBSTONE_SECONDS` |
+
+> **Nisan, bukan perpanjangan.** Pada `CONFIRMED`, `token:{uuid}` dihapus dan `settled:{uuid}`
+> ditulis memuat `booking_id` dan tidak lebih — bukan `ticket_no`, bukan `account_id`, bukan
+> `device_hash`. §3.3 tetap dapat menjawab `CONFIRMED`, tetapi tidak ada kredensial yang
+> tersisa untuk memulihkan apa pun.
+>
+> **Yang dicegahnya adalah kebohongan, bukan kebocoran.** Tanpa nisan, tamu yang me-refresh di
+> celah antara pembayaran lunas dan email e-tiket tiba memanggil endpoint ini dengan token
+> mati, dan pemetaan frontend untuk token tak terselesaikan adalah **layar kedaluwarsa** —
+> memberi tahu orang yang baru membayar bahwa sesinya habis. Itu "jangan PHP" dalam bentuk
+> paling murni, dan ia salah secara faktual.
+>
+> Respons yang dijawab dari nisan mengirim `Set-Cookie: queue_token=; Max-Age=0` bersamaan.
+> Transisi terminal terjadi di `admission-ctl` atau webhook, bukan di dalam permintaan
+> customer, jadi tidak ada respons lain untuk menumpangi.
+>
+> **Setelah nisan kedaluwarsa, email adalah rutenya** — ditambah mendaftar dengan NIK yang
+> sama, yang mewarisi tiket lewat klausa kepemilikan §6.1. `contact_email` dan `holder_email`
+> wajib di §4.3, jadi kanal itu selalu ada. Itulah yang membuat penghapusan ini dapat
+> diterima — dan mengapa tautan e-tiket **wajib** dapat dibuka tanpa akun (§6.2).
 
 > `POST /queue/claim-token` dari v1.1 **dihapus**. Pada model itu klien meminta slot setelah
 > `your_turn`, dan bisa menerima `429 Slot penuh` — memberi tahu customer bahwa gilirannya
@@ -872,6 +1104,36 @@ saat tier SSE tidak sehat. **Bukan** transport utama.
 
 ## 4. Booking
 
+Seluruh endpoint §4 dan §5 dijaga oleh **grant**, dan hanya oleh grant. `Authorization` tidak
+dikirim ke endpoint mana pun di sini.
+
+| Header | Wajib | Membuktikan | Bila salah/hilang |
+|---|---|---|---|
+| `X-Grant-Token` | ✅ | pemegang **punya slot** | `401 GRANT_TOKEN_MISSING` / `GRANT_TOKEN_INVALID` |
+| `X-Device-Id` | ✅ bila **tidak login** | grant masih di perangkat yang menerimanya | `401 DEVICE_MISMATCH` |
+
+> **Mengapa grant yang menjaga, bukan sesi.** Tamu boleh membeli (FR-02): ia tidak punya akun,
+> jadi tidak ada sesi untuk diperiksa. Yang dimilikinya adalah slot.
+>
+> **Dan mengapa sesi tidak lagi dikirim sama sekali.** v2.3 menerimanya sebagai header
+> opsional untuk mengisi `bookings.account_id`. Itu gagal secara diam-diam: bila sesi akun
+> mati di ruang tunggu, klien tidak mengirim apa pun, baris tertulis `account_id = NULL`, dan
+> pembelian customer login tercatat sebagai pembelian tamu — tanpa error, tanpa 401, tanpa
+> jejak. v2.4 mengambil `account_id` dari **keterlibatan** (`token:{uuid}`, yang mengetahuinya
+> sejak join ketika sesi masih pasti segar) dan menuliskannya pada INSERT saat GRANT. Atribusi
+> karena itu tidak bergantung pada jam klien, dan header itu tidak punya pekerjaan lagi.
+>
+> **`X-Device-Id` mengikat grant ke perangkat yang menerimanya** — satu-satunya hal yang
+> berdiri antara customer dan menjual slot antriannya, dan di antrian 300.000 untuk 10.000
+> tiket slot punya harga pasar. Nilai acak 128 bit yang dibuat klien, bukan fingerprint pasif;
+> server menyimpan HMAC-nya saja. Satu rebind yang tercatat diizinkan, karena menghapus data
+> situs itu lumrah dan tidak boleh berarti kehilangan slot. Rinciannya di ADR-005 Bagian 12.
+> Customer login tidak mengirimnya: `account_id` sudah mengikat lebih kuat.
+>
+> Tamu yang kelak mendaftar dengan NIK yang sama tetap mewarisi tiketnya — klausa kepemilikan
+> §6.1 menyelesaikan *pembeli **atau** pemegang NIK terdaftar*, jadi tidak ada aturan tambahan
+> yang diperlukan.
+
 ### 4.1 Get Ticket Selection Page
 
 Menampilkan kategori tiket dengan stok. UI: "Pilih tempatmu di konser."
@@ -880,8 +1142,11 @@ Menampilkan kategori tiket dengan stok. UI: "Pilih tempatmu di konser."
 
 **Headers**:
 ```
-Authorization: Bearer {access_token}
+X-Grant-Token: {grant_token}
+X-Device-Id: {device_id}               # wajib bila customer TIDAK login
 ```
+
+> `Authorization` tidak dikirim ke endpoint ini — lihat tabel di awal §4.
 
 **Response** (200):
 ```json
@@ -949,8 +1214,11 @@ Validasi NIK ke Dukcapil sebelum submit booking. UI: dipanggil saat input NIK bl
 
 **Headers**:
 ```
-Authorization: Bearer {access_token}
+X-Grant-Token: {grant_token}
+X-Device-Id: {device_id}               # wajib bila customer TIDAK login
 ```
+
+> `Authorization` tidak dikirim ke endpoint ini — lihat tabel di awal §4.
 
 **Request**:
 ```json
@@ -1097,8 +1365,11 @@ Submit pemilihan tiket. UI: "Lanjut ke Pembayaran" button.
 
 **Headers**:
 ```
-Authorization: Bearer {access_token}
+X-Grant-Token: {grant_token}
+X-Device-Id: {device_id}               # wajib bila customer TIDAK login
 ```
+
+> `Authorization` tidak dikirim ke endpoint ini — lihat tabel di awal §4.
 
 **Request**:
 ```json
@@ -1138,7 +1409,7 @@ Authorization: Bearer {access_token}
 > tidak tumpang tindih.
 >
 > **Idempoten.** Submit yang diulang tidak menjalankan hold kedua. Server mengunci baris
-> booking (`SELECT … FOR UPDATE` atas `access_token`); bila status sudah `HELD` atau lebih
+> booking (`SELECT … FOR UPDATE` atas `grant_token`); bila status sudah `HELD` atau lebih
 > jauh, booking yang ada dikembalikan dengan `200`. Tanpa guard ini retry akan gagal dengan
 > `NIK_TAKEN` atas NIK customer sendiri.
 
@@ -1257,8 +1528,11 @@ Detail booking untuk Payment Page dan Success Page.
 
 **Headers**:
 ```
-Authorization: Bearer {access_token}
+X-Grant-Token: {grant_token}
+X-Device-Id: {device_id}               # wajib bila customer TIDAK login
 ```
+
+> `Authorization` tidak dikirim ke endpoint ini — lihat tabel di awal §4.
 
 **Response** (200 - Pending Payment):
 ```json
@@ -1340,6 +1614,9 @@ Authorization: Bearer {access_token}
 
 ## 5. Payment
 
+Header dan aturannya sama dengan §4: `X-Grant-Token` wajib, `X-Device-Id` wajib bila tidak login,
+`Authorization` tidak dikirim.
+
 ### 5.1 Get Payment Methods
 
 Metode pembayaran yang tersedia beserta **parameter yang dibutuhkan klien**. UI: Payment
@@ -1349,8 +1626,11 @@ Method selection.
 
 **Headers**:
 ```
-Authorization: Bearer {access_token}
+X-Grant-Token: {grant_token}
+X-Device-Id: {device_id}               # wajib bila customer TIDAK login
 ```
+
+> `Authorization` tidak dikirim ke endpoint ini — lihat tabel di awal §4.
 
 **Response** (200):
 ```json
@@ -1422,8 +1702,11 @@ Memulai pembayaran dengan metode terpilih. UI: tombol "Bayar Sekarang".
 
 **Headers**:
 ```
-Authorization: Bearer {access_token}
+X-Grant-Token: {grant_token}
+X-Device-Id: {device_id}               # wajib bila customer TIDAK login
 ```
+
+> `Authorization` tidak dikirim ke endpoint ini — lihat tabel di awal §4.
 
 Bentuk request berbeda per metode:
 
@@ -1534,8 +1817,11 @@ metode — misalnya sudah menerima VA BCA lalu memilih GoPay.
 
 **Headers**:
 ```
-Authorization: Bearer {access_token}
+X-Grant-Token: {grant_token}
+X-Device-Id: {device_id}               # wajib bila customer TIDAK login
 ```
+
+> `Authorization` tidak dikirim ke endpoint ini — lihat tabel di awal §4.
 
 **Response** (200):
 ```json
@@ -1596,8 +1882,11 @@ Polling status pembayaran. UI: Payment Page polling.
 
 **Headers**:
 ```
-Authorization: Bearer {access_token}
+X-Grant-Token: {grant_token}
+X-Device-Id: {device_id}               # wajib bila customer TIDAK login
 ```
+
+> `Authorization` tidak dikirim ke endpoint ini — lihat tabel di awal §4.
 
 **Response** (200 - Pending):
 ```json
@@ -1775,6 +2064,10 @@ List tiket user. UI: "Tiket saya" menu.
 Authorization: Bearer {access_token}
 ```
 
+> Token **sesi akun**, bukan grant. Endpoint ini tidak menerima `X-Grant-Token`:
+> kepemilikan di sini diselesaikan lewat `account_id`, dan grant tidak membawa
+> identitas akun apa pun (§7).
+
 **Query Parameters**:
 | Param | Type | Required | Description |
 |-------|------|----------|-------------|
@@ -1821,9 +2114,41 @@ Authorization: Bearer {access_token}
 
 Download/view e-ticket. UI: "Lihat E-Tiket" button.
 
-**Endpoint**: `GET /tickets/{ticket_id}/eticket`
+**Endpoint**: `GET /tickets/{ticket_id}/eticket[?t={eticket_token}]`
 
-**Headers**:
+**Dua jalan masuk, dan keduanya wajib ada:**
+
+| Kredensial | Dipakai oleh | Resolusi |
+|---|---|---|
+| `Authorization: Bearer {access_token}` | pemilik akun, dari menu "Tiket Saya" (§6.1) | klausa kepemilikan: *pembeli **atau** pemegang NIK terdaftar* |
+| `?t={eticket_token}` | **pemegang NIK**, dari tautan di email e-tiket | HMAC terhadap `ticket_id`; tidak membawa identitas akun |
+
+Endpoint ini tidak menerima `X-Grant-Token`: grant membuktikan slot, bukan kepemilikan tiket,
+dan grant sudah kedaluwarsa jauh sebelum tanggal event.
+
+> **Mengapa `?t=` wajib ada, bukan kemudahan tambahan.** FR-26 menuntut tiket dikirim ke
+> **masing-masing pemegang NIK**, dan pemegang NIK kedua dan ketiga biasanya bukan pemilik
+> akun — sering bukan pembeli sama sekali. Rute yang hanya menerima sesi akun berarti tombol
+> "Buka e-tiket" di email mereka menjawab **401**: jalur pengiriman utama requirement itu
+> tidak berfungsi untuk orang-orang yang requirement itu ditulis untuk mereka. Hal yang sama
+> berlaku bagi pembeli tamu, yang setelah §3.3 menghapus kredensial antriannya hanya memiliki
+> email.
+>
+> **Bentuk tokennya.** HMAC bertanda tangan atas `ticket_id` + kedaluwarsa, stateless sehingga
+> verifikasinya tidak membaca store, dengan kunci khusus — bukan signing secret JWT dan bukan
+> `DEVICE_PEPPER`. Lingkupnya **satu tiket**: ia tidak membuka tiket lain dalam booking yang
+> sama, tidak membuka §6.1, dan tidak membawa `account_id`. Berlaku sampai tanggal event + 1
+> hari, karena tiket memang perlu dibuka di gerbang.
+>
+> **Dicabut hanya dengan rotasi kunci**, dan rotasi membatalkan setiap tautan yang sudah
+> terkirim. Karena itu kuncinya tidak dirotasi di dalam masa penjualan event aktif.
+>
+> **Residual, dinyatakan terang:** meneruskan email berarti meneruskan tiket. Itu benar untuk
+> e-tiket mana pun, dan BR-02 (1 NIK = 1 kursi) tetap mengikat kursi pada NIK, bukan pada
+> penerima email. Pemeriksaan identitas di gerbang venue di luar cakupan POC (ADR-005
+> Bagian 8), jadi itulah batas yang kita punya.
+
+**Headers** (jalur akun):
 ```
 Authorization: Bearer {access_token}
 ```
@@ -1895,7 +2220,7 @@ dieksekusi otomatis di POC; operator merekonsiliasi lewat dashboard Midtrans.
 > setiap eksekusi. Yang ditunda di POC adalah pemanggilannya, bukan desainnya.
 
 Diamankan sama seperti dashboard operasional: terpisah dari jalur customer, tidak memakai
-`accessToken` antrian.
+grant token antrian.
 
 **Requirement Coverage**: FR-25, NFR-09
 
@@ -1994,12 +2319,12 @@ Diamankan sama seperti dashboard operasional: terpisah dari jalur customer, tida
 | FR-23 | Webhook `EXPIRE` / sweep → stok dilepas | ✅ |
 | FR-24 | REST/JSON, identik untuk web dan mobile | ✅ |
 | FR-25 | `payment_events.gateway_event_id UNIQUE`; charge diputar ulang dari state booking | ✅ |
-| FR-26 | `holder_email` per kursi pada `POST /bookings` | ✅ |
+| FR-26 | `holder_email` per kursi pada §4.3, **dan** tautan e-tiket yang dapat dibuka pemegang NIK tanpa akun (§6.2 `?t=`) | ✅ |
 | FR-27 | `GET /tickets/{id}/eticket` — QR, kategori, NIK. **Nomor bangku di luar lingkup POC** | ✅ |
 | FR-28 | Webhook `EXPIRE` / sweep → email expired | ⚙️ Backend |
-| FR-29 | Semua endpoint pembelian dapat diakses tanpa akun | ✅ |
+| FR-29 | Semua endpoint pembelian dapat diakses tanpa akun; grant anonim diikat ke `X-Device-Id` (§9) | ✅ |
 | FR-30 | `POST /bookings` hanya butuh NIK + email | ✅ |
-| FR-31 | `POST /auth/magic-link`, `GET /auth/verify` | ✅ |
+| FR-31 | `POST /auth/magic-link`, `GET /auth/verify`, `POST /auth/refresh` | ✅ |
 | FR-32 | Header `Accept-Language`; pesan error dikembalikan sebagai kode | ✅ |
 | FR-33 | CloudWatch EMF `QueueDepth` — tidak ada endpoint aplikasi | ⚙️ Observability |
 | FR-34 | CloudWatch EMF `ConversionRate` | ⚙️ Observability |
@@ -2013,7 +2338,7 @@ Diamankan sama seperti dashboard operasional: terpisah dari jalur customer, tida
 | NFR-04 | Hold stok atomik dalam satu skrip Lua | ⚙️ Backend |
 | NFR-05 | FCFS lewat `ticket_no`; **tanpa WAF di POC**, bot pada `/queue/join` hanya ditahan rate limit per-IP | ⚠️ Terdegradasi (POC) |
 | NFR-06 | SSE push; p95 < 1 detik | ✅ |
-| NFR-07 | `access_token` pada endpoint booking/payment; tidak ada data kartu | ✅ |
+| NFR-07 | `X-Grant-Token` wajib pada endpoint booking/payment, `Authorization` opsional di atasnya; tidak ada data kartu | ✅ |
 | NFR-08 | REST/JSON, platform-agnostic | ✅ |
 | NFR-09 | CloudWatch EMF, namespace `RusuhBooking/Queue` | ⚙️ Observability |
 | NFR-10 | Kegagalan email tidak mengubah status booking; `GET /bookings/{id}/tickets` selalu tersedia | ✅ |
@@ -2022,7 +2347,7 @@ Diamankan sama seperti dashboard operasional: terpisah dari jalur customer, tida
 | BR-03/04 | `booking_expires_at` = `granted_at` + 5 menit — tidak ada grace antrian, jam mulai saat slot diberikan | ✅ |
 | BR-05/06 | `payment_expires_at` = `held_at` + 10 menit — berurutan setelah TTL booking, penuh bagi setiap customer | ✅ |
 | BR-07 | `POST …/queue/join` memulihkan keterlibatan yang ada untuk akun yang sama — satu per event, user login saja | ✅ |
-| BR-09 | `GET /events/{id}/queue/me` mengembalikan token yang sama | ✅ |
+| BR-09 | `GET /events/{id}/queue/me` mengembalikan token yang sama; `redirect_context` pada §1.3 memulihkan halaman; `POST /auth/refresh` menjaga sesi tetap hidup sepanjang TTL | ✅ |
 | BR-10 | `server_time` pada tiap respons; klien menghitung offset jam sekali dan merender semua countdown terhadapnya | ✅ |
 
 Legenda: ✅ terpenuhi di kontrak · ⚙️ di luar permukaan API (backend atau observability) ·
@@ -2034,16 +2359,21 @@ Legenda: ✅ terpenuhi di kontrak · ⚙️ di luar permukaan API (backend atau 
 
 | Aspect | Implementation |
 |--------|----------------|
-| Queue Token | `queue_token` cookie (HttpOnly, Secure), set via `Set-Cookie` on queue join; `Max-Age` diturunkan dari `SALE_WINDOW_SECONDS`, sama dengan TTL `token:{uuid}` yang dirujuknya |
-| Identity Token | JWT akun, diterima `GET …/queue/me` sebagai alternatif cookie untuk pemulihan lintas perangkat (§3.3) |
-| Access Token | JWT, returned in response body; client stores and sends via `Authorization: Bearer` |
-| Refresh Token | Returned in response body on login; client stores securely (Keychain/Keystore/memory) |
+| Access Token (sesi akun) | JWT HS256, **22740 detik** (= `SALE_WINDOW_SECONDS` + 990 + 150 — ADR-005 §7; **bukan** `GRANT_TOKEN_TTL_SECONDS`, yang mengukur interval lain). Dikirim via `Authorization: Bearer`, dan **hanya kredensial inilah** yang pernah menempati slot itu. Diterbitkan `GET /auth/verify` (§1.3) dan `POST /auth/refresh` (§1.4); juga diterima `GET …/queue/me` sebagai alternatif cookie untuk pemulihan lintas perangkat (§3.3). Stateless: setiap service yang memegang signing secret dapat memverifikasinya tanpa memanggil `user`. Karena tidak ada store yang dibaca saat verifikasi, **umur token inilah jendela pencabutannya** — memperpanjangnya memperlebar jendela itu |
+| Grant Token | Opaque acak (`gt_…`), **bukan JWT**, dikirim via header `X-Grant-Token`. Diperoleh dari `GET …/queue/me` setelah event `grant` (§3.3), tersimpan server di `grant:{token} EX GRANT_TOKEN_TTL_SECONDS`. Membuktikan pemegangnya **punya slot**, bukan siapa dirinya — diterbitkan untuk tamu juga. Karena tiap verifikasi membacanya dari Redis, berbeda dari access token ia **dapat dicabut seketika** dengan satu `DEL` |
+| Queue Token (ruang tunggu) | `queue_token` cookie (HttpOnly, Secure) untuk web, header `X-Queue-Token` untuk mobile; set via `Set-Cookie` saat queue join. `Max-Age` diturunkan dari `SALE_WINDOW_SECONDS`, sama dengan TTL `token:{uuid}` yang dirujuknya. Membuktikan **posisi dalam antrian**, bukan slot. `Max-Age` adalah batas atas: keadaan terminal menghapusnya lebih cepat, dan `CONFIRMED` menggantinya dengan nisan `settled:{uuid}` yang tidak memulihkan apa pun (§3.3) |
+| E-ticket Token | HMAC bertanda tangan atas satu `ticket_id` + kedaluwarsa, dikirim sebagai query `?t=` pada tautan email (§6.2). Stateless, tanpa identitas akun, lingkup satu tiket, berlaku sampai tanggal event + 1 hari. Kunci khusus — bukan signing secret JWT, bukan `DEVICE_PEPPER`. Ada karena FR-26 mengirim tiket ke pemegang NIK yang umumnya tidak punya akun; tanpa ini tombol di email mereka menjawab 401 |
+| Refresh Token | **Opaque acak 256-bit, bukan JWT**, 30 hari, disimpan server sebagai hash SHA-256. Sekali pakai dengan **rotasi**; pemutaran ulang mencabut seluruh keluarga (§1.4). Klien menyimpannya aman (Keychain/Keystore/memory) dan menggantinya setiap refresh |
+| Signing secret | Terpisah dari pepper HMAC NIK, dan **berbeda sifatnya**: signing secret dapat dan sebaiknya dirotasi, pepper tidak pernah (ADR-005 §8) |
 | NIK | Masked in responses (3171********xx22), stored encrypted |
 | Payment | Via payment gateway (PCI-DSS compliant), no card data stored |
 | Rate Limiting | Per IP on queue join, per user on auth |
 | CSRF | `SameSite=Strict` on queue cookie; Origin validation on state-changing endpoints |
-| **Object ownership** | Setiap endpoint yang menerima `booking_id` atau `ticket_id` dari path mengikatnya ke pemegang token: `WHERE id = $1 AND queue_token = $accessToken`. Token yang sah membuktikan pemegangnya punya slot, bukan bahwa slot itu miliknya. Tidak cocok → **404**, bukan 403 |
-| SSE Auth | `queue_token` cookie validated on stream connection |
+| **Object ownership** | Setiap endpoint yang menerima `booking_id` atau `ticket_id` dari path mengikatnya ke pemegang grant: `WHERE id = $1 AND grant_token = $grantToken`. Grant yang sah membuktikan pemegangnya punya slot, bukan bahwa slot itu miliknya. Tidak cocok → **404**, bukan 403. `account_id` baris itu **sudah** terisi sejak INSERT saat GRANT, diambil dari keterlibatannya, jadi tidak ada kredensial klien yang perlu membuktikan kepemilikan akun di sini (§4) |
+| **Satu slot, satu kredensial** | Tidak ada endpoint yang menerima dua kredensial berbeda di slot yang sama. Middleware memutuskan per rute, bukan per token: ia tidak mencoba memverifikasi tanda tangan lalu jatuh ke pencarian Redis. Tanpa aturan ini, grant tamu dapat lolos di `GET /me/tickets`, atau JWT akun lolos pada `booking_id` yang bukan miliknya — tepat yang dicegah baris di atas |
+| **Atribusi akun** | `bookings.account_id` ditulis pada INSERT saat GRANT dari `token:{uuid}`, **tidak** dari kredensial yang dibawa klien saat checkout. Keterlibatan mengetahui identitasnya sejak join, ketika sesi masih pasti segar; bergantung pada token saat checkout berarti sesi yang kedaluwarsa menurunkan pembelian customer login menjadi pembelian tamu tanpa satu pun error |
+| **Pengikatan device (grant anonim)** | `X-Device-Id` — acak 128 bit yang dibuat klien, disimpan server sebagai `HMAC(DEVICE_PEPPER, device_id)`, dicocokkan pada setiap panggilan ber-grant. Tidak cocok → **401** `DEVICE_MISMATCH`. Satu rebind dicatat dan diizinkan. **Bukan** fingerprint pasif: canvas/WebGL rapuh dan memanen karakteristik perangkat tanpa dasar persetujuan (NFR-11). **Non-goal**: ia menghentikan jual-beli slot, bukan penyerang yang menyalin `localStorage` korban |
+| SSE Auth | `queue_token` cookie (web) atau `X-Queue-Token` (mobile) divalidasi saat koneksi stream. `Authorization` tidak dipakai di sini |
 
 ---
 
@@ -2081,8 +2411,13 @@ Legenda: ✅ terpenuhi di kontrak · ⚙️ di luar permukaan API (backend atau 
 | `BOOKING_EXPIRED` | TTL booking habis |
 | `PAYMENT_EXPIRED` | TTL pembayaran habis |
 | `TOO_MANY_REQUESTS` | Rate limited |
-| `TOKEN_EXPIRED` | Access token expired |
-| `TOKEN_INVALID` | Access token invalid |
+| `TOKEN_EXPIRED` | **Hanya tentang sesi akun.** Access token kedaluwarsa, atau refresh token kedaluwarsa/dicabut/tidak dikenal — klien me-refresh (§1.4) atau login ulang |
+| `TOKEN_INVALID` | Token tidak sah, **atau refresh token diputar ulang** — pada kasus kedua seluruh keluarga token sudah dicabut dan customer harus login ulang. Satu kode untuk keduanya: memberi kode terpisah akan memberi tahu penyerang bahwa ia memicu deteksi |
+| `GRANT_TOKEN_MISSING` | **401** — `X-Grant-Token` tidak disertakan pada endpoint §4/§5. Kode terpisah karena penyebabnya biasanya klien yang masih mengirim grant di `Authorization`, dan `TOKEN_INVALID` tidak mengarahkan siapa pun ke sana |
+| `GRANT_TOKEN_INVALID` | **401** — grant tidak dikenal, kedaluwarsa, atau sudah dicabut. Beda dari `BOOKING_EXPIRED`: yang ini soal kredensial, bukan soal TTL booking. Keduanya dapat terjadi berurutan dan frontend merutekannya berbeda |
+| `DEVICE_ID_REQUIRED` | **400** — `X-Device-Id` tidak disertakan oleh pemanggil anonim pada `POST …/queue/join` atau endpoint ber-grant. Ditolak di join, bukan nanti: grant tanpa pengikatan tidak dapat diikat belakangan |
+| `DEVICE_MISMATCH` | **401** — grant dipakai dari perangkat yang bukan penerimanya, dan kuota rebind (`MAX_DEVICE_REBINDS`) sudah habis. Satu rebind diizinkan dan dicatat, sehingga kode ini menandai percobaan ketiga — bukan sekadar "ganti browser" |
+| `ETICKET_TOKEN_INVALID` | **401** — token `?t=` pada tautan e-tiket tidak sah, kedaluwarsa, atau tidak cocok dengan `ticket_id` di path. Satu kode untuk ketiganya: membedakannya memberi tahu penebak mana bagian yang hampir benar |
 
 ---
 
@@ -2093,7 +2428,7 @@ Legenda: ✅ terpenuhi di kontrak · ⚙️ di luar permukaan API (backend atau 
 | Aspect | Value |
 |--------|-------|
 | Transport | SSE (`GET /events/{event_id}/queue/stream`) |
-| Auth | Cookie `HttpOnly` (web) / header `Authorization` (mobile) — tidak pernah query string |
+| Auth | Cookie `queue_token` (web — `EventSource` tidak bisa menyetel header) / header `X-Queue-Token` (mobile) — tidak pernah query string |
 | Broadcast | Saat `nowServing` berubah, saat `paused` berubah, atau tiap 10 detik |
 | Tick admission | 500 ms |
 | Keepalive | Komentar `: keepalive` tiap **15 detik** (bukan event bernama) |
@@ -2186,6 +2521,96 @@ Penyelarasan dengan ADR-005. Yang memutus kompatibilitas ditandai **BREAKING**.
 | 28 | SSE `state` menambah `CLOSED`; `SOLD_OUT` kini **reversibel** dan **tidak** menutup stream | Stok kembali dari booking yang kedaluwarsa, dan sold-out satu arah membuat kursi itu tidak pernah terjual. Pemutusan dipindahkan ke `CLOSED`, sekali, setelah 930 detik |
 | 29 | `label_key` menambah `sold_out_may_return` | Customer perlu tahu bedanya "habis, mungkin kembali" dari "sale ditutup" — halaman utama di-refresh manual, jadi perbedaan itu menentukan apakah layak dicoba lagi |
 | 30 | `GET …/queue/me` wajib dibaca ulang saat `paused` berubah | Server menambah `PAUSE_TTL_GRACE_SECONDS` ke tenggat yang sedang berjalan; klien yang menghitung turun dari nilai lama akan meleset 60 detik |
-| 31 | `GET …/queue/me` menerima identity token selain cookie | Pemulihan lintas perangkat sebelumnya hanya mungkin lewat `POST …/queue/join`, yang membawa CAPTCHA dan dua rate limit — memperlakukan customer yang kembali sebagai serangan |
+| 31 | `GET …/queue/me` menerima token sesi akun selain cookie | Pemulihan lintas perangkat sebelumnya hanya mungkin lewat `POST …/queue/join`, yang membawa CAPTCHA dan dua rate limit — memperlakukan customer yang kembali sebagai serangan |
 | 32 | Cookie `Max-Age` diturunkan dari `SALE_WINDOW_SECONDS`, bukan 7200 | Cookie dan `token:{uuid}` yang dirujuknya harus kedaluwarsa bersamaan; 7200 adalah angka yang tidak terikat apa pun |
 | 33 | Event `status` menambah `reason` (`redis_disconnected` \| `no_admission_updates`) dan pemicu kedua: keheningan `sse-broadcast` > 30 detik | `status` sebelumnya hanya menyala saat sse-server kehilangan Redis. Bila `admission-ctl` yang mati, Redis dan sse-server dua-duanya sehat — tidak ada sinyal apa pun sementara antrian membeku di balik koneksi yang tampak hidup dan keepalive yang tetap datang. Deteksinya di server, bukan timer di klien, sehingga nol kode klien bertambah |
+
+### v2.1 → v2.2
+
+| # | Perubahan | Alasan |
+|---|---|---|
+| 28 | Ditambahkan `POST /auth/refresh` (§1.4) | `expires_in` sudah ada di §1.3 sejak v2.0 tanpa cara memperpanjangnya, sehingga sesi berakhir diam-diam dan customer harus meminta magic link baru. Endpoint ini melengkapi angka yang sudah dinyatakan kontrak, bukan menambah fitur |
+| 34 | `expires_in` **300 → 1080** detik (§1.3) | Nilai 300 tidak diturunkan dari apa pun dan kebetulan sama dengan `BOOKING_TTL_SECONDS` — tampaknya tersalin dari sana. ADR-005 §7 mewajibkan umur token diturunkan dari perjalanan, bukan ditulis tetap, dan sudah melakukannya untuk `GRANT_TOKEN_TTL_SECONDS`: 300 booking + 600 pembayaran + 30 grace + margin = 1080. Pada 300 detik customer me-refresh dua sampai tiga kali di tengah journey, termasuk di halaman pembayaran; refresh yang gagal di sana memutusnya — kegagalan "jangan PHP" yang NFR-02 ada untuk mencegah. Pada 300 detik juga, 300.000 concurrent menghasilkan sampai ~1.000 rps refresh tepat saat flash crowd |
+| 35 | §1.3 dan §9 menegaskan umur access token **adalah** jendela pencabutannya | Access token adalah JWT stateless: tidak ada store yang dibaca saat verifikasi, sehingga tidak ada yang dapat menariknya lebih awal. Konsekuensinya perlu tertulis agar siapa pun yang kelak ingin memperpanjangnya tahu apa yang ia perdagangkan. Bagian sesi yang berumur panjang dengan sengaja adalah refresh token — tersimpan, ter-hash, dapat dicabut, dan berotasi |
+| 29 | §1.3 ditegaskan: `refresh_token` **opaque, bukan JWT** | Contoh lama menampilkan `eyJhbG...` untuk kedua token, yang menyiratkan refresh token juga JWT. Ia disimpan server sebagai hash agar membaca basis data tidak cukup untuk menerbitkan sesi — sifat yang tidak dimiliki JWT yang dapat diverifikasi sendiri |
+| 30 | Rotasi + pencabutan keluarga didokumentasikan; `TOKEN_INVALID` dan `TOKEN_EXPIRED` dipertegas | Token sekali-pakai yang muncul dua kali berarti kredensial bocor, dan yang memegang mata rantai terbaru bisa jadi penyerang. Mencabut satu token saja justru mempertahankan akses penyerang (OAuth 2.0 BCP §4.13). Satu kode untuk replay dan token tidak sah agar penyerang tidak diberi tahu bahwa ia memicu deteksi |
+| 31 | `redirect_context` ditegaskan diturunkan dari keterlibatan aktif (BR-07), dan **dihilangkan** bila tidak ada | Field-nya ada di contoh sejak v2.0 tanpa menyatakan dari mana isinya berasal atau apa yang terjadi saat tidak ada apa pun yang sedang berjalan. Dihilangkan, bukan dikirim kosong, agar pemeriksaan frontend sederhana |
+| 32 | §1.4 Register → §1.5, §1.5 Daftar NIK Teman → §1.6 | Refresh adalah kelanjutan siklus hidup sesi dan dibaca tepat setelah `GET /auth/verify` yang menerbitkan tokennya. Dua rujukan silang internal ikut disesuaikan |
+| 33 | §9 menambah baris signing secret | Signing secret access token dapat dirotasi; pepper HMAC NIK tidak pernah (ADR-005 §8). Keduanya pernah tertukar dalam pembahasan, dan akibat menukarnya tidak simetris |
+
+> **Mengapa bukan 24 jam, seperti kebanyakan aplikasi.** *(Ditulis untuk v2.2,
+> ketika angkanya 1080. v2.4 menaikkannya ke 22740 — alasannya di §1.3 dan di
+> butir 41 di bawah; prinsipnya tidak berubah, hanya intervalnya yang ternyata
+> salah.)* Yang berumur sehari di aplikasi lain umumnya adalah *refresh* token
+> atau session cookie sisi server — keduanya dapat dicabut. Di sini bagian itu
+> sudah berumur 30 hari, sehingga dari sisi customer sesi memang sudah panjang;
+> menaikkan *access* token tidak memperbaiki pengalaman, hanya memperlebar
+> jendela token yang dicuri. Itulah mengapa v2.4 menaikkannya **hanya sejauh
+> antrian memaksa** — 6 jam 19 menit diturunkan dari `SALE_WINDOW_SECONDS` —
+> bukan ke angka bulat 24 jam yang tidak diturunkan dari apa pun.
+>
+> Bila kelak diinginkan 24 jam, pasangannya adalah **mengeluarkan `nik_verified`
+> dari claim** sehingga token menjadi identitas murni dan otorisasi selalu
+> diperiksa ke basis data. Claim itu ada justru untuk menghindari satu pembacaan
+> basis data per permintaan di bawah beban flash crowd, jadi pertukarannya nyata —
+> tetapi tanpa itu, otorisasi yang ter-cache sehari tidak dapat dibenarkan.
+
+### v2.2 → v2.3
+
+| # | Perubahan | Alasan |
+|---|---|---|
+| 36 | **BREAKING** Grant slot pindah dari `Authorization: Bearer` ke header `X-Grant-Token` (§4, §5) | `Authorization: Bearer` memikul tiga kredensial sekaligus: JWT sesi akun (§1.3, §6.1), grant slot (§4, §5) dan token ruang tunggu untuk mobile (§3.2). Tidak satu pun endpoint menyatakan mana yang ia terima, dan dua di antaranya tidak bisa sama: §9 mengikat Bearer ke `queue_token`, sementara `GET /me/tickets` hanya mungkin berarti JWT akun. Sejak v2.2 keduanya juga berumur sama (1080 detik), sehingga satu-satunya pembeda runtime yang tersisa pun hilang |
+| 37 | **BREAKING** Token ruang tunggu mobile pindah ke header `X-Queue-Token` (§3.2, §3.3) | Konsekuensi dari #36: bila `Authorization` hanya untuk sesi akun, token ruang tunggu butuh slotnya sendiri. Web tetap memakai cookie karena `EventSource` tidak dapat menyetel header request — itu batasan transport, bukan pilihan desain, dan sekarang tertulis sebagai batasan |
+| 38 | `POST /bookings` dan seluruh §4/§5 menerima `Authorization` **opsional** di samping grant | Ini yang memperbaiki cacat fungsional, bukan hanya penamaan. Dengan satu slot, grant mengisinya dan tidak ada tempat untuk JWT akun — sehingga booking customer login tidak dapat diatribusikan ke akunnya saat dibuat, padahal §6.1 menyelesaikan kepemilikan lewat `account_id`. Grant wajib karena tamu boleh membeli dan tidak punya sesi; sesi opsional karena hanya customer login punya satu |
+| 39 | `access_token` di respons §3.3 → `grant_token`, contoh `at_abc123` → `gt_abc123` | Field dan nilainya menyandang nama kredensial lain. Grant bukan JWT, tidak dapat diverifikasi sendiri, dan dapat dicabut — tiga sifat yang berlawanan dengan access token, di balik satu nama yang sama |
+| 40 | §9 menambah baris Grant Token dan "Satu slot, satu kredensial"; baris Identity Token dilipat ke Access Token | §9 sebelumnya mendefinisikan "Access Token" sebagai JWT saja, lalu dipakai di §4 untuk grant — pembaca mengambil definisi itu dan salah. "Identity Token" adalah nama ketiga untuk JWT yang sama dan sudah dihapus. Baris baru menyatakan larangan yang membuat klausa kepemilikan berarti: middleware memilih kredensial per rute, tidak mencoba keduanya |
+
+> **Yang tidak berubah.** Nama field `access_token` di §1.3 dan §1.4 tetap, karena di sana ia
+> memang access token akun. Umur, rotasi dan semantik refresh token tidak tersentuh. Klausa
+> kepemilikan §9 secara fungsional sama — hanya kini nama kolom dan nama variabelnya merujuk
+> kredensial yang sama.
+
+> **Biaya menunda.** `queue-service` dan `booking-service` belum ditulis, dan `user-service`
+> hanya pernah menerbitkan JWT akun; tidak ada kode terimplementasi yang membaca slot Bearer
+> sebagai grant. Hari ini perubahan ini hanya menyentuh dokumen. Begitu klien mobile atau
+> booking rilis, ia menjadi perubahan yang memutus kompatibilitas di tiga permukaan.
+
+> **CORS.** `X-Grant-Token` dan `X-Queue-Token` keduanya memicu preflight — tetapi
+> `Authorization` sudah memicunya di setiap panggilan §4/§5, jadi tidak ada round trip baru.
+> Yang perlu ditambahkan hanya keduanya ke `Access-Control-Allow-Headers`.
+
+---
+
+### v2.3 → v2.4
+
+| # | Perubahan | Alasan |
+|---|---|---|
+| 41 | `expires_in` **1080 → 22740** detik (§1.3) | 1080 diturunkan dari perjalanan — benar untuk grant, kebetulan untuk sesi. Sesi akun dimulai saat **login**, sebelum antrian, jadi ia harus mencakup penantian juga: `SALE_WINDOW_SECONDS + 990 + 150`. Pada `ratePerMin` 318 dan antrian 300.000, posisi terakhir menanti ~15,7 jam, jadi sesi 18 menit mati di ruang tunggu untuk hampir seluruh antrian. Yang rusak bukan ruang tunggunya — §3.3 memulihkan lewat cookie — tapi §1.6 pada Detail Ticket Page: Daftar NIK Teman 401 tepat saat dibuka, memaksa NIK manual, memaksa Dukcapil, dan Dukcapil *fail closed* |
+| 42 | **BREAKING** `Authorization` dihapus dari §4 dan §5 | v2.3 menerimanya sebagai opsional untuk mengisi `bookings.account_id`. Itu gagal secara diam-diam: sesi yang mati di ruang tunggu berarti klien tidak mengirim apa pun, baris tertulis `account_id = NULL`, dan pembelian customer login tercatat sebagai pembelian tamu — tanpa error, tanpa 401, tanpa jejak. v2.4 mengambilnya dari `token:{uuid}`, yang mengetahuinya sejak join ketika sesi masih pasti segar, dan menuliskannya pada INSERT saat GRANT. Atribusi berhenti bergantung pada jam klien, dan header itu tidak punya pekerjaan lagi |
+| 43 | Kredensial antrian dihapus pada keadaan terminal; `CONFIRMED` meninggalkan **nisan** (§3.3) | `Max-Age` dan `EX SALE_WINDOW_SECONDS` berarti kredensial tetap hidup berjam-jam setelah berhenti berarti apa pun. Penghapusan **tidak** dilakukan pada grant (§3.3 memulihkan keadaan setelah grant — "kembali dari aplikasi bank"). `LAPSED` sempat dikecualikan juga, karena token itu menunggu grant keduanya; butir 47 menghapus kesempatan kedua itu, jadi `LAPSED` ikut dihapus bersama `EXPIRED` dan `ABANDONED`. Pada `CONFIRMED` ia dihapus tetapi diganti `settled:{uuid}` yang memuat `booking_id` saja: tanpa itu, tamu yang me-refresh sebelum email tiba melihat **layar kedaluwarsa** setelah membayar — "jangan PHP" dalam bentuk paling murni, dan salah secara faktual |
+| 44 | §6.2 menerima `?t={eticket_token}` selain sesi akun | FR-26 mengirim tiket ke **masing-masing pemegang NIK**, dan pemegang kedua dan ketiga umumnya bukan pemilik akun. Rute yang hanya menerima sesi akun berarti tombol "Buka e-tiket" di email mereka menjawab 401 — jalur pengiriman utama requirement itu tidak berfungsi untuk orang-orang yang requirement itu ditulis untuk mereka. Berlaku juga bagi pembeli tamu, yang setelah butir 43 hanya memiliki email |
+| 45 | Pengikatan device untuk grant anonim **didefinisikan** (§3.1, §4, §9) | ADR-005 Bagian 12 mengklaim grant anonim diikat ke "device fingerprint", tanpa header, tanpa algoritma, tanpa perilaku saat fingerprint berubah — tidak dapat diimplementasikan, padahal ia satu-satunya yang berdiri antara customer dan menjual slot antriannya. Dipilih `X-Device-Id`: acak 128 bit yang dibuat klien, disimpan sebagai HMAC, satu rebind dicatat. **Bukan** fingerprint pasif — canvas/WebGL rapuh dan memanen karakteristik perangkat tanpa dasar persetujuan (NFR-11, UU PDP) |
+| 46 | Appendix A menambah `DEVICE_ID_REQUIRED`, `DEVICE_MISMATCH`, `ETICKET_TOKEN_INVALID` | Tiga kegagalan baru yang masing-masing dirutekan berbeda oleh frontend. `DEVICE_MISMATCH` sengaja menandai percobaan **ketiga**, bukan sekadar ganti browser |
+
+| 47 | **`LAPSED` bersifat final — kesempatan kedua (`readmit`) dihapus seluruhnya** | Tiga alasan. **Keadilan FCFS**: pengurasan `readmit` mendahului antrian dan *mengurangi* `deficit` yang tersisa untuknya, sehingga customer yang sudah mendapat giliran dan membakar 300 detiknya dilayani **mendahului** orang di posisi 150.000 yang belum pernah mendapat giliran. FCFS memberi satu giliran, bukan giliran tanpa batas. **Biaya slot**: satu no-show menahan slot hingga 600 detik tanpa pernah memilih tiket, pada 300.000 orang untuk 10.000 tiket. **Tidak dapat dibedakan**: push yang tertahan OS dan customer yang pergi menghasilkan `LAPSED` identik, jadi membayari yang pertama ikut memberi hadiah pada yang kedua. Menjaga perangkat menyala selama perang tiket ada di sisi customer |
+| 48 | `LAPSED` kini melepas **semua** kredensialnya: `grant:{token}`, `acct:{ev}:{account_id}`, `token:{uuid}` | Konsekuensi langsung butir 47, dan satu perbaikan yang terpisah: `grant:{token}` punya `EX 1080` sementara TTL booking 300 detik, sehingga sebelumnya grant yang sudah mati tetap lolos verifikasi ~780 detik lagi. Bukan lubang akses — klausa kepemilikan menemukan booking `LAPSED` dan validasi status menolaknya — tetapi penolakannya datang dari validasi status, bukan dari kredensialnya, dan satu-satunya kredensial yang dapat dicabut seketika justru tidak dicabut. Butir 47 juga membalikkan pemecahan tabel BR-07 yang sempat diperlukan: tanpa kesempatan kedua, tidak ada keadaan "LAPSED tapi masih menunggu" |
+
+> **Yang tidak berubah.** `GRANT_TOKEN_TTL_SECONDS` tetap 1080 — perubahan 41 memisahkan dua
+> TTL yang kebetulan sama, bukan menaikkan keduanya. Rotasi dan umur refresh token tidak
+> tersentuh. Klausa kepemilikan §9 secara fungsional sama.
+
+> **Konsekuensi yang perlu diputuskan, bukan diam-diam diterima.** Pada 22740 detik, claim
+> `nik_verified` di dalam access token adalah **otorisasi** yang ter-cache enam jam — dan
+> access token adalah JWT stateless, jadi umurnya *adalah* jendela pencabutannya. Pasangan
+> yang semestinya menyertai butir 41 adalah mengeluarkan claim itu dan memeriksanya ke basis
+> data, dengan biaya satu pembacaan per permintaan di bawah flash crowd. Terbuka sebagai
+> ADR-005 Bagian 17 #11. Alternatif yang lebih aman — mempertahankan 1080 dan me-refresh di
+> **ruang tunggu**, di mana refresh tidak berbahaya — ditolak karena menuntut penjadwalan di
+> klien yang, bila dilewatkan, gagal secara diam-diam.
+
+---
+
+> **Catatan untuk ADR-005.** Daftar tipe outbox di §9 langkah 4 memuat
+> `account.verify` tetapi tidak `auth.magic_link`. Login tanpa kata sandi (§1.1)
+> memakai kanal yang sama dan karenanya menerbitkan tipe itu. Layak ditambahkan ke
+> tabel ADR agar pembaca berikutnya tidak membacanya sebagai improvisasi.

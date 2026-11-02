@@ -31,7 +31,7 @@ seluruh FR, NFR dan BR dalam `requirements.md` v1.0; pemetaan lengkapnya ada di 
 | Compute SSE | **ECS Fargate** (`rusuh-sse-server`) |
 | Compute admission + expiry + rekonsiliasi | **ECS Fargate** (`rusuh-admission-ctl`, 1 task, loop 500ms) |
 | Compute REST API | **Lambda + API Gateway** |
-| Autentikasi stream | Cookie `HttpOnly` (web) / header `Authorization` (mobile) |
+| Autentikasi stream | Cookie `HttpOnly` `queue_token` (web) / header `X-Queue-Token` (mobile) |
 | Verifikasi NIK | **Dukcapil API**, NIK saja. **Gagal apa pun sebabnya → tidak bisa bayar** |
 | Dukcapil tidak tersedia | **Fail closed** + pause admission. Dukcapil adalah SPOF yang diterima |
 | Pembayaran | Charge sinkron; efek samping **inline best-effort + outbox fallback** |
@@ -208,7 +208,7 @@ dikelola lewat Bagian 11.
   │                booking_expires_at = granted_at + BOOKING_TTL             │
   │              → ZADD expiries:{ev} booking_expires_at booking_id          │
   │              → gagal INSERT setelah retry: DECRBY slots:open,            │
-  │                SADD readmit, JANGAN publish grant (Bagian 6)             │
+  │                SADD regrant, JANGAN publish grant (Bagian 6)             │
   │   3. PUBLISH sse-broadcast / sse-grant / sse-sold-out                    │
   │   4. REKONSILIASI tiap tick ke-20 (≈10 detik) — Bagian 6                 │
   │   5. bila state=SOLD_OUT dan now > sold_out_at +                         │
@@ -220,11 +220,16 @@ dikelola lewat Bagian 11.
    ┌───────────────────────────────▼──────────────────────────────────────────┐
    │  REDIS — FAST PATH · PUB/SUB · RATE LIMIT · BREAKER · LEASE              │
    │  QUEUE    queue:{ev}:issued · now_serving · state · slots:open:{ev}      │
-   │           token:{uuid} (ticket_no, event_id, lapses, account_id?)        │
-   │             EX SALE_WINDOW_SECONDS  -- kunci yang DIANDALKAN recovery    │
+   │           token:{uuid} (ticket_no, event_id, account_id?,               │
+   │                         device_hash?, rebinds?)                         │
+   │             EX SALE_WINDOW_SECONDS  -- kunci yang DIANDALKAN recovery;   │
+   │             di-DEL pada EXPIRED/ABANDONED/CONFIRMED, TIDAK pada LAPSED   │
+   │           settled:{uuid} (booking_id) EX SETTLED_TOMBSTONE_SECONDS       │
+   │             -- nisan CONFIRMED; menjawab §3.3, tidak memulihkan apa pun  │
    │           acct:{ev}:{account_id} NX   -- BR-07, hanya user login         │
    │           qpersist:{ev} (LIST) -- buffer tulis durabel; panjang = RPO    │
-   │           by_ticket (ZSET score=ticket_no) · readmit:{ev}                │
+   │           by_ticket (ZSET score=ticket_no) · regrant:{ev}               │
+   │             -- regrant = INSERT grant GAGAL, bukan no-show (Bagian 7)    │
    │           grant:{token} EX GRANT_TOKEN_TTL_SECONDS (1080)                │
    │  BOOKING  stock:{ev}:{cat} · nik:used:{ev}:{hmac} NX                     │
    │           nik:valid:{hmac} EX 86400   -- cache verifikasi Dukcapil       │
@@ -338,7 +343,7 @@ dikelola lewat Bagian 11.
     ConversionRate (FR-34) · ExpiryRate per tahap (FR-35) · StockLevel · OpenSlots
     SlotsOpenDrift · StockDrift · HoldCompensated · GrantInsertFailures · ExpiryRescored
     SoldOutStreamRejections (410) · JoinRateLimited · SSERateLimited
-    ReadmitSetSize · SSEWriteBackpressure · OutboxLag · OutboxInlineHitRate
+    RegrantSetSize · SSEWriteBackpressure · OutboxLag · OutboxInlineHitRate
     CaptchaRejected · CaptchaVerifyErrors · CaptchaFailOpenSeconds · Br07JoinRecovered
     SoldOutResumed · SoldOutHoldSeconds · TicketsResoldAfterSoldOut
     PauseTtlGrantedSeconds · PauseTransitions
@@ -359,7 +364,7 @@ dikelola lewat Bagian 11.
 | FR-02 event aktif | `status = 'available' AND stock > 0` → `clickable: true` |
 | FR-03 event sold out | `status = SOLD_OUT` (dari `available == 0`) → `display.enabled = false`, `label_key = sold_out` — Bagian 6 |
 | FR-04 ada antrian → Waiting Room | `POST /events/{ev}/queue/join` mengembalikan `{ticket_no, nowServing, streamUrl}` |
-| **FR-05 tidak ada antrian → langsung Detail** | `POST /events/{ev}/queue/join` mengecek `issued − now_serving == 0 AND slots:open < MAX AND stock > 0`. Bila benar, Lua memberi grant pada permintaan yang sama dan respons berisi `{granted: true, accessToken}` — klien langsung ke Detail Ticket Page tanpa pernah membuka stream |
+| **FR-05 tidak ada antrian → langsung Detail** | `POST /events/{ev}/queue/join` mengecek `issued − now_serving == 0 AND slots:open < MAX AND stock > 0`. Bila benar, Lua memberi grant pada permintaan yang sama dan respons berisi `{granted: true, grantToken}` — klien langsung ke Detail Ticket Page tanpa pernah membuka stream |
 
 Jalur bypass memakai Lua yang sama (`advance_now_serving.lua` dengan `deficit = 1`), sehingga
 tidak ada jalur admission kedua yang bisa menyimpang dari yang utama.
@@ -379,6 +384,9 @@ Saat `POST /events/{ev}/queue/join`, dalam urutan ini:
              cookie untuk token itu, dan kembalikan keadaannya (200).
 4. INCR queue:{ev}:issued → ticket_no
 5. HSET token:{uuid} ; ZADD queue:{ev}:by_ticket {ticket_no} {uuid}
+     -- untuk pemanggil ANONIM, HSET menyertakan
+     --   device_hash = HMAC(DEVICE_PEPPER, header X-Device-Id)
+     -- Pemanggil login tidak: account_id sudah mengikat lebih kuat (Bagian 12).
 6. RPUSH qpersist:{ev} <queue_token|ticket_no|account_id|joined_at>
      -- satu RPUSH, tetap di jalur cepat Redis. Aurora TIDAK disentuh di
      -- sini: 300.000 join dalam ~60 detik = ~5.000 insert/detik tepat pada
@@ -442,6 +450,17 @@ keterlibatan itu mencapai keadaan terminal:
 | **CONFIRMED** | `DEL` | **boleh antre lagi** untuk membeli lagi |
 | EXPIRED, LAPSED, ABANDONED | `DEL` | boleh antre lagi |
 
+> **`LAPSED` melepas `acct` tanpa syarat, dan itu benar hanya karena `LAPSED` final.**
+> Selama `LAPSED` masih memberi kesempatan kedua, baris ini adalah lubang BR-07: token yang
+> sama menunggu grant keduanya sementara akunnya sudah boleh join lagi — dua keterlibatan
+> hidup untuk satu akun. Menghapus kesempatan kedua (Bagian 7) menghapus kondisinya: tidak
+> ada lagi keadaan "LAPSED tapi masih menunggu", jadi umur `acct` sama dengan umur
+> keterlibatannya tanpa percabangan apa pun.
+>
+> Bila kesempatan kedua itu kelak dipertimbangkan lagi, **baris ini harus dipecah dulu** —
+> `DEL acct` hanya boleh terjadi ketika token benar-benar dibuang dari antrian, bukan ketika
+> booking-nya terminal.
+
 > **Join kedua memulihkan, tidak menolak.** Menjawab 409 akan menghukum customer yang hanya
 > berpindah perangkat — login di ponsel setelah antre di laptop. Karena `acct:{ev}:{id}`
 > menyimpan `{uuid}` token yang ada, join kedua dapat menerbitkan ulang cookie untuk token
@@ -476,7 +495,7 @@ dengan `nik:used` terhadap `nik_claims` (Bagian 6).
 
 ```lua
 -- advance_now_serving.lua   (SCRIPT LOAD sekali, dipanggil via EVALSHA)
--- KEYS[1]=now_serving KEYS[2]=slots:open KEYS[3]=state KEYS[4]=readmit KEYS[5]=by_ticket
+-- KEYS[1]=now_serving KEYS[2]=slots:open KEYS[3]=state KEYS[4]=regrant KEYS[5]=by_ticket
 -- KEYS[6]=sold_out_at   KEYS[7]=resume_flag
 -- ARGV[1]=MAX_CONCURRENT_SLOTS  ARGV[2]=remaining_stock  ARGV[3]=now (epoch detik)
 -- ARGV[2] adalah SISA STOK TOTAL seluruh kategori, bukan per kategori: admission-ctl
@@ -511,11 +530,14 @@ local deficit = target - open
 if deficit <= 0 then return {0, 0, 'NOOP', {}} end
 
 local tokens = {}
-local readmitted = redis.call('SPOP', KEYS[4], deficit)
-for i = 1, #readmitted do tokens[#tokens + 1] = readmitted[i] end
-if #readmitted > 0 then
-  redis.call('INCRBY', KEYS[2], #readmitted)
-  deficit = deficit - #readmitted
+-- regrant lebih dulu: token di sini sudah dilewati watermark dan INSERT-nya
+-- gagal, jadi ia belum pernah benar-benar dilayani. TIDAK ada no-show di sini —
+-- LAPSED bersifat final sejak kesempatan kedua dihapus (Bagian 7).
+local regranted = redis.call('SPOP', KEYS[4], deficit)
+for i = 1, #regranted do tokens[#tokens + 1] = regranted[i] end
+if #regranted > 0 then
+  redis.call('INCRBY', KEYS[2], #regranted)
+  deficit = deficit - #regranted
 end
 
 local from, to = 0, 0
@@ -541,8 +563,32 @@ sekaligus secara atomik.
 Prasyarat rekonsiliasi (tanpa baris ini `COUNT(*)` tidak melihat slot granted-unclaimed,
 sehingga rekonsiliasi justru menyebabkan over-admission) dan penutup celah rebuild.
 
+**`account_id` ditulis di sini, bukan di `POST /bookings`.** `token:{uuid}` sudah memuat
+`account_id` sejak join (langkah 3 dan 5 di atas), jadi INSERT grant mengisinya langsung:
+
+```
+INSERT INTO bookings (id, event_id, grant_token, account_id, status, granted_at, …)
+VALUES (…, HGET token:{uuid} account_id, 'GRANTED', now(), …)
+     -- NULL untuk tamu; terisi untuk customer login, tanpa bertanya pada klien
+```
+
+> **Atribusi tidak boleh bergantung pada token yang dibawa klien saat checkout.** Kontrak
+> v2.3 menerima `Authorization` opsional pada `POST /bookings` justru untuk mengisi kolom ini.
+> Itu rapuh dengan cara yang gagal diam-diam: bila sesi akun mati di ruang tunggu — dan
+> sebelum `ACCESS_TOKEN_TTL_SECONDS` diturunkan ulang itu terjadi pada hampir seluruh antrian
+> — klien tidak mengirim apa pun, baris tertulis `account_id = NULL`, dan pembelian customer
+> login tercatat sebagai pembelian tamu. Tanpa error, tanpa 401, tanpa jejak.
+>
+> Keterlibatan tahu identitasnya sejak join, ketika sesi masih pasti segar. Mengambilnya dari
+> sana membuat atribusi **tidak bergantung pada jam klien sama sekali**, dan membuat
+> `Authorization` pada §4/§5 tidak punya pekerjaan lagi — kontrak v2.4 menghapusnya.
+>
+> Efek samping: indeks parsial `ON bookings (event_id, account_id) WHERE account_id IS NOT
+> NULL` mulai mencakup booking customer login yang sebelumnya NULL, sehingga penegakan BR-07
+> justru **menguat**.
+
 **Kompensasi bila batch INSERT gagal:** retry hingga `GRANT_INSERT_MAX_RETRIES`; bila tetap
-gagal → `DECRBY slots:open`, `SADD readmit`, **jangan publish** `sse-grant`, emit
+gagal → `DECRBY slots:open`, `SADD regrant`, **jangan publish** `sse-grant`, emit
 `GrantInsertFailures`. Urutan wajib **INSERT dulu, PUBLISH kemudian** — mem-publish lebih
 dahulu berarti memberi tahu customer gilirannya tiba untuk slot yang kemudian dikompensasi,
 pelanggaran NFR-02 "Jangan PHP" paling langsung.
@@ -563,7 +609,7 @@ pelanggaran NFR-02 "Jangan PHP" paling langsung.
 | PENDING_CANCELLATION → EXPIRED | `rusuh-admission-ctl` | ✅ Terminal + lepas stok + `DEL nik:used` |
 | AWAITING_PAYMENT → CONFIRMED | **webhook inline**, fallback outbox (Bagian 9) | ✅ Terminal |
 | apa pun → EXPIRED | `rusuh-admission-ctl` | ✅ Terminal + `DEL nik:used` |
-| GRANTED → LAPSED | `rusuh-admission-ctl` | ✅ Terminal; token → `readmit` |
+| GRANTED → LAPSED | `rusuh-admission-ctl` | ✅ Terminal, final — tidak ada kesempatan kedua (Bagian 7) |
 | apa pun → ABANDONED | `booking-service` | ✅ Terminal + `DEL nik:used` + `DEL acct:{ev}:{id}` |
 
 Double-DECR → `slots:open` negatif → `deficit = target − (−n)` → over-admission.
@@ -820,33 +866,80 @@ slotnya ke antrian berikutnya (maksimum dua kali re-admit), dan menutup tab tida
 posisi. Memberi antrian batas waktu absolut tidak menambah proteksi di atas itu — ia hanya
 menghukum customer yang menunggu lama karena antrian memang panjang.
 
-### `readmit:{ev}` dan pause/resume
+### `regrant:{ev}` dan pause/resume
 
-`readmit` adalah satu-satunya mitigasi yang tersisa untuk customer mobile yang melewatkan
-`grant`, karena grace antrian sudah dihapus (Bagian 7). Ia dipertahankan **hanya** untuk
-`LAPSED` — slot diberikan tetapi Detail Ticket Page tidak pernah dibuka. Booking yang
-`EXPIRED` dari `SELECTING` tidak di-readmit: customer itu sudah sampai dan kehabisan waktu.
+`regrant:{ev}` memegang token yang **kita** gagal layani: token yang sudah dipilih untuk
+di-grant, tetapi batch INSERT `bookings`-nya gagal setelah `GRANT_INSERT_MAX_RETRIES`. Slot
+dikembalikan (`DECRBY slots:open`) dan token masuk sini, karena alternatifnya adalah
+menghapusnya dari antrian tanpa sepengetahuannya — customer itu tidak akan pernah dilayani
+dan tidak akan pernah tahu.
 
-> **Biaya slot naik 2,5× per no-show.** Dulu satu kali lewat hanya membakar 120 detik
-> jendela klaim; sekarang ia membakar 300 detik penuh jam booking, dan dengan batas 2×
-> satu token dapat menahan slot hingga 900 detik tanpa pernah memilih tiket. Bila
-> `LapsedRate` ternyata tinggi pada beban nyata, turunkan batas readmit ke 1× sebelum
-> menaikkan `MAX_CONCURRENT_SLOTS`.
+> **Ia TIDAK memberi kesempatan kedua kepada no-show.** Set ini dulu bernama `readmit:{ev}`
+> dan melayani dua hal sekaligus: kompensasi kegagalan server *dan* kesempatan kedua bagi
+> customer yang `LAPSED` — slot diberikan, Detail Ticket Page tidak pernah dibuka. Yang kedua
+> **dihapus**; lihat keputusannya di bawah. Namanya diganti supaya artinya tidak dapat
+> disalahpahami lagi dan supaya jalur `LAPSED` tidak diam-diam dipasang kembali.
+>
+> Perbedaannya bukan soal selera. Token di `regrant` **belum pernah mendapat gilirannya** —
+> ia dipilih, lalu Aurora gagal. Token `LAPSED` **sudah** mendapat gilirannya dan membakar
+> seluruh 300 detiknya. Itulah mengapa `regrant` dikuras lebih dulu, dan mengapa jalur
+> `LAPSED` tidak boleh ada di set yang sama.
+
+#### Keputusan: `LAPSED` bersifat final, tanpa kesempatan kedua
+
+Sebelumnya `LAPSED` memberi satu grant kedua. Itu **dihapus**: `LAPSED` kini terminal
+sepenuhnya, seperti `EXPIRED` dan `ABANDONED`.
+
+| | Alasannya |
+|---|---|
+| **Keadilan FCFS** | Pengurasan `readmit` lebih dulu *mengurangi* `deficit` yang tersisa untuk antrian. Customer yang sudah mendapat giliran dan membakar 300 detiknya karena itu dilayani **mendahului** orang di posisi 150.000 yang menunggu satu jam dan belum pernah mendapat giliran sama sekali. FCFS memberi satu giliran, bukan giliran tanpa batas |
+| **Biaya slot** | Satu no-show membakar 300 detik penuh jam booking; dengan kesempatan kedua ia menahan slot hingga 600 detik tanpa pernah memilih tiket — pada beban 300.000 orang memperebutkan 10.000 tiket |
+| **Tidak dapat dibedakan** | "OS menangguhkan push saya" dan "saya tutup laptop lalu pergi makan" menghasilkan `LAPSED` yang identik. Membayari yang pertama berarti ikut memberi hadiah pada yang kedua, dan tidak ada data yang mengatakan mana yang dominan |
+| **Tanggung jawab customer** | Menjaga perangkat tetap menyala dan notifikasi tetap aktif selama perang tiket ada di sisi customer. Sistem menyiarkan posisi tiap detik dan mengirim `grant` begitu slot aman; ia tidak dapat menjamin OS pihak ketiga meneruskannya |
+
+> **Harganya nyata dan diterima**, bukan diabaikan: Bagian 7 sudah mencatat bahwa customer
+> mobile yang melewatkan push kehilangan sebagian waktu memilihnya. Tanpa `readmit`, ia
+> kehilangan **seluruh** slotnya. Mitigasi yang tersisa hanya UX — peringatan sebelum gerbang
+> buka agar aplikasi tetap di depan dan notifikasi diizinkan (Bagian 17 #13) — dan itu
+> peringatan, bukan jaminan.
+>
+> `LapsedRate` (FR-35) karena itu berhenti menjadi tuas penyetelan dan menjadi **metrik
+> murni**: ia mengukur berapa banyak slot yang terbakar no-show. Bila angkanya tinggi pada
+> rehearsal T-2 hari, tuasnya `MAX_CONCURRENT_SLOTS` (Bagian 17 #5) — bukan mengembalikan
+> kesempatan kedua.
+
+> **Biaya slot per no-show, untuk catatan.** Dulu satu kali lewat hanya membakar 120 detik
+> jendela klaim; dengan anchor tunggal ia membakar 300 detik penuh jam booking. Itulah ukuran
+> yang hilang setiap kali sebuah slot di-grant dan tidak dipakai — dan ukuran itu, bukan
+> jumlah kesempatannya, yang membuat kesempatan kedua tidak terbayar: setiap pengulangan
+> menggandakannya pada beban di mana 300.000 orang memperebutkan 10.000 tiket.
 
 ```
-lapse:         n = HINCRBY token:{uuid} lapses 1
-               if n <= 2 then SADD readmit:{ev} {uuid} else ZREM by_ticket end
-sale ditutup:  EXPIRE readmit:{ev} 86400 ; EXPIRE by_ticket 86400
-post-sale job: DEL readmit:{ev} by_ticket
-               -- token:{uuid} TIDAK di-DEL di sini: ia punya EX sendiri
-               -- (SALE_WINDOW_SECONDS) karena recovery bergantung padanya
+lapse:         ZREM by_ticket                       -- TERMINAL, tanpa kecuali
+               DEL  grant:{token}                   -- kredensialnya dicabut di sini:
+                    -- EX-nya 1080 sementara TTL booking 300, jadi tanpa DEL ini
+                    -- grant mati masih lolos verifikasi ~780 detik lagi
+               DEL  acct:{ev}:{account_id}          -- boleh antre lagi (BR-07)
+               DEL  token:{uuid}                    -- Bagian 12: terminal-kegagalan
+               -- TIDAK ADA SADD regrant. LAPSED sudah mendapat gilirannya.
+
+grant INSERT   -- jalur kegagalan SERVER, bukan no-show:
+gagal:         DECRBY slots:open ; SADD regrant:{ev} {uuid}
+               -- token ini BELUM pernah dilayani; ia tetap di antrian.
+
+sale ditutup:  EXPIRE regrant:{ev} 86400 ; EXPIRE by_ticket 86400
+post-sale job: DEL regrant:{ev} by_ticket
 ```
 
-> **Slot yang terisi dari `readmit` tidak memajukan `now_serving`.** Lua menguras `readmit`
+> **Slot yang terisi dari `regrant` tidak memajukan `now_serving`.** Lua menguras `regrant`
 > lebih dulu dan mengurangi `deficit` sebesar jumlah itu, sehingga `INCRBY now_serving` hanya
-> berjalan untuk sisanya. Ini benar — token yang di-readmit sudah pernah mendapat gilirannya,
-> ia tidak menyerobot — tetapi berarti customer yang menunggu kadang melihat slot terbebas
-> tanpa posisinya bergerak. Perlu diketahui tim dukungan sebelum hari-H.
+> berjalan untuk sisanya. Ini benar — token di `regrant` sudah dihitung sebagai "dilayani"
+> ketika watermark melewatinya; INSERT-nya yang gagal, bukan gilirannya. Konsekuensinya
+> customer yang menunggu kadang melihat slot terbebas tanpa posisinya bergerak. Perlu
+> diketahui tim dukungan sebelum hari-H.
+>
+> Sejak kesempatan kedua untuk `LAPSED` dihapus, set ini hanya terisi oleh kegagalan server,
+> jadi dalam operasi normal ia kosong dan `deficit` seluruhnya menjadi milik antrian.
 
 ### Apa yang dihentikan `paused`, dan apa yang tetap jalan
 
@@ -856,12 +949,12 @@ admission-ctl (Bagian 4 langkah 2):
 | Saat `paused = true` | Jalan? | Alasan |
 |---|---|---|
 | ADVANCE — `INCRBY now_serving` + grant baru | ❌ | tidak ada yang dapat menyelesaikan pembelian |
-| Pengurasan `readmit` | ❌ | ia juga memasukkan orang ke funnel yang sama |
+| Pengurasan `regrant` | ❌ | ia juga memasukkan orang ke funnel yang sama |
 | SWEEP — expiry booking dan pembayaran | ✅ | stok yang tertahan harus tetap dilepas |
 | Broadcast SSE + heartbeat | ✅ | customer harus melihat bannernya dan posisinya |
 | REKONSILIASI `slots:open` | ✅ | drift tidak berhenti hanya karena admission berhenti |
 
-Karena pengurasan `readmit` ada **di dalam** `advance_now_serving.lua`, gerbangnya diletakkan
+Karena pengurasan `regrant` ada **di dalam** `advance_now_serving.lua`, gerbangnya diletakkan
 di admission-ctl — tick melewatkan `EVALSHA` sepenuhnya — bukan sebagai `ARGV` baru.
 Keputusan pause tidak sensitif terhadap balapan: sebuah tick menjalankan advance atau tidak.
 
@@ -947,7 +1040,7 @@ payment_expires_at = held_at         + PAYMENT_TTL_SECONDS   (600)   ← tekan t
 Setiap customer karena itu mendapat **10 menit penuh** di halaman pembayaran, berapa pun lama
 ia memilih kursi — sesuai wireframe tender.
 
-**Perjalanan maksimum karena itu 17 menit, bukan 15**, dan umur `accessToken` harus
+**Perjalanan maksimum karena itu 17 menit, bukan 15**, dan umur `grantToken` harus
 diturunkan darinya, bukan ditulis tetap:
 
 ```
@@ -959,6 +1052,49 @@ payment grace    30 detik   batas bayar → pembatalan final
 
 GRANT_TOKEN_TTL_SECONDS = BOOKING_TTL_SECONDS + PAYMENT_TTL_SECONDS
                         + PAYMENT_GRACE_SECONDS + margin = 1080
+```
+
+### Umur sesi akun diturunkan dari interval yang lain
+
+`GRANT_TOKEN_TTL_SECONDS` membatasi `granted_at → batas bayar`. **Sesi akun tidak dimulai di
+sana.** Ia dimulai saat login, yang terjadi *sebelum* antrian, sehingga ia harus mencakup
+seluruh penantian juga:
+
+```
+sale window     SALE_WINDOW_SECONDS   login → giliran tiba
+journey + pause 990 detik             930 + 60 (grace pause BR-22)
+margin          150 detik             sama dengan margin grant di atas
+
+ACCESS_TOKEN_TTL_SECONDS = SALE_WINDOW_SECONDS + 990 + 150
+                         = 21600 + 1140 = 22740   (6 jam 19 menit)
+```
+
+> **1080 adalah angka yang salah untuk sesi akun, dan alasannya instruktif.** Kontrak v2.2
+> menyetelnya ke 1080 karena 1080 diturunkan dari perjalanan — benar untuk grant, dan
+> kebetulan saja untuk sesi. Pada `ratePerMin` 318 dan `QUEUE_CAPACITY` 300.000, customer di
+> posisi terakhir menanti sekitar **15,7 jam**. Sesi 18 menit mati di ruang tunggu untuk
+> hampir seluruh antrian, dan yang rusak bukan ruang tunggunya — stream memakai cookie — tapi
+> `GET /accounts/me/saved-niks` pada Detail Ticket Page. Daftar NIK Teman 401 tepat ketika
+> customer membutuhkannya, memaksa NIK diketik manual, memaksa panggilan Dukcapil, dan
+> Dukcapil *fail closed* (BR-13) — gangguan Dukcapil kemudian memblokir booking yang
+> seharusnya lolos dari bukti tersimpan, di dalam TTL booking 300 detik.
+>
+> **`SALE_WINDOW_SECONDS` karena itu sekarang memikul dua TTL** dan tetap belum punya nilai
+> yang diputuskan (Bagian 17 #10). 21600 adalah *fallback bila env tidak didefinisikan*,
+> bukan keputusan.
+>
+> **Harganya: jendela pencabutan 6 jam 19 menit.** Access token adalah JWT stateless; tidak
+> ada store yang dibaca saat verifikasi, jadi umurnya *adalah* jendela pencabutannya. Pada
+> 1080 detik itu dapat diterima. Pada 22740 detik ia memuat `nik_verified` — artinya
+> **otorisasi** yang ter-cache enam jam, bukan hanya identitas. Pasangan yang semestinya
+> menyertainya adalah mengeluarkan `nik_verified` dari claim dan memeriksanya ke basis data;
+> claim itu ada justru untuk menghindari satu pembacaan per permintaan di bawah flash crowd,
+> jadi pertukarannya nyata dan belum diputuskan (Bagian 17 #11).
+>
+> **Alternatif yang ditolak.** Mempertahankan 1080 dan me-refresh di ruang tunggu lebih aman
+> (jendela tetap 18 menit, refresh token tersimpan dan dapat dicabut), tetapi menuntut klien
+> menjadwalkan refresh dan memeriksa sisa umur saat `grant` — pekerjaan klien yang, bila
+> dilewatkan, gagal secara diam-diam. Pilihan ini memindahkan jaminan ke server.
 
 **Tidak ada grace antrian.** Jam booking mulai berdetak saat slot diberikan, bukan saat
 customer membuka Detail Ticket Page. Satu jam, satu anchor, tanpa jendela terpisah untuk
@@ -967,9 +1103,12 @@ mengklaim.
 > **Harganya dibayar customer mobile.** Ponsel dengan layar terkunci yang melewatkan push
 > `grant` dan baru membuka aplikasi empat menit kemudian hanya punya sisa satu menit untuk
 > memilih kursi dan mengisi NIK. Sebelumnya 120 detik pertama adalah jendela klaim terpisah
-> yang tidak memotong waktu memilih. Ini konsekuensi yang diterima; mitigasinya tinggal
-> `readmit` (di bawah).
-```
+> yang tidak memotong waktu memilih. Ini konsekuensi yang diterima, dan sejak kesempatan
+> kedua atas `LAPSED` dihapus (Bagian 6) **tidak ada mitigasi teknis yang tersisa**: push
+> yang terlewat sampai 300 detik habis berarti slot itu hilang. Yang tinggal hanya UX —
+> peringatan sebelum gerbang buka agar aplikasi tetap di depan dan notifikasi diizinkan
+> (Bagian 17 #13). Menjaga perangkat tetap menyala selama perang tiket ada di sisi customer;
+> sistem tidak dapat menjamin OS pihak ketiga meneruskan push-nya.
 
 > Angka tetap `EX 900` berlaku pada model anchor-tunggal sebelumnya dan **tidak lagi**:
 > customer yang memakai hampir seluruh grace dan seluruh TTL booking akan kehilangan
@@ -984,7 +1123,7 @@ mengklaim.
 | CLAIM → SELECTING | `slot_claimed_at = now()` — **tenggat tidak diubah**, ia sudah ditetapkan saat GRANT | `ZADD expiries (booking_expires_at)` |
 | **TEKAN PAY → HELD** | `held_at = now()`, **`payment_expires_at = held_at + 600`** | `ZADD expiries (payment_expires_at)` |
 | HELD → AWAITING_PAYMENT | *(tidak menulis deadline baru)* | *(skor tidak berubah)* |
-| Terminal apa pun | `status = <terminal>` | `ZREM expiries booking_id` |
+| Terminal apa pun | `status = <terminal>` | `ZREM expiries booking_id` + kredensial antrian (di bawah) |
 
 **TTL booking berhenti mengatur begitu status menjadi `HELD`.** Keduanya tersimpan di baris
 yang sama, tetapi sweep memilih berdasarkan status — tidak pernah keduanya — sehingga tidak
@@ -1047,7 +1186,8 @@ untuk booking_id dalam ZRANGEBYSCORE expiries:{ev} 0 now:
   bila 0 baris → ZREM ; lanjut                          -- pihak lain mendahului
 
   switch row.status:
-    GRANTED          → LAPSED  : DECR slots:open ; lapses+1 ; readmit (maks 2×)
+    GRANTED          → LAPSED  : DECR slots:open ; DEL grant:{token}
+                                 ; DEL acct ; DEL token:{uuid}   -- final
                                  -- LAPSED = slot diberikan, Detail Ticket Page tidak
                                  -- pernah dibuka. Dibedakan dari EXPIRED (dibuka tapi
                                  -- tidak selesai memilih) agar FR-35 tetap dapat
@@ -1482,7 +1622,22 @@ SSE_STALE_AFTER_SECONDS=30       -- keheningan sse-broadcast yang dibaca sebagai
   -- handover normal tidak pernah mencapai indikator customer (Bagian 11).
 PAUSE_TTL_GRACE_SECONDS=60       -- tambahan waktu bagi customer yang sedang di dalam
   -- saat admission di-pause. Digeser SAAT PAUSE MULAI, sekali per pause (Bagian 6).
-SALE_WINDOW_SECONDS         -- TTL acct:{ev}:{id}; membatasi kebocoran BR-07
+SALE_WINDOW_SECONDS=21600   -- FALLBACK bila env tidak didefinisikan (6 jam), BUKAN
+  -- keputusan: nilainya milik Bagian 17 #10. TTL acct:{ev}:{id} dan token:{uuid};
+  -- membatasi kebocoran BR-07. DUA TTL lain diturunkan darinya, jadi menaikkannya
+  -- menaikkan jendela pencabutan access token juga.
+ACCESS_TOKEN_TTL_SECONDS=22740  -- = SALE_WINDOW + 990 + 150. DITURUNKAN: sesi dimulai
+  -- saat login, sebelum antrian, jadi ia harus mencakup penantian + perjalanan.
+  -- BUKAN sama dengan GRANT_TOKEN_TTL_SECONDS; keduanya mengukur interval berbeda.
+SETTLED_TOMBSTONE_SECONDS=3600  -- umur settled:{uuid} setelah CONFIRMED (Bagian 12).
+  -- Cukup untuk email e-tiket tiba dan customer memeriksanya; tidak memulihkan apa pun.
+DEVICE_PEPPER               -- HMAC device_id tamu (Bagian 12). TERPISAH dari pepper NIK
+  -- dan BERBEDA sifatnya: boleh dirotasi ANTAR sale, tidak pernah DI TENGAH sale —
+  -- rotasi di tengah membatalkan setiap pengikatan yang hidup.
+MAX_DEVICE_REBINDS=1        -- Bagian 17 #12
+  -- MAX_READMITS DIHAPUS: LAPSED tidak lagi memberi kesempatan kedua sama sekali,
+  -- jadi tidak ada batas untuk disetel. regrant:{ev} hanya terisi oleh kegagalan
+  -- INSERT grant, yang sudah dibatasi GRANT_INSERT_MAX_RETRIES (Bagian 6, Bagian 7).
 SELLING_FAST_THRESHOLD_PCT=20    -- ambang badge "hampir habis" (Bagian 6)
 SOLD_OUT_HOLD_SECONDS=930        -- = BOOKING_TTL + PAYMENT_TTL + PAYMENT_GRACE.
   -- Lama SOLD_OUT tetap reversibel. Diturunkan, bukan ditebak: tidak ada hold yang
@@ -1556,7 +1711,7 @@ sudah ada, bukan tabel kunci baru:
 ```
 POST /bookings
   BEGIN
-    SELECT id, status FROM bookings WHERE queue_token = $accessToken FOR UPDATE
+    SELECT id, status FROM bookings WHERE grant_token = $grantToken FOR UPDATE
     status sudah 'HELD' atau lebih jauh → COMMIT ; kembalikan booking yang ADA, 200
     status ≠ 'SELECTING'                → COMMIT ; 409
 
@@ -1611,11 +1766,11 @@ tersimpan, dan responsnya diputar ulang apa adanya.
 
 ```
 POST /payments/{id}
-  1. Validasi accessToken
+  1. Validasi grantToken (header `X-Grant-Token`)
   2. BEGIN
        SELECT status, payment_ref, payment_attempts
          FROM bookings
-        WHERE id = $1 AND queue_token = $accessToken   -- KEPEMILIKAN, bukan hanya
+        WHERE id = $1 AND grant_token = $grantToken    -- KEPEMILIKAN, bukan hanya
           FOR UPDATE                                   --   token yang valid
        0 baris → COMMIT ; 404 (BUKAN 403 — jangan konfirmasi booking itu ada)
 
@@ -1676,7 +1831,7 @@ POST /payments/{booking_id}/retry
   BEGIN
     SELECT status, payment_ref, payment_attempts, payment_expires_at
       FROM bookings
-     WHERE id = $1 AND queue_token = $accessToken      -- 1. KEPEMILIKAN
+     WHERE id = $1 AND grant_token = $grantToken       -- 1. KEPEMILIKAN
        FOR UPDATE                                      --    + serialisasi
     0 baris                                  → ROLLBACK ; 404
       -- 404, BUKAN 403: 403 memberi tahu penyerang bahwa booking itu ada.
@@ -2282,8 +2437,8 @@ es.addEventListener('message', e => {
 });
 
 es.addEventListener('grant', async () => {
-  const { accessToken } = await fetch(`/events/${ev}/queue/me`).then(r => r.json());
-  goToDetailTicketPage(accessToken);
+  const { grantToken } = await fetch(`/events/${ev}/queue/me`).then(r => r.json());
+  goToDetailTicketPage(grantToken);
 });
 
 // TIDAK berubah oleh detektor keheningan (Bagian 11): `reason` hanya diagnostik,
@@ -2313,12 +2468,54 @@ memakai cookie/header — dan mengapa perilaku yang sama dipakai **dengan sengaj
 | Platform | Mekanisme | Token di URL? |
 |---|---|---|
 | Web | Cookie `HttpOnly; Secure; SameSite=Lax; Domain=.rusuhtiket.com`; `withCredentials: true` | ❌ |
-| Mobile | `react-native-sse` custom header → `Authorization: Bearer` | ❌ |
+| Mobile | `react-native-sse` custom header → `X-Queue-Token` | ❌ |
 
-| Kelas | Pengikatan `accessToken` | Requirement |
+| Kelas | Pengikatan `grantToken` | Requirement |
 |---|---|---|
 | **Login** | `account_id` | FR-29 opsional |
-| **Anonim** | `queue_token` + device fingerprint | FR-29, FR-30 |
+| **Anonim** | `queue_token` + `device_id` (di bawah) | FR-29, FR-30 |
+
+### Pengikatan device untuk grant anonim
+
+Versi sebelumnya dokumen ini menulis "device fingerprint" tanpa mendefinisikan apa pun: tidak
+ada header, tidak ada algoritma, tidak ada perilaku saat fingerprint berubah. Sebagai kontrol
+keamanan ia tidak dapat diimplementasikan, padahal ia satu-satunya yang berdiri antara customer
+dan menjual slot antriannya — dan di antrian 300.000 untuk 10.000 tiket, slot punya harga pasar.
+
+**Yang dipakai: `device_id` acak yang dibuat klien, bukan fingerprint pasif.**
+
+| | Keputusan |
+|---|---|
+| Bentuk | 128 bit acak, dibuat klien sekali, disimpan di `localStorage` (web) / secure store (mobile) |
+| Transport | header `X-Device-Id`, pada `POST …/queue/join` dan pada setiap endpoint ber-grant |
+| Penyimpanan | `HSET token:{uuid} device_hash HMAC(DEVICE_PEPPER, device_id)` — nilai mentah tidak pernah disimpan |
+| Pemeriksaan | setiap panggilan ber-grant anonim; tidak cocok → `401 DEVICE_MISMATCH` |
+| Toleransi | `HINCRBY token:{uuid} rebinds 1`, maksimum `MAX_DEVICE_REBINDS`; melebihi → tolak |
+| Umur | dihapus bersama keterlibatannya (bagian terminal di bawah) |
+| Login | **tidak** ditegakkan — `account_id` sudah mengikat lebih kuat |
+
+> **Mengapa bukan fingerprint pasif.** Canvas, WebGL, daftar font dan sejenisnya rapuh —
+> pembaruan browser mengubahnya — dan memanen karakteristik perangkat tanpa pemberitahuan
+> adalah pemrosesan data pribadi yang tidak punya dasar di persetujuan yang kita minta
+> (NFR-11, UU PDP). Nilai acak yang dibuat klien tidak mengungkap apa pun tentang perangkat;
+> ia hanya rahasia ber-scope perangkat, dan itu cukup untuk tugasnya.
+>
+> **Mengapa di-hash saat istirahat.** `device_id` adalah quasi-identifier: ia menautkan
+> kunjungan satu perangkat. Peppered HMAC membuat dump Redis tidak menghasilkan korelator
+> lintas-event. Berbeda dari pepper NIK, `DEVICE_PEPPER` **boleh dirotasi antar sale** —
+> tetapi tidak pernah di tengah sale, karena rotasi membatalkan setiap pengikatan yang hidup.
+>
+> **Satu rebind, dan itu sengaja longgar.** Menghapus data situs, incognito, atau ganti
+> browser menghapus `device_id` yang sah. Pengikatan keras berarti customer itu kehilangan
+> slotnya — menghukum perilaku normal demi kontrol yang dapat dilewati siapa pun yang mau
+> menyalin satu nilai `localStorage`. Satu rebind yang tercatat membalik pertukarannya:
+> transfer kasual tetap gagal pada percobaan ketiga, kecelakaan tidak. Metrik
+> `DeviceRebindRate` memberi tahu tim bila angkanya salah (Bagian 17 #12).
+>
+> **Non-goal, dinyatakan terang.** Ini menghentikan "jual slot antrian saya" — pasar WhatsApp,
+> screenshot token. Ia **tidak** menghentikan penyerang yang menyalin `localStorage` korban,
+> dan tidak berpura-pura demikian. Kontrol untuk itu adalah pengikatan akun (FR-29), dan
+> itulah mengapa login tidak memerlukan pemeriksaan ini sama sekali.
 
 ### Posisi antrian durabel: buffer di Redis, tulis ter-batch ke Aurora
 
@@ -2407,7 +2604,7 @@ perubahan infrastruktur**.
 | Handover leader `admission-ctl` | ≤ 5,5 detik | `now_serving` berhenti sesaat; tidak ada yang hilang |
 | Kedua task ctl mati | 30–90 detik (penggantian ECS) | idem, lebih lama |
 | Failover ElastiCache | puluhan detik | state dari replika, atau rebuild dari `queue_entries` |
-| Failover Aurora | puluhan detik | INSERT grant gagal → kompensasi `DECRBY slots:open` + `readmit`, **tanpa** publish `grant` (Bagian 6). Admission berhenti alih-alih salah memberi slot |
+| Failover Aurora | puluhan detik | INSERT grant gagal → kompensasi `DECRBY slots:open` + `regrant`, **tanpa** publish `grant` (Bagian 6). Admission berhenti alih-alih salah memberi slot |
 
 Yang membuat ini dapat diterima adalah bahwa setiap jalur kegagalan berhenti **aman**: tidak
 ada grant yang terbit tanpa slot, tidak ada stok yang oversell, tidak ada posisi yang
@@ -2456,8 +2653,8 @@ Tabel saja tidak memberi pemulihan — prosedurnya harus ada dan dilatih:
 > yang punya baris `bookings` — dan itu **lebih benar** daripada nilai tersimpan, yang bisa
 > tertinggal satu tick dan menyebabkan token yang sudah di-grant di-grant ulang. Turunannya
 > mengoreksi dirinya sendiri: apa pun yang sudah pernah di-grant punya baris, jadi
-> watermarknya tepat. Token yang di-readmit tidak memajukannya, dan itu benar — ia memang
-> sudah pernah mendapat gilirannya.
+> watermarknya tepat. Token di `regrant` tidak memajukannya, dan itu benar — watermark sudah
+> melewatinya; yang gagal adalah INSERT-nya, bukan gilirannya.
 
 ### Pemulihan antrian: dua lapis, dan yang kedua harus berupa READ
 
@@ -2496,14 +2693,85 @@ BR-07, bukan sebagai jalur normal.
 > tidak ada lagi dan customer yang belum di-grant kehilangan posisinya — login maupun tamu.
 > Itu pertanyaan RPO, bukan pertanyaan pemulihan sesi; lihat Bagian 17 #7.
 
+### Empat kredensial, empat slot
+
+Perjalanan ini memakai empat kredensial yang berbeda jenis, dan **tidak ada satu slot
+transport pun yang membawa lebih dari satu**:
+
+| Kredensial | Slot | Bentuk | Membuktikan | Dapat dicabut |
+|---|---|---|---|---|
+| Access token (sesi akun) | `Authorization: Bearer` | JWT HS256, `ACCESS_TOKEN_TTL_SECONDS` | siapa pemegangnya | ❌ — stateless, tunggu TTL |
+| Grant token | `X-Grant-Token` | opaque `gt_…`, `grant:{token}` di Redis | pemegangnya punya slot | ✅ — satu `DEL` |
+| Queue token (ruang tunggu) | cookie `queue_token` / `X-Queue-Token` | opaque `qt_…`, `token:{uuid}` di Redis | posisinya dalam antrian | ✅ |
+| E-ticket token | query `?t=` pada tautan email | HMAC bertanda tangan, satu `ticket_id`, sampai tanggal event | hak baca **satu** tiket | hanya dengan rotasi kunci |
+
+> **E-ticket token ada karena FR-26 menuntutnya.** Tiket dikirim ke *masing-masing pemegang
+> NIK*, dan pemegang NIK kedua dan ketiga biasanya bukan pemilik akun — sering bukan pembeli
+> sama sekali. Rute e-tiket yang hanya menerima sesi akun berarti tombol di email mereka
+> menjawab 401, yaitu kegagalan jalur pengiriman utama requirement itu. Token ini tidak
+> membawa identitas akun, tidak memberi akses ke apa pun selain satu tiket, dan meneruskan
+> emailnya memang meneruskan tiketnya — sama seperti e-tiket mana pun; pemeriksaan identitas
+> di gerbang venue di luar cakupan (Bagian 8).
+
+### Kapan kredensial antrian dihapus
+
+Keduanya punya TTL, tetapi TTL saja berarti kredensial tetap hidup lama setelah ia berhenti
+berarti apa pun. Penghapusan aktif pada transisi terminal — `admission-ctl` dan webhook sudah
+memiliki transisi itu (Bagian 6):
+
+| Keadaan | `token:{uuid}` | Mengapa |
+|---|---|---|
+| **grant diterbitkan** | **tetap** | §3.3 memulihkan keadaan *setelah* grant: `GRANTED`, `SELECTING`, `AWAITING_PAYMENT`. Pemicunya yang paling umum adalah "kembali dari aplikasi bank" — menghapus di sini persis kegagalan NFR-02 |
+| EXPIRED, **LAPSED**, ABANDONED | `DEL` | Terminal-kegagalan: tidak ada apa pun untuk kembali ke sana. `grant:{token}` dan `acct:{ev}:{account_id}` dilepas di titik yang sama (Bagian 6, Bagian 7) |
+| **CONFIRMED** | `DEL` + `SET settled:{uuid}` | Terminal-keberhasilan: justru **ada** sesuatu yang bernilai untuk kembali ke sana |
+
+**Tombstone, bukan jendela perpanjangan.** `settled:{uuid}` memuat `booking_id` dan tidak
+lebih — bukan `ticket_no`, bukan `account_id`, bukan `device_hash`. Ia menjawab §3.3 dengan
+`CONFIRMED` sehingga frontend merutekan ke halaman tiket, tanpa menyimpan kredensial yang
+dapat memulihkan apa pun. Umurnya `SETTLED_TOMBSTONE_SECONDS`.
+
+> **Yang dicegahnya adalah sebuah kebohongan, bukan kebocoran.** Tanpa tombstone, tamu yang
+> me-refresh di celah antara pembayaran lunas dan email e-tiket tiba memanggil §3.3 dengan
+> token mati, dan pemetaan frontend untuk token tak terselesaikan adalah **layar
+> kedaluwarsa** — memberi tahu orang yang baru saja membayar bahwa sesinya habis. Itu
+> "jangan PHP" dalam bentuk paling murni, dan ia salah secara faktual, bukan hanya buruk.
+>
+> **Cookie dibersihkan pada permintaan berikutnya, bukan saat transisi.** Transisi terminal
+> terjadi di `admission-ctl` atau webhook, bukan di dalam permintaan customer, jadi tidak ada
+> respons untuk menumpangi. §3.3 yang menjawab dari tombstone mengirim
+> `Set-Cookie: queue_token=; Max-Age=0` bersamaan.
+>
+> **Setelah tombstone kedaluwarsa, email adalah rutenya** — ditambah mendaftar dengan NIK yang
+> sama, yang mewarisi tiket lewat klausa kepemilikan (*pembeli **atau** pemegang NIK
+> terdaftar*). `contact_email` dan `holder_email` wajib di `POST /bookings`, jadi kanal itu
+> selalu ada; itulah yang membuat penghapusan ini dapat diterima, dan juga mengapa token
+> e-ticket di atas wajib ada.
+
+> **Mengapa ini perlu dinyatakan.** Sampai kontrak v2.2 ketiganya dikirim di
+> `Authorization: Bearer` dan ADR ini menyebut yang kedua `accessToken` — nama kredensial
+> pertama. Dua di antaranya bahkan tidak bisa sama: klausa kepemilikan di bawah mengikat
+> Bearer ke kolom `queue_token`, sementara `GET /users/me/tickets` hanya mungkin berarti JWT
+> akun. Sejak kontrak v2.2 keduanya juga berumur 1080 detik, sehingga pembeda runtime
+> terakhir pun hilang.
+>
+> **Middleware memilih per rute, bukan per token.** Ia tidak mencoba memverifikasi tanda
+> tangan lalu jatuh ke pencarian Redis. Fallback semacam itu membuat grant tamu lolos di
+> `GET /users/me/tickets`, atau JWT akun lolos pada `booking_id` yang bukan miliknya — tepat
+> yang dicegah bagian berikut.
+>
+> **Grant wajib, sesi opsional, pada §4/§5 kontrak.** Tamu boleh membeli (FR-02) dan tidak
+> punya sesi; yang dimilikinya adalah slot. Sesi tetap diterima di atas grant karena itulah
+> satu-satunya cara `account_id` terisi saat booking dibuat — dan tanpa itu booking customer
+> login tidak dapat muncul di `GET /users/me/tickets` tanpa menebak.
+
 ### Kepemilikan: token yang valid ≠ token untuk booking ini
 
-`accessToken` yang sah membuktikan pemegangnya punya slot, **bukan** bahwa slot itu milik
+`grantToken` yang sah membuktikan pemegangnya punya slot, **bukan** bahwa slot itu milik
 `booking_id` di URL. Keduanya harus diikat, pada **setiap** endpoint yang menerima
 `booking_id` atau `ticket_id` dari path:
 
 ```sql
-WHERE id = $1 AND queue_token = $accessToken
+WHERE id = $1 AND grant_token = $grantToken
 ```
 
 Tanpa ikatan ini siapa pun yang memegang satu token sah dapat membaca booking orang lain,
@@ -2520,6 +2788,10 @@ customer bersamaan enumerasinya sepele.
 | `POST /payments/{id}/retry` | ✅ |
 | `GET /payments/{id}/status` | ✅ |
 
+Bila `Authorization` ikut dikirim, `account_id` menjadi **konjungsi kedua**, bukan pengganti:
+grant tetap yang menjaga akses. Tamu tidak mengirimnya dan booking-nya tersimpan dengan
+`account_id = NULL`, terikat lewat NIK saja.
+
 **Tidak cocok → `404`, bukan `403`.** `403` mengonfirmasi bahwa booking itu ada, yang sudah
 cukup untuk memetakan rentang id yang aktif. Pemeriksaan ini dijalankan **sebelum** validasi
 status apa pun, agar kode respons tidak pernah membocorkan keadaan booking orang lain.
@@ -2532,13 +2804,13 @@ keadaannya, dan ia mengembalikan **token yang sama** selama TTL belum habis:
 | Status booking | Respons | Halaman tujuan |
 |---|---|---|
 | tidak ada | `{queued, ticketNo, nowServing}` | Waiting Room |
-| GRANTED | `{granted, accessToken}` | Detail Ticket |
-| SELECTING / HELD | `{accessToken, bookingId, bookingExpiresAt, serverTime}` | Detail Ticket, countdown dilanjutkan |
-| AWAITING_PAYMENT | `{accessToken, bookingId, paymentExpiresAt, paymentRef, serverTime}` | Payment, countdown dilanjutkan |
+| GRANTED | `{granted, grantToken}` | Detail Ticket |
+| SELECTING / HELD | `{grantToken, bookingId, bookingExpiresAt, serverTime}` | Detail Ticket, countdown dilanjutkan |
+| AWAITING_PAYMENT | `{grantToken, bookingId, paymentExpiresAt, paymentRef, serverTime}` | Payment, countdown dilanjutkan |
 | CONFIRMED | `{bookingId}` | Halaman tiket |
 | EXPIRED / LAPSED | `{expired: true}` | Layar expired |
 
-`accessToken` disimpan di `grant:{token} EX GRANT_TOKEN_TTL_SECONDS` sehingga refresh, ganti tab, atau kembali
+`grantToken` disimpan di `grant:{token} EX GRANT_TOKEN_TTL_SECONDS` sehingga refresh, ganti tab, atau kembali
 dari aplikasi bank tidak pernah menerbitkan token baru maupun memindahkan customer.
 
 ### `contact_email`, `holder_email`, dan penerimaan T&C
@@ -2593,7 +2865,10 @@ tiba lewat webhook, bukan lewat antrian.
 | Web tab tertutup | Buka ulang dan reconnect | Acceptable |
 | **Mobile background** | ⚠️ OS menangguhkan jaringan; grant tidak diketahui | **Diketahui, diterima** |
 
-`readmit` (maks 2×) atas `LAPSED` → konsekuensinya penundaan, bukan kehilangan giliran.
+`LAPSED` bersifat **final** — konsekuensinya kehilangan slot, bukan penundaan. Kesempatan
+kedua dihapus di Bagian 7: ia dilayani mendahului orang yang belum pernah mendapat giliran,
+dan ia tidak dapat membedakan push yang tertahan OS dari customer yang pergi. Menjaga
+perangkat menyala selama perang tiket ada di sisi customer.
 
 **Dashboard operasional (FR-33, FR-34, FR-35).** Tidak ada endpoint aplikasi untuk ini.
 `metrics-scraper` (EventBridge, tiap 1 menit) membaca Redis dan Aurora dan menerbitkan
@@ -2759,9 +3034,9 @@ Working set Redis pada 300.000 ≈ 80 MB terhadap 13 GB per node: sizing didasar
 | Crash antara COMMIT dan `ZADD` | Deadline otoritatif di Aurora; sweep me-rescore; `ExpiryRescored` dipantau (Bagian 7) |
 | Klien lama tanpa `es.close()` pada sold-out | Server menjawab `410 Gone`; `SoldOutStreamRejections` dipantau |
 | Jalur fallback outbox p95 ≈ 1107ms | `OutboxInlineHitRate`; turunkan interval publisher bila sering |
-| Batch INSERT GRANTED gagal | Retry → `DECRBY` + `readmit` + tidak publish (Bagian 6) |
+| Batch INSERT GRANTED gagal | Retry → `DECRBY` + `regrant` + tidak publish (Bagian 6) |
 | Kuota Dukcapil menjadi plafon throughput | Konfirmasi T-7 hari; uji di rehearsal |
-| Payment gateway tidak tersedia | Breaker fail closed + pause admission + resume otomatis. Pause melewatkan ADVANCE, termasuk pengurasan `readmit` (Bagian 6) |
+| Payment gateway tidak tersedia | Breaker fail closed + pause admission + resume otomatis. Pause melewatkan ADVANCE, termasuk pengurasan `regrant` (Bagian 6) |
 | Double-charge saat timeout gateway | Kunci per-percobaan `{booking_id}:{attempt}` + charge reconciler read-only (Bagian 8); charge tidak pernah dikirim ulang |
 | Outbox at-least-once merusak `slots:open` | Lease guard (Bagian 9) + rekonsiliasi (Bagian 6) |
 | **Rollback Aurora setelah `hold_booking.lua` berhasil** | Redis di luar transaksi: stok dan NIK bocor, dan jalur expiry `SELECTING` tidak mengembalikannya. Kompensasi eksplisit (Bagian 8) + rekonsiliasi stok tiap 60 detik (Bagian 6) + `HoldCompensated` dialarmkan |
@@ -2787,7 +3062,7 @@ Working set Redis pada 300.000 ≈ 80 MB terhadap 13 GB per node: sizing didasar
 | Stok dilepas lalu callback sukses tiba | Stok **tetap** di-hold selama `PENDING_CANCELLATION`; pelepasan hanya setelah grace berakhir (Bagian 7) |
 | Refund disputed tidak otomatis di POC | Ditandai `payment_disputed`, customer diberi tahu lewat email, operator merekonsiliasi lewat `GET /admin/reconciliation/disputed` (Bagian 9) |
 | Antrian menerima lebih banyak orang daripada yang bisa dilayani | `QUEUE_CAPACITY` + `QUEUE_FULL` fail fast; state antrian terlihat di halaman utama sebelum customer mengklik (Bagian 6) |
-| **`accessToken` kedaluwarsa sebelum jendela pembayaran habis** | Umur token diturunkan dari GRACE + BOOKING_TTL + PAYMENT_TTL, bukan konstanta lepas (Bagian 7) |
+| **`grantToken` kedaluwarsa sebelum jendela pembayaran habis** | Umur token diturunkan dari GRACE + BOOKING_TTL + PAYMENT_TTL, bukan konstanta lepas (Bagian 7) |
 | Ganti metode meninggalkan dua instrumen hidup | `/retry` membatalkan transaksi lama di Midtrans **sebelum** COMMIT; gagal cancel → attempt tidak naik (Bagian 9) |
 | Customer menerbitkan puluhan VA dengan ganti metode berulang | `MAX_PAYMENT_ATTEMPTS` → 429 (Bagian 8) |
 | **VA tetap dapat dibayar setelah stok dijual ulang** | `custom_expiry` menyamai TTL saat charge + `POST /v2/{order_id}/expire` dari sweep (Bagian 7, Bagian 9) |
@@ -2804,9 +3079,9 @@ Working set Redis pada 300.000 ≈ 80 MB terhadap 13 GB per node: sizing didasar
 | Kedua task ctl mati bersamaan | ECS mengganti keduanya; selama itu antrian membeku. **Lease tidak menolong** — tidak ada yang mengambilnya. Detektor keheningan sse-server menyalakan `status {stale:true}` ke customer, dan `CtlHeartbeatAge` statistik **Minimum** mem-page operasi (Bagian 11) |
 | **Leader hidup tetapi tick loop macet** | Lease tetap diperpanjang oleh thread timer, jadi standby tidak pernah terpicu dan tidak ada pemulihan otomatis sama sekali. Satu-satunya mitigasi adalah alarm `CtlHeartbeatAge` yang membangunkan operator (Bagian 11) |
 | ALB ramp 5.000 conn/s di T=0 | Uji pada ramp |
-| Mobile background tidak menerima grant | `readmit` maks 2× atas `LAPSED`. **Degradasi yang diterima**: tanpa grace antrian, jam booking 300 detik sudah berjalan saat push terlewat, sehingga waktu memilih customer itu berkurang — lihat Bagian 7 |
+| Mobile background tidak menerima grant | **Kerugian yang diterima, tanpa mitigasi teknis.** Tanpa grace antrian jam booking 300 detik sudah berjalan saat push terlewat; bila habis, slot hilang dan tidak ada kesempatan kedua (Bagian 6). Menjaga perangkat menyala ada di sisi customer; yang tersisa adalah peringatan pra-gerbang di FE (Bagian 17 #13) |
 | Redis Pub/Sub kehilangan pesan saat failover | Resync + re-broadcast; `status {stale:true}`; heartbeat 10 detik. Bila yang putus hanya **satu** task sse-server, `admission-ctl` sehat dan hanya detektor per-task yang menangkapnya — `CtlHeartbeatAge` statistik **Maximum** (Bagian 11) |
-| `readmit` livelock | Batas 2× per token; `EXPIRE` + job post-sale |
+| `regrant` livelock | Dibatasi `GRANT_INSERT_MAX_RETRIES`; `EXPIRE` + job post-sale. Tidak ada jalur no-show yang dapat mengisinya berulang |
 | Kontensi kategori saat tekan Pay | Aturan gagal-hold: slot tidak hilang (Bagian 8) |
 | NIK terkunci oleh booking kedaluwarsa | `DEL nik:used` pada jalur expiry (Bagian 8) |
 | PII pihak ketiga ke API eksternal | Persetujuan dicatat terpisah dari T&C; HMAC + KMS; retensi di Bagian 8 |
@@ -2829,6 +3104,10 @@ Working set Redis pada 300.000 ≈ 80 MB terhadap 13 GB per node: sizing didasar
 | 7 | Aksesibilitas (`aria-live` pada angka antrian dan banner pause) | Tim FE |
 | 8 | Kuota provider CAPTCHA untuk 300.000 verifikasi dalam ~60 detik | Tim — **T-7 hari** |
 | 9 | Alamat IP webhook Midtrans untuk allowlist | Tim — **T-7 hari** |
+| 10 | **`SALE_WINDOW_SECONDS`** — belum pernah punya nilai, dan kini memikul TTL `acct`, TTL `token:{uuid}`, **dan** `ACCESS_TOKEN_TTL_SECONDS`. Fallback 21600 dipakai bila env tidak didefinisikan | Tim + **Pemilik tender** (bergantung jam penjualan) |
+| 11 | Apakah `nik_verified` dikeluarkan dari claim access token. Pada 22740 detik claim itu adalah otorisasi ter-cache 6 jam; mengeluarkannya berarti satu pembacaan basis data per permintaan di bawah flash crowd | Tim |
+| 13 | Peringatan pra-gerbang di FE: jaga aplikasi tetap di depan, izinkan notifikasi, jangan andalkan push saat layar terkunci. Ini **satu-satunya** mitigasi yang tersisa bagi customer mobile sejak kesempatan kedua atas `LAPSED` dihapus (Bagian 7), dan ia peringatan — bukan jaminan | Tim FE |
+| 12 | **`MAX_DEVICE_REBINDS`**, dan apakah pengikatan device ditegakkan di web — menghapus storage browser itu lumrah, dan tiap rebind yang ditolak adalah slot yang hilang bagi customer yang sah | Tim + QA |
 
 **Diputuskan dan ditutup**: pengawasan kesegaran antrian — **sse-server** mendeteksi
 keheningan `sse-broadcast` > `SSE_STALE_AFTER_SECONDS` (30 detik, = 3 heartbeat) selama

@@ -8,6 +8,9 @@
 > dipilih di sini tetap menjadi dasar ADR-005. Yang sudah bergerak sejak dokumen ini:
 > `queue:{event_id}:state` kini bernilai `SCHEDULED | OPEN | SOLD_OUT | CLOSED` (bukan
 > `"open" | "closed_sold_out"`), dan `grant:{token}` hidup `EX 1080`, bukan `EX 900`.
+> Sejak kontrak API v2.3, kredensial yang disimpan di key itu bernama **grant token** dan
+> dikirim di header `X-Grant-Token`, bukan di `Authorization: Bearer` — slot itu kini milik
+> token sesi akun saja (ADR-005, "Empat kredensial, empat slot").
 > Untuk skema key dan TTL yang mengikat, pakai **ADR-005 Bagian 4 dan Bagian 7**.
 
 ---

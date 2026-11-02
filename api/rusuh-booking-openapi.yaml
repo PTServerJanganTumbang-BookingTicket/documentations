@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: Rusuh Booking Tiket API
-  version: "2.1"
+  version: "2.4"
   description: |
     API contracts untuk sistem penjualan tiket konser Rusuh dengan Virtual Waiting Room.
 
@@ -14,10 +14,39 @@ info:
     | SSE Stream | `events.rusuhtiket.com` (ALB) | `text/event-stream` |
 
     ### Autentikasi
-    - **Queue Token**: cookie `HttpOnly` `queue_token` (web) atau `Authorization: Bearer` header (mobile).
+
+    Empat kredensial, empat slot transport. Tidak ada satu slot pun yang membawa lebih dari
+    satu jenis — middleware memilih per rute, tidak mencoba memverifikasi tanda tangan lalu
+    jatuh ke pencarian Redis. Sampai v2.2 ketiganya berbagi `Authorization: Bearer`.
+
+    | Kredensial | Slot | Membuktikan |
+    |---|---|---|
+    | Access Token (sesi akun) | `Authorization: Bearer` | siapa pemegangnya |
+    | Grant Token | `X-Grant-Token` | pemegangnya punya slot |
+    | Queue Token (ruang tunggu) | cookie `queue_token` (web) / `X-Queue-Token` (mobile) | posisinya dalam antrian |
+    | E-ticket Token | query `?t=` pada tautan email | hak baca satu tiket |
+
+    Pengikatan tambahan, bukan slot kredensial: `X-Device-Id` mengikat grant **anonim** ke
+    perangkat yang menerimanya. Acak 128 bit yang dibuat klien, disimpan server sebagai HMAC;
+    bukan fingerprint pasif. Customer login tidak mengirimnya — `account_id` mengikat lebih kuat.
+
+    - **Queue Token**: cookie `HttpOnly` `queue_token` (web) atau header `X-Queue-Token`
+      (mobile). Web memakai cookie karena `EventSource` tidak dapat menyetel header request.
       Token TIDAK pernah dikirim via query string.
-    - **Access Token**: JWT, diperoleh setelah giliran tiba via `GET /queue/me`.
-      Dikirim sebagai `Authorization: Bearer {access_token}`.
+    - **Grant Token**: opaque (`gt_…`, bukan JWT), diperoleh setelah giliran tiba via
+      `GET /queue/me`, dikirim sebagai `X-Grant-Token`. Menjaga seluruh endpoint booking dan
+      payment. Tersimpan di Redis, sehingga dapat dicabut seketika — tidak seperti access
+      token. Diterbitkan untuk tamu juga, karena tamu boleh membeli.
+    - **Access Token**: JWT sesi akun, diperoleh setelah login via `GET /auth/verify` atau
+      `POST /auth/refresh`.
+      Dikirim sebagai `Authorization: Bearer {access_token}`. Berlaku **22740 detik**
+      — angka yang sama dengan `GRANT_TOKEN_TTL_SECONDS`, diturunkan dari perjalanan
+      customer (ADR-005 §7: 300 booking + 600 pembayaran + 30 grace + margin) sehingga
+      sesi hidup lebih lama daripada journey. Karena token ini stateless, umurnya
+      sekaligus jendela pencabutannya.
+    - **Refresh Token**: opaque (bukan JWT), berlaku 30 hari, sekali pakai dengan
+      rotasi. Ditukar di `POST /auth/refresh`. Server menyimpan hash-nya saja, dan
+      pemutaran ulang token yang sudah terpakai mencabut seluruh keluarga token.
 
     ### Pola Respons
     Semua endpoint menggunakan envelope `{ meta, data }`.
@@ -26,7 +55,7 @@ info:
     ### Status Antrian
     Setelah `POST /events/{id}/queue/join`, klien membuka SSE stream.
     Posisi dihitung klien: `position = ticket_no − nowServing`.
-    Saat menerima event `grant`, klien memanggil `GET /events/{id}/queue/me` untuk mendapat `access_token`.
+    Saat menerima event `grant`, klien memanggil `GET /events/{id}/queue/me` untuk mendapat `grant_token`.
 
 servers:
   - url: https://api.rusuh.id/v1
@@ -34,7 +63,7 @@ servers:
 
 tags:
   - name: Authentication
-    description: Magic link login dan registrasi akun
+    description: Magic link login, refresh sesi, dan registrasi akun
   - name: Accounts
     description: Manajemen NIK tersimpan (Daftar_NIK_Teman)
   - name: Events
@@ -58,12 +87,49 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
-      description: Access token JWT diperoleh dari `GET /events/{event_id}/queue/me` setelah giliran tiba.
+      description: >
+        Access token JWT **sesi akun**, diterbitkan `GET /auth/verify` atau
+        `POST /auth/refresh`. Ini satu-satunya kredensial yang pernah menempati slot
+        `Authorization`. Ia TIDAK dikirim ke endpoint booking/payment sama sekali: sejak v2.4
+        `bookings.account_id` diambil dari keterlibatan pada INSERT saat GRANT, bukan dari
+        kredensial yang dibawa klien saat checkout.
+    GrantToken:
+      type: apiKey
+      in: header
+      name: X-Grant-Token
+      description: >
+        Grant slot opaque (`gt_…`), diperoleh dari `GET /events/{event_id}/queue/me` setelah
+        event `grant`. Membuktikan pemegangnya punya slot, bukan siapa dirinya — tamu
+        mendapatkannya juga. Wajib pada seluruh endpoint booking dan payment. Tersimpan di
+        `grant:{token} EX GRANT_TOKEN_TTL_SECONDS`, jadi setiap verifikasi membacanya dari
+        Redis dan satu `DEL` mencabutnya.
     QueueTokenCookie:
       type: apiKey
       in: cookie
       name: queue_token
-      description: Cookie HttpOnly yang di-set server saat `POST /queue/join`. Untuk mobile gunakan `Authorization` header.
+      description: >
+        Cookie HttpOnly yang di-set server saat `POST /queue/join`, membuktikan posisi dalam
+        antrian. Dipakai web, termasuk oleh SSE stream — `EventSource` tidak dapat menyetel
+        header request. Klien mobile memakai `X-Queue-Token`.
+        `Max-Age` adalah batas atas: keadaan terminal menghapus kredensialnya lebih cepat, dan
+        `CONFIRMED` menggantinya dengan nisan yang tidak memulihkan apa pun.
+    ETicketToken:
+      type: apiKey
+      in: query
+      name: t
+      description: >
+        HMAC bertanda tangan atas satu `ticket_id` + kedaluwarsa, dikirim pada tautan di email
+        e-tiket. Tanpa identitas akun, lingkup satu tiket, berlaku sampai tanggal event + 1
+        hari. Ada karena FR-26 mengirim tiket ke masing-masing pemegang NIK, dan pemegang NIK
+        umumnya tidak punya akun — rute yang hanya menerima sesi akun membuat tombol di email
+        mereka menjawab 401.
+    QueueTokenHeader:
+      type: apiKey
+      in: header
+      name: X-Queue-Token
+      description: >
+        Token ruang tunggu yang sama, untuk klien mobile yang tidak punya cookie store.
+        Bukan `Authorization`: slot itu milik sesi akun.
 
   schemas:
     Meta:
@@ -257,7 +323,7 @@ paths:
                 data:
                   access_token: eyJhbG...
                   refresh_token: eyJhbG...
-                  expires_in: 300
+                  expires_in: 22740
                   user:
                     id: usr_123
                     email: you@example.com
@@ -269,6 +335,117 @@ paths:
                     message: Booking context restored
         "401":
           description: Invalid or expired magic token
+
+  /auth/refresh:
+    post:
+      tags: [Authentication]
+      summary: Refresh Session
+      operationId: refreshSession
+      description: |
+        Menukar refresh token dengan pasangan token baru.
+
+        Dipanggil klien saat access token mendekati kedaluwarsa, atau setelah
+        menerima `401 TOKEN_EXPIRED`.
+
+        Access token berlaku 22740 detik — mencakup penantian antrian dan perjalanan
+        930 detik — sehingga endpoint ini **tidak** dipanggil di tengah journey, dan
+        juga tidak di ruang tunggu. Ia
+        ada untuk sesi yang berumur hari — refresh token berlaku 30 hari — bukan
+        untuk menambal token yang terlalu pendek. Sebuah refresh yang gagal di
+        halaman pembayaran akan memutus customer, dan NFR-02 melarangnya.
+
+        **Rotasi.** Setiap panggilan mengembalikan refresh token baru dan
+        menghanguskan yang dikirim. Klien wajib mengganti salinan simpanannya;
+        bila tidak, panggilan berikutnya terbaca sebagai pemutaran ulang.
+
+        **Pemutaran ulang mencabut seluruh keluarga token.** Token sekali-pakai
+        yang muncul dua kali berarti kredensial bocor, dan yang memegang mata
+        rantai terbaru bisa jadi penyerang — mencabut satu token saja justru
+        mempertahankan aksesnya (OAuth 2.0 BCP §4.13).
+
+        Token dikirim di body, bukan header `Authorization`: pada endpoint ini ia
+        adalah objek permintaan, dan menjauhkannya dari header itu mencegahnya
+        tercatat oleh proxy yang me-log header.
+
+        **Requirement**: FR-31, BR-09, NFR-02, NFR-07
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refresh_token]
+              properties:
+                refresh_token:
+                  type: string
+                  description: Refresh token opaque dari `GET /auth/verify` atau dari panggilan refresh sebelumnya
+            example:
+              refresh_token: 8Kq2mN9vL4wX1yB6cF3dH5jG0aZpR7tS
+      responses:
+        "200":
+          description: Session refreshed
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+              description: "access_token cookie (HttpOnly, Secure, SameSite=Strict)"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                    properties:
+                      code:
+                        type: integer
+                      message:
+                        type: string
+                  data:
+                    type: object
+                    properties:
+                      access_token:
+                        type: string
+                        description: JWT HS256, berlaku `expires_in` detik
+                      refresh_token:
+                        type: string
+                        description: Pengganti yang baru — token yang dikirim sudah hangus
+                      expires_in:
+                        type: integer
+                        description: Masa berlaku access token dalam detik
+              example:
+                meta:
+                  code: 200
+                  message: Session refreshed
+                data:
+                  access_token: eyJhbG...
+                  refresh_token: wB3nT8kM2pQ7vF1xJ9cL5gH4dZ6yA0sR
+                  expires_in: 22740
+        "400":
+          description: "`VALIDATION_ERROR` — field `refresh_token` kosong atau absen"
+          content:
+            application/json:
+              example:
+                meta:
+                  code: 400
+                  message: refresh_token is required
+                data: {}
+        "401":
+          description: |
+            Sesi tidak dapat diperpanjang. Dua sebab, dibedakan di kode tetapi tidak di pesan:
+
+            - `TOKEN_INVALID` — token **sudah pernah dipakai** (pemutaran ulang; seluruh
+              keluarga token dicabut), atau akunnya sudah tidak ada
+            - `TOKEN_EXPIRED` — token kedaluwarsa, dicabut, atau tidak dikenal
+
+            Pesannya sama agar penyerang tidak diberi tahu bahwa ia memicu deteksi pencurian.
+          content:
+            application/json:
+              example:
+                meta:
+                  code: 401
+                  message: Session ended; please sign in again
+                data: {}
 
   /auth/register:
     post:
@@ -619,7 +796,7 @@ paths:
 
         **FR-05 — Bypass antrian kosong**: bila `queue_depth == 0` dan stok tersedia,
         Lua memberi grant pada permintaan yang sama. Respons berisi `granted: true` dan
-        `access_token` — klien langsung ke Detail Ticket tanpa membuka SSE stream.
+        `grant_token` — klien langsung ke Detail Ticket tanpa membuka SSE stream.
 
         **Re-entrancy**: user yang sudah di antrian mendapat posisi lama kembali.
 
@@ -635,6 +812,27 @@ paths:
           schema:
             type: string
           example: evt_konser_a
+        - name: X-Device-Id
+          in: header
+          required: false
+          description: >
+            Acak 128 bit yang dibuat klien, disimpan server sebagai HMAC(DEVICE_PEPPER, …) pada
+            keterlibatan dan dicocokkan pada setiap panggilan ber-grant. WAJIB bila pemanggil
+            tidak login — grant tanpa pengikatan tidak dapat diikat belakangan, jadi tamu yang
+            tidak mengirimnya ditolak di sini dengan 400 DEVICE_ID_REQUIRED, bukan nanti.
+          schema:
+            type: string
+        - name: Authorization
+          in: header
+          required: false
+          description: >
+            `Bearer {access_token}` bila customer login. Satu-satunya tempat di jalur antrian
+            yang menerimanya, karena dua hal butuh identitas akun tepat pada saat join:
+            penegakan BR-07 lewat acct:{ev}:{account_id}, dan `account_id` pada keterlibatan —
+            yang kemudian menjadi `bookings.account_id` pada INSERT saat GRANT, tanpa pernah
+            menanyakan klien lagi.
+          schema:
+            type: string
       responses:
         "200":
           description: Joined queue / rejoined existing position
@@ -682,7 +880,7 @@ paths:
                       message: No queue — access granted
                     data:
                       granted: true
-                      access_token: at_abc123
+                      grant_token: gt_abc123
                       booking_expires_at: "2026-11-10T02:05:00Z"
                       server_time: "2026-11-10T02:00:00Z"
         "503":
@@ -708,7 +906,7 @@ paths:
 
         > ⚠️ Endpoint ini dilayani oleh ALB (`events.rusuhtiket.com`), bukan API Gateway.
 
-        **Autentikasi**: Cookie `queue_token` (web) | `Authorization: Bearer` header (mobile).
+        **Autentikasi**: Cookie `queue_token` (web — EventSource tidak dapat menyetel header) | `X-Queue-Token` header (mobile). Bukan `Authorization`: slot itu milik sesi akun.
         Token TIDAK pernah dikirim via query string (akan tercatat di access log).
 
         **Event types yang dikirim server**:
@@ -736,14 +934,14 @@ paths:
           schema:
             type: string
           example: evt_konser_a
-        - name: Authorization
+        - name: X-Queue-Token
           in: header
-          description: "Bearer {queue_token} — untuk mobile. Web pakai cookie."
+          description: "Token ruang tunggu — untuk mobile. Web pakai cookie `queue_token`, karena EventSource tidak dapat menyetel header."
           schema:
             type: string
       security:
         - QueueTokenCookie: []
-        - BearerAuth: []
+        - QueueTokenHeader: []
       responses:
         "200":
           description: SSE stream opened successfully
@@ -802,7 +1000,7 @@ paths:
         Satu-satunya endpoint yang dipanggil klien saat kembali — setelah refresh, ganti tab,
         atau kembali dari aplikasi bank. Mengembalikan token yang sama selama TTL belum habis.
 
-        Juga dipanggil setelah menerima event `grant` dari SSE untuk mengambil `access_token`.
+        Juga dipanggil setelah menerima event `grant` dari SSE untuk mengambil `grant_token`.
 
         `state` yang dikembalikan:
 
@@ -825,6 +1023,8 @@ paths:
           example: evt_konser_a
       security:
         - QueueTokenCookie: []
+        - QueueTokenHeader: []
+        - BearerAuth: []
       responses:
         "200":
           description: Current queue/booking state for re-entrancy
@@ -842,14 +1042,14 @@ paths:
                       ticket_no: 31842
                       now_serving: 31600
                 granted:
-                  summary: Giliran tiba — access_token tersedia
+                  summary: Giliran tiba — grant_token tersedia
                   value:
                     meta:
                       code: 200
                       message: Success
                     data:
                       state: GRANTED
-                      access_token: at_abc123
+                      grant_token: gt_abc123
                       booking_expires_at: "2026-10-23T13:15:00Z"
                       server_time: "2026-10-23T13:10:00Z"
                 selecting:
@@ -860,7 +1060,7 @@ paths:
                       message: Success
                     data:
                       state: SELECTING
-                      access_token: at_abc123
+                      grant_token: gt_abc123
                       booking_id: RB-00912
                       booking_expires_at: "2026-10-23T13:15:00Z"
                       server_time: "2026-10-23T13:10:00Z"
@@ -872,7 +1072,7 @@ paths:
                       message: Success
                     data:
                       state: AWAITING_PAYMENT
-                      access_token: at_abc123
+                      grant_token: gt_abc123
                       booking_id: RB-00912
                       payment_expires_at: "2026-10-23T13:25:00Z"
                       payment_ref: pay_123
@@ -948,7 +1148,7 @@ paths:
       operationId: getTicketSelection
       description: |
         Menampilkan kategori tiket dengan stok terkini. UI: "Pilih tempatmu di konser."
-        Dipanggil setelah klien mendapat `access_token` dari `GET /queue/me`.
+        Dipanggil setelah klien mendapat `grant_token` dari `GET /queue/me`.
         **Requirement**: FR-11, FR-12, FR-13, FR-17, BR-01, BR-02
       parameters:
         - name: event_id
@@ -957,8 +1157,16 @@ paths:
           schema:
             type: string
           example: evt_konser_a
+        - name: X-Device-Id
+          in: header
+          required: false
+          description: >
+            Pengikatan device untuk grant anonim — WAJIB bila pemanggil tidak login (OpenAPI
+            tidak dapat menyatakan kewajiban bersyarat). Tidak cocok → 401 DEVICE_MISMATCH.
+          schema:
+            type: string
       security:
-        - BearerAuth: []
+        - GrantToken: []
       responses:
         "200":
           description: Ticket categories with availability and session TTL
@@ -1023,8 +1231,17 @@ paths:
 
         `already_used` bersifat indikatif saja — penegak sebenarnya adalah `SET nik:used NX` pada `POST /bookings`.
         **Requirement**: FR-15a
+      parameters:
+        - name: X-Device-Id
+          in: header
+          required: false
+          description: >
+            Pengikatan device untuk grant anonim — WAJIB bila pemanggil tidak login (OpenAPI
+            tidak dapat menyatakan kewajiban bersyarat). Tidak cocok → 401 DEVICE_MISMATCH.
+          schema:
+            type: string
       security:
-        - BearerAuth: []
+        - GrantToken: []
       requestBody:
         required: true
         content:
@@ -1138,8 +1355,17 @@ paths:
 
         **Idempoten**: submit ulang mengembalikan booking yang ada — tidak ada hold kedua.
         **Requirement**: FR-13, FR-14, FR-15, FR-16, NFR-04, BR-01, BR-02
+      parameters:
+        - name: X-Device-Id
+          in: header
+          required: false
+          description: >
+            Pengikatan device untuk grant anonim — WAJIB bila pemanggil tidak login (OpenAPI
+            tidak dapat menyatakan kewajiban bersyarat). Tidak cocok → 401 DEVICE_MISMATCH.
+          schema:
+            type: string
       security:
-        - BearerAuth: []
+        - GrantToken: []
       requestBody:
         required: true
         content:
@@ -1278,8 +1504,16 @@ paths:
           schema:
             type: string
           example: RB-00912
+        - name: X-Device-Id
+          in: header
+          required: false
+          description: >
+            Pengikatan device untuk grant anonim — WAJIB bila pemanggil tidak login (OpenAPI
+            tidak dapat menyatakan kewajiban bersyarat). Tidak cocok → 401 DEVICE_MISMATCH.
+          schema:
+            type: string
       security:
-        - BearerAuth: []
+        - GrantToken: []
       responses:
         "200":
           description: Booking detail
@@ -1359,8 +1593,16 @@ paths:
           schema:
             type: string
           example: RB-00912
+        - name: X-Device-Id
+          in: header
+          required: false
+          description: >
+            Pengikatan device untuk grant anonim — WAJIB bila pemanggil tidak login (OpenAPI
+            tidak dapat menyatakan kewajiban bersyarat). Tidak cocok → 401 DEVICE_MISMATCH.
+          schema:
+            type: string
       security:
-        - BearerAuth: []
+        - GrantToken: []
       responses:
         "200":
           description: List of tickets in booking
@@ -1406,8 +1648,16 @@ paths:
           schema:
             type: string
           example: RB-00912
+        - name: X-Device-Id
+          in: header
+          required: false
+          description: >
+            Pengikatan device untuk grant anonim — WAJIB bila pemanggil tidak login (OpenAPI
+            tidak dapat menyatakan kewajiban bersyarat). Tidak cocok → 401 DEVICE_MISMATCH.
+          schema:
+            type: string
       security:
-        - BearerAuth: []
+        - GrantToken: []
       responses:
         "200":
           description: Available payment methods
@@ -1466,8 +1716,16 @@ paths:
           schema:
             type: string
           example: RB-00912
+        - name: X-Device-Id
+          in: header
+          required: false
+          description: >
+            Pengikatan device untuk grant anonim — WAJIB bila pemanggil tidak login (OpenAPI
+            tidak dapat menyatakan kewajiban bersyarat). Tidak cocok → 401 DEVICE_MISMATCH.
+          schema:
+            type: string
       security:
-        - BearerAuth: []
+        - GrantToken: []
       requestBody:
         required: true
         content:
@@ -1560,8 +1818,16 @@ paths:
           schema:
             type: string
           example: RB-00912
+        - name: X-Device-Id
+          in: header
+          required: false
+          description: >
+            Pengikatan device untuk grant anonim — WAJIB bila pemanggil tidak login (OpenAPI
+            tidak dapat menyatakan kewajiban bersyarat). Tidak cocok → 401 DEVICE_MISMATCH.
+          schema:
+            type: string
       security:
-        - BearerAuth: []
+        - GrantToken: []
       responses:
         "200":
           description: Previous payment cancelled, booking returned to HELD
@@ -1612,8 +1878,16 @@ paths:
           schema:
             type: string
           example: RB-00912
+        - name: X-Device-Id
+          in: header
+          required: false
+          description: >
+            Pengikatan device untuk grant anonim — WAJIB bila pemanggil tidak login (OpenAPI
+            tidak dapat menyatakan kewajiban bersyarat). Tidak cocok → 401 DEVICE_MISMATCH.
+          schema:
+            type: string
       security:
-        - BearerAuth: []
+        - GrantToken: []
       responses:
         "200":
           description: Payment status — selalu 200 terlepas dari hasil pembayaran
@@ -1797,8 +2071,17 @@ paths:
           schema:
             type: string
           example: TKT-001
+        - name: t
+          in: query
+          required: false
+          description: >
+            Token e-tiket dari tautan email. Alternatif `Authorization` untuk pemegang NIK dan
+            pembeli tamu, yang umumnya tidak punya akun.
+          schema:
+            type: string
       security:
         - BearerAuth: []
+        - ETicketToken: []
       responses:
         "200":
           description: E-ticket with QR code
@@ -1838,7 +2121,7 @@ paths:
       description: |
         Booking yang menerima callback sukses **setelah** pembatalan final — pembayaran masuk setelah stok dijual ulang ke orang lain.
 
-        Endpoint operasional — terpisah dari jalur customer. Tidak memakai `access_token` antrian.
+        Endpoint operasional — terpisah dari jalur customer. Tidak memakai grant token antrian.
 
         **Refund tidak dieksekusi otomatis di POC** — operator merekonsiliasi lewat dashboard Midtrans menggunakan `order_id` dan `gateway_event_id` di setiap baris.
 

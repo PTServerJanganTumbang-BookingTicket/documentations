@@ -508,7 +508,7 @@
                             },
                             "expires_in": {
                               "type": "integer",
-                              "example": 300
+                              "example": 22740
                             },
                             "user": {
                               "type": "object",
@@ -597,7 +597,7 @@
                 "responseExamples": [
                   {
                     "name": "Success",
-                    "data": "{\"meta\":{\"code\":200,\"message\":\"Login successful\"},\"data\":{\"access_token\":\"eyJhbG...\",\"refresh_token\":\"eyJhbG...\",\"expires_in\":300,\"user\":{\"id\":\"usr_123\",\"email\":\"you@example.com\",\"nik\":\"3171xxxxxxxxxx22\"},\"redirect_context\":{\"type\":\"booking\",\"event_id\":\"evt_konser_a\",\"booking_id\":\"RB-00912\",\"message\":\"Booking context restored\"}}}",
+                    "data": "{\"meta\":{\"code\":200,\"message\":\"Login successful\"},\"data\":{\"access_token\":\"eyJhbG...\",\"refresh_token\":\"eyJhbG...\",\"expires_in\":22740,\"user\":{\"id\":\"usr_123\",\"email\":\"you@example.com\",\"nik\":\"3171xxxxxxxxxx22\"},\"redirect_context\":{\"type\":\"booking\",\"event_id\":\"evt_konser_a\",\"booking_id\":\"RB-00912\",\"message\":\"Booking context restored\"}}}",
                     "responseId": "189484958",
                     "description": "",
                     "oasKey": "",
@@ -620,6 +620,239 @@
                 "operationId": "verifyMagicLink",
                 "sourceUrl": "",
                 "ordering": 18,
+                "cases": [],
+                "mocks": [],
+                "customApiFields": "{}",
+                "advancedSettings": {
+                  "disabledSystemHeaders": {}
+                },
+                "mockScript": {},
+                "codeSamples": [],
+                "commonResponseStatus": {},
+                "responseChildren": [],
+                "visibility": "INHERITED",
+                "moduleId": 1505827,
+                "oasExtensions": "",
+                "type": "http",
+                "preProcessors": [],
+                "postProcessors": [],
+                "inheritPostProcessors": {},
+                "inheritPreProcessors": {}
+              }
+            },
+            {
+              "name": "Refresh Session",
+              "api": {
+                "id": "46280776",
+                "method": "post",
+                "path": "/auth/refresh",
+                "parameters": {
+                  "path": [],
+                  "query": [],
+                  "cookie": [],
+                  "header": []
+                },
+                "auth": {},
+                "securityScheme": {},
+                "commonParameters": {},
+                "responses": [
+                  {
+                    "id": "200410001",
+                    "code": "200",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 200
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Session refreshed"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "access_token": {
+                              "type": "string",
+                              "description": "JWT HS256, berlaku expires_in detik",
+                              "example": "eyJhbG..."
+                            },
+                            "refresh_token": {
+                              "type": "string",
+                              "description": "Pengganti yang baru — token yang dikirim sudah hangus",
+                              "example": "wB3nT8kM2pQ7vF1xJ9cL5gH4dZ6yA0sR"
+                            },
+                            "expires_in": {
+                              "type": "integer",
+                              "description": "Masa berlaku access token dalam detik",
+                              "example": 22740
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "access_token",
+                            "refresh_token",
+                            "expires_in"
+                          ]
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "Session refreshed",
+                    "contentType": "json",
+                    "mediaType": "application/json",
+                    "oasExtensions": ""
+                  },
+                  {
+                    "id": "200410002",
+                    "code": "400",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 400
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "refresh_token is required"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message"
+                          ]
+                        },
+                        "data": {
+                          "type": "object"
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "VALIDATION_ERROR — field refresh_token kosong atau absen",
+                    "contentType": "json",
+                    "mediaType": "application/json",
+                    "oasExtensions": ""
+                  },
+                  {
+                    "id": "200410003",
+                    "code": "401",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 401
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Session ended; please sign in again"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message"
+                          ]
+                        },
+                        "data": {
+                          "type": "object"
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "TOKEN_INVALID (token sudah pernah dipakai — seluruh keluarga dicabut — atau akun sudah tidak ada) atau TOKEN_EXPIRED (kedaluwarsa, dicabut, tidak dikenal). Pesannya sama agar penyerang tidak diberi tahu bahwa ia memicu deteksi pencurian.",
+                    "contentType": "json",
+                    "mediaType": "application/json",
+                    "oasExtensions": ""
+                  }
+                ],
+                "responseExamples": [
+                  {
+                    "name": "Success",
+                    "data": "{\"meta\":{\"code\":200,\"message\":\"Session refreshed\"},\"data\":{\"access_token\":\"eyJhbG...\",\"refresh_token\":\"wB3nT8kM2pQ7vF1xJ9cL5gH4dZ6yA0sR\",\"expires_in\":22740}}",
+                    "responseId": "200410001",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": ""
+                  },
+                  {
+                    "name": "Replayed or expired",
+                    "data": "{\"meta\":{\"code\":401,\"message\":\"Session ended; please sign in again\"},\"data\":{}}",
+                    "responseId": "200410003",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": ""
+                  }
+                ],
+                "requestBody": {
+                  "type": "application/json",
+                  "parameters": [],
+                  "jsonSchema": {
+                    "type": "object",
+                    "required": [
+                      "refresh_token"
+                    ],
+                    "properties": {
+                      "refresh_token": {
+                        "type": "string",
+                        "description": "Refresh token opaque dari GET /auth/verify atau dari panggilan refresh sebelumnya"
+                      }
+                    },
+                    "x-apidog-orders": [
+                      "refresh_token"
+                    ]
+                  },
+                  "mediaType": "application/json",
+                  "oasExtensions": "",
+                  "required": true,
+                  "additionalContentTypes": [],
+                  "examples": [
+                    {
+                      "value": "{\"refresh_token\":\"8Kq2mN9vL4wX1yB6cF3dH5jG0aZpR7tS\"}",
+                      "mediaType": "application/json",
+                      "description": ""
+                    }
+                  ]
+                },
+                "description": "Menukar refresh token dengan pasangan token baru.\n\nAccess token berlaku 22740 detik (= GRANT_TOKEN_TTL_SECONDS, diturunkan dari perjalanan customer per ADR-005 §7), lebih lama daripada perjalanan maksimum 930 detik — sehingga endpoint ini TIDAK dipanggil di tengah journey. Ia ada untuk sesi berumur hari (refresh token 30 hari), bukan untuk menambal token yang terlalu pendek. Refresh yang gagal di halaman pembayaran akan memutus customer, dan NFR-02 melarangnya.\n\nROTASI: setiap panggilan mengembalikan refresh token baru dan menghanguskan yang dikirim. Klien wajib mengganti salinan simpanannya; bila tidak, panggilan berikutnya terbaca sebagai pemutaran ulang.\n\nPEMUTARAN ULANG mencabut seluruh keluarga token: token sekali-pakai yang muncul dua kali berarti kredensial bocor, dan yang memegang mata rantai terbaru bisa jadi penyerang (OAuth 2.0 BCP §4.13).\n\nToken dikirim di body, bukan header Authorization — pada endpoint ini ia adalah objek permintaan, dan menjauhkannya dari header itu mencegahnya tercatat oleh proxy yang me-log header.\n\nRequirement: FR-31, BR-09, NFR-02, NFR-07",
+                "tags": [
+                  "Authentication"
+                ],
+                "status": "released",
+                "serverId": "",
+                "operationId": "refreshSession",
+                "sourceUrl": "",
+                "ordering": 24,
                 "cases": [],
                 "mocks": [],
                 "customApiFields": "{}",
@@ -909,7 +1142,7 @@
                 "serverId": "",
                 "operationId": "registerAccount",
                 "sourceUrl": "",
-                "ordering": 24,
+                "ordering": 30,
                 "cases": [],
                 "mocks": [],
                 "customApiFields": "{}",
@@ -2051,7 +2284,32 @@
                   ],
                   "query": [],
                   "cookie": [],
-                  "header": []
+                  "header": [
+                    {
+                      "name": "X-Device-Id",
+                      "required": false,
+                      "enable": true,
+                      "description": "Acak 128 bit dari klien, disimpan server sebagai HMAC pada keterlibatan dan dicocokkan pada setiap panggilan ber-grant. WAJIB bila tidak login — grant tanpa pengikatan tidak dapat diikat belakangan, jadi tamu yang tidak mengirimnya ditolak DI SINI dengan 400 DEVICE_ID_REQUIRED, bukan nanti.",
+                      "example": "d3f1a9c4b70e42f88a1c5e6072b9d4af",
+                      "type": "string",
+                      "schema": {
+                        "type": "string"
+                      },
+                      "id": "DevIdJoin01"
+                    },
+                    {
+                      "id": "JoinAcct01",
+                      "name": "Authorization",
+                      "required": false,
+                      "enable": true,
+                      "description": "Bearer {access_token} bila login. Satu-satunya tempat di jalur antrian yang menerimanya: BR-07 lewat acct:{ev}:{account_id}, dan account_id pada keterlibatan — yang menjadi bookings.account_id pada INSERT saat GRANT.",
+                      "example": "",
+                      "type": "string",
+                      "schema": {
+                        "type": "string"
+                      }
+                    }
+                  ]
                 },
                 "auth": {},
                 "securityScheme": {},
@@ -2287,11 +2545,11 @@
                   "header": [
                     {
                       "id": "3Aw9lpW2h8",
-                      "name": "Authorization",
+                      "name": "X-Queue-Token",
                       "required": false,
                       "enable": true,
-                      "description": "Bearer queue_token",
-                      "example": "",
+                      "description": "Token ruang tunggu — untuk mobile. Web pakai cookie queue_token, karena EventSource tidak dapat menyetel header request.",
+                      "example": "qt_xyz789",
                       "type": "string",
                       "schema": {
                         "type": "string"
@@ -2399,7 +2657,32 @@
                   ],
                   "query": [],
                   "cookie": [],
-                  "header": []
+                  "header": [
+                    {
+                      "id": "QueueTokHdr01",
+                      "name": "X-Queue-Token",
+                      "required": false,
+                      "enable": true,
+                      "description": "Token ruang tunggu — untuk mobile. Web memakai cookie queue_token.",
+                      "example": "qt_xyz789",
+                      "type": "string",
+                      "schema": {
+                        "type": "string"
+                      }
+                    },
+                    {
+                      "id": "QueueMeAcct01",
+                      "name": "Authorization",
+                      "required": false,
+                      "enable": true,
+                      "description": "Bearer {access_token} — pemulihan lintas perangkat untuk customer login (cookie hilang, incognito, app di-install ulang). Tamu tidak punya ini.",
+                      "example": "",
+                      "type": "string",
+                      "schema": {
+                        "type": "string"
+                      }
+                    }
+                  ]
                 },
                 "auth": {},
                 "securityScheme": {},
@@ -2488,7 +2771,7 @@
                   },
                   {
                     "name": "Giliran tiba",
-                    "data": "{\"meta\":{\"code\":200,\"message\":\"Success\"},\"data\":{\"state\":\"GRANTED\",\"access_token\":\"at_abc123\",\"booking_expires_at\":\"2026-10-23T13:15:00Z\",\"server_time\":\"2026-10-23T13:10:00Z\"}}",
+                    "data": "{\"meta\":{\"code\":200,\"message\":\"Success\"},\"data\":{\"state\":\"GRANTED\",\"grant_token\":\"gt_abc123\",\"booking_expires_at\":\"2026-10-23T13:15:00Z\",\"server_time\":\"2026-10-23T13:10:00Z\"}}",
                     "responseId": "123813032",
                     "description": "",
                     "oasKey": "granted",
@@ -2743,11 +3026,34 @@
                   ],
                   "query": [],
                   "cookie": [],
-                  "header": []
+                  "header": [
+                    {
+                      "id": "GrantTokHdr00",
+                      "name": "X-Grant-Token",
+                      "required": true,
+                      "enable": true,
+                      "description": "Grant slot dari GET /queue/me. Wajib — ini yang menjaga endpoint ini.",
+                      "example": "gt_abc123",
+                      "type": "string",
+                      "schema": {
+                        "type": "string"
+                      }
+                    },
+                    {
+                      "name": "X-Device-Id",
+                      "required": false,
+                      "enable": true,
+                      "description": "Pengikatan device untuk grant anonim — WAJIB bila pemanggil tidak login. Acak 128 bit dari klien; server menyimpan HMAC-nya. Tidak cocok → 401 DEVICE_MISMATCH.",
+                      "example": "d3f1a9c4b70e42f88a1c5e6072b9d4af",
+                      "type": "string",
+                      "schema": {
+                        "type": "string"
+                      },
+                      "id": "DevIdHdr00"
+                    }
+                  ]
                 },
-                "auth": {
-                  "type": "securityscheme"
-                },
+                "auth": {},
                 "securityScheme": {
                   "schemeGroups": [
                     {
@@ -3006,11 +3312,34 @@
                   "path": [],
                   "query": [],
                   "cookie": [],
-                  "header": []
+                  "header": [
+                    {
+                      "id": "GrantTokHdr01",
+                      "name": "X-Grant-Token",
+                      "required": true,
+                      "enable": true,
+                      "description": "Grant slot dari GET /queue/me. Wajib — ini yang menjaga endpoint ini.",
+                      "example": "gt_abc123",
+                      "type": "string",
+                      "schema": {
+                        "type": "string"
+                      }
+                    },
+                    {
+                      "name": "X-Device-Id",
+                      "required": false,
+                      "enable": true,
+                      "description": "Pengikatan device untuk grant anonim — WAJIB bila pemanggil tidak login. Acak 128 bit dari klien; server menyimpan HMAC-nya. Tidak cocok → 401 DEVICE_MISMATCH.",
+                      "example": "d3f1a9c4b70e42f88a1c5e6072b9d4af",
+                      "type": "string",
+                      "schema": {
+                        "type": "string"
+                      },
+                      "id": "DevIdHdr01"
+                    }
+                  ]
                 },
-                "auth": {
-                  "type": "securityscheme"
-                },
+                "auth": {},
                 "securityScheme": {
                   "schemeGroups": [
                     {
@@ -3439,11 +3768,34 @@
                   ],
                   "query": [],
                   "cookie": [],
-                  "header": []
+                  "header": [
+                    {
+                      "id": "GrantTokHdr02",
+                      "name": "X-Grant-Token",
+                      "required": true,
+                      "enable": true,
+                      "description": "Grant slot dari GET /queue/me. Wajib — ini yang menjaga endpoint ini.",
+                      "example": "gt_abc123",
+                      "type": "string",
+                      "schema": {
+                        "type": "string"
+                      }
+                    },
+                    {
+                      "name": "X-Device-Id",
+                      "required": false,
+                      "enable": true,
+                      "description": "Pengikatan device untuk grant anonim — WAJIB bila pemanggil tidak login. Acak 128 bit dari klien; server menyimpan HMAC-nya. Tidak cocok → 401 DEVICE_MISMATCH.",
+                      "example": "d3f1a9c4b70e42f88a1c5e6072b9d4af",
+                      "type": "string",
+                      "schema": {
+                        "type": "string"
+                      },
+                      "id": "DevIdHdr02"
+                    }
+                  ]
                 },
-                "auth": {
-                  "type": "securityscheme"
-                },
+                "auth": {},
                 "securityScheme": {
                   "schemeGroups": [
                     {
@@ -3723,11 +4075,34 @@
                   ],
                   "query": [],
                   "cookie": [],
-                  "header": []
+                  "header": [
+                    {
+                      "id": "GrantTokHdr03",
+                      "name": "X-Grant-Token",
+                      "required": true,
+                      "enable": true,
+                      "description": "Grant slot dari GET /queue/me. Wajib — ini yang menjaga endpoint ini.",
+                      "example": "gt_abc123",
+                      "type": "string",
+                      "schema": {
+                        "type": "string"
+                      }
+                    },
+                    {
+                      "name": "X-Device-Id",
+                      "required": false,
+                      "enable": true,
+                      "description": "Pengikatan device untuk grant anonim — WAJIB bila pemanggil tidak login. Acak 128 bit dari klien; server menyimpan HMAC-nya. Tidak cocok → 401 DEVICE_MISMATCH.",
+                      "example": "d3f1a9c4b70e42f88a1c5e6072b9d4af",
+                      "type": "string",
+                      "schema": {
+                        "type": "string"
+                      },
+                      "id": "DevIdHdr03"
+                    }
+                  ]
                 },
-                "auth": {
-                  "type": "securityscheme"
-                },
+                "auth": {},
                 "securityScheme": {
                   "schemeGroups": [
                     {
@@ -3923,11 +4298,34 @@
                   "path": [],
                   "query": [],
                   "cookie": [],
-                  "header": []
+                  "header": [
+                    {
+                      "id": "GrantTokHdr04",
+                      "name": "X-Grant-Token",
+                      "required": true,
+                      "enable": true,
+                      "description": "Grant slot dari GET /queue/me. Wajib — ini yang menjaga endpoint ini.",
+                      "example": "gt_abc123",
+                      "type": "string",
+                      "schema": {
+                        "type": "string"
+                      }
+                    },
+                    {
+                      "name": "X-Device-Id",
+                      "required": false,
+                      "enable": true,
+                      "description": "Pengikatan device untuk grant anonim — WAJIB bila pemanggil tidak login. Acak 128 bit dari klien; server menyimpan HMAC-nya. Tidak cocok → 401 DEVICE_MISMATCH.",
+                      "example": "d3f1a9c4b70e42f88a1c5e6072b9d4af",
+                      "type": "string",
+                      "schema": {
+                        "type": "string"
+                      },
+                      "id": "DevIdHdr04"
+                    }
+                  ]
                 },
-                "auth": {
-                  "type": "securityscheme"
-                },
+                "auth": {},
                 "securityScheme": {
                   "schemeGroups": [
                     {
@@ -4270,11 +4668,34 @@
                   ],
                   "query": [],
                   "cookie": [],
-                  "header": []
+                  "header": [
+                    {
+                      "id": "GrantTokHdr05",
+                      "name": "X-Grant-Token",
+                      "required": true,
+                      "enable": true,
+                      "description": "Grant slot dari GET /queue/me. Wajib — ini yang menjaga endpoint ini.",
+                      "example": "gt_abc123",
+                      "type": "string",
+                      "schema": {
+                        "type": "string"
+                      }
+                    },
+                    {
+                      "name": "X-Device-Id",
+                      "required": false,
+                      "enable": true,
+                      "description": "Pengikatan device untuk grant anonim — WAJIB bila pemanggil tidak login. Acak 128 bit dari klien; server menyimpan HMAC-nya. Tidak cocok → 401 DEVICE_MISMATCH.",
+                      "example": "d3f1a9c4b70e42f88a1c5e6072b9d4af",
+                      "type": "string",
+                      "schema": {
+                        "type": "string"
+                      },
+                      "id": "DevIdHdr05"
+                    }
+                  ]
                 },
-                "auth": {
-                  "type": "securityscheme"
-                },
+                "auth": {},
                 "securityScheme": {
                   "schemeGroups": [
                     {
@@ -4480,11 +4901,34 @@
                   ],
                   "query": [],
                   "cookie": [],
-                  "header": []
+                  "header": [
+                    {
+                      "id": "GrantTokHdr06",
+                      "name": "X-Grant-Token",
+                      "required": true,
+                      "enable": true,
+                      "description": "Grant slot dari GET /queue/me. Wajib — ini yang menjaga endpoint ini.",
+                      "example": "gt_abc123",
+                      "type": "string",
+                      "schema": {
+                        "type": "string"
+                      }
+                    },
+                    {
+                      "name": "X-Device-Id",
+                      "required": false,
+                      "enable": true,
+                      "description": "Pengikatan device untuk grant anonim — WAJIB bila pemanggil tidak login. Acak 128 bit dari klien; server menyimpan HMAC-nya. Tidak cocok → 401 DEVICE_MISMATCH.",
+                      "example": "d3f1a9c4b70e42f88a1c5e6072b9d4af",
+                      "type": "string",
+                      "schema": {
+                        "type": "string"
+                      },
+                      "id": "DevIdHdr06"
+                    }
+                  ]
                 },
-                "auth": {
-                  "type": "securityscheme"
-                },
+                "auth": {},
                 "securityScheme": {
                   "schemeGroups": [
                     {
@@ -4737,11 +5181,34 @@
                   ],
                   "query": [],
                   "cookie": [],
-                  "header": []
+                  "header": [
+                    {
+                      "id": "GrantTokHdr07",
+                      "name": "X-Grant-Token",
+                      "required": true,
+                      "enable": true,
+                      "description": "Grant slot dari GET /queue/me. Wajib — ini yang menjaga endpoint ini.",
+                      "example": "gt_abc123",
+                      "type": "string",
+                      "schema": {
+                        "type": "string"
+                      }
+                    },
+                    {
+                      "name": "X-Device-Id",
+                      "required": false,
+                      "enable": true,
+                      "description": "Pengikatan device untuk grant anonim — WAJIB bila pemanggil tidak login. Acak 128 bit dari klien; server menyimpan HMAC-nya. Tidak cocok → 401 DEVICE_MISMATCH.",
+                      "example": "d3f1a9c4b70e42f88a1c5e6072b9d4af",
+                      "type": "string",
+                      "schema": {
+                        "type": "string"
+                      },
+                      "id": "DevIdHdr07"
+                    }
+                  ]
                 },
-                "auth": {
-                  "type": "securityscheme"
-                },
+                "auth": {},
                 "securityScheme": {
                   "schemeGroups": [
                     {
@@ -4915,11 +5382,34 @@
                   ],
                   "query": [],
                   "cookie": [],
-                  "header": []
+                  "header": [
+                    {
+                      "id": "GrantTokHdr08",
+                      "name": "X-Grant-Token",
+                      "required": true,
+                      "enable": true,
+                      "description": "Grant slot dari GET /queue/me. Wajib — ini yang menjaga endpoint ini.",
+                      "example": "gt_abc123",
+                      "type": "string",
+                      "schema": {
+                        "type": "string"
+                      }
+                    },
+                    {
+                      "name": "X-Device-Id",
+                      "required": false,
+                      "enable": true,
+                      "description": "Pengikatan device untuk grant anonim — WAJIB bila pemanggil tidak login. Acak 128 bit dari klien; server menyimpan HMAC-nya. Tidak cocok → 401 DEVICE_MISMATCH.",
+                      "example": "d3f1a9c4b70e42f88a1c5e6072b9d4af",
+                      "type": "string",
+                      "schema": {
+                        "type": "string"
+                      },
+                      "id": "DevIdHdr08"
+                    }
+                  ]
                 },
-                "auth": {
-                  "type": "securityscheme"
-                },
+                "auth": {},
                 "securityScheme": {
                   "schemeGroups": [
                     {
@@ -5524,7 +6014,20 @@
                       }
                     }
                   ],
-                  "query": [],
+                  "query": [
+                    {
+                      "id": "EtktTok01",
+                      "name": "t",
+                      "required": false,
+                      "enable": true,
+                      "description": "Token e-tiket dari tautan email. Alternatif Authorization untuk pemegang NIK dan pembeli tamu, yang umumnya tidak punya akun (FR-26).",
+                      "example": "",
+                      "type": "string",
+                      "schema": {
+                        "type": "string"
+                      }
+                    }
+                  ],
                   "cookie": [],
                   "header": []
                 },
@@ -5999,7 +6502,7 @@
             "type": "http",
             "scheme": "bearer",
             "bearerFormat": "JWT",
-            "description": "Access token JWT."
+            "description": "Access token JWT sesi akun (22740 detik), diterbitkan GET /auth/verify atau POST /auth/refresh. Satu-satunya kredensial yang menempati slot Authorization. TIDAK dikirim ke endpoint booking/payment sama sekali: sejak v2.4 bookings.account_id diambil dari keterlibatan pada INSERT saat GRANT, bukan dari kredensial klien saat checkout."
           },
           "guidanceConfigs": {}
         },
@@ -6013,7 +6516,49 @@
             "type": "apiKey",
             "in": "cookie",
             "name": "queue_token",
-            "description": "Cookie HttpOnly queue_token."
+            "description": "Cookie HttpOnly queue_token — posisi dalam antrian. Dipakai web, termasuk SSE stream karena EventSource tidak dapat menyetel header request. Mobile memakai X-Queue-Token. Max-Age adalah batas atas: keadaan terminal menghapus kredensialnya lebih cepat, dan CONFIRMED menggantinya dengan nisan settled:{uuid} yang tidak memulihkan apa pun."
+          },
+          "guidanceConfigs": {}
+        },
+        {
+          "id": 632525,
+          "name": "GrantToken",
+          "moduleId": 1505827,
+          "authType": "apikey",
+          "oasAuthType": "apiKey",
+          "authConfigs": {
+            "type": "apiKey",
+            "in": "header",
+            "name": "X-Grant-Token",
+            "description": "Grant slot opaque (gt_...), dari GET /events/{event_id}/queue/me setelah event grant. Membuktikan pemegangnya punya slot, bukan siapa dirinya — tamu mendapatkannya juga. Wajib pada seluruh endpoint booking dan payment. Tersimpan di Redis, jadi satu DEL mencabutnya."
+          },
+          "guidanceConfigs": {}
+        },
+        {
+          "id": 632526,
+          "name": "QueueTokenHeader",
+          "moduleId": 1505827,
+          "authType": "apikey",
+          "oasAuthType": "apiKey",
+          "authConfigs": {
+            "type": "apiKey",
+            "in": "header",
+            "name": "X-Queue-Token",
+            "description": "Token ruang tunggu yang sama, untuk klien mobile tanpa cookie store. Bukan Authorization: slot itu milik sesi akun."
+          },
+          "guidanceConfigs": {}
+        },
+        {
+          "id": 632527,
+          "name": "ETicketToken",
+          "moduleId": 1505827,
+          "authType": "apikey",
+          "oasAuthType": "apiKey",
+          "authConfigs": {
+            "type": "apiKey",
+            "in": "query",
+            "name": "t",
+            "description": "HMAC bertanda tangan atas satu ticket_id + kedaluwarsa, dikirim pada tautan di email e-tiket. Tanpa identitas akun, lingkup satu tiket, berlaku sampai tanggal event + 1 hari. Ada karena FR-26 mengirim tiket ke masing-masing pemegang NIK, dan pemegang NIK umumnya tidak punya akun — rute yang hanya menerima sesi akun membuat tombol di email mereka menjawab 401."
           },
           "guidanceConfigs": {}
         }

@@ -10,6 +10,12 @@
 > **SSE**, bukan polling ber-cache CDN, sehingga perhitungan `ZRANK` vs cache TTL 3 detik,
 > field `interval`, dan "Expiry Sweeper Lambda" di dokumen ini tidak lagi menggambarkan
 > sistem yang dibangun — sweep dan admission berjalan dalam satu loop ECS 500 ms.
+>
+> Sequence diagram di bawah juga menampilkan `access_token: "tok_xyz"` yang diminta klien
+> lewat `POST /queue/claim-token`. Keduanya sudah tidak ada: endpoint itu dihapus di kontrak
+> v2.0 (grant kini didorong lewat SSE setelah slot aman, NFR-02), dan kredensialnya bernama
+> **grant token** di header `X-Grant-Token` sejak kontrak v2.3 — `Authorization: Bearer`
+> hanya untuk token sesi akun. Lihat ADR-005, "Empat kredensial, empat slot".
 > Untuk mekanisme yang mengikat, pakai **ADR-005 Bagian 4 dan Bagian 6**.
 
 ---

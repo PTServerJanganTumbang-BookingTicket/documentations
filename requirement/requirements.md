@@ -169,7 +169,7 @@ menangani lonjakan trafik ekstrem (flash crowd) saat penjualan tiket dibuka.
 | Time authority       | Server-side; `serverTime` di setiap payload SSE dan `server_time` di setiap respons REST — frontend menghitung offset jam sekali, tidak ada endpoint waktu tersendiri |
 | Queue capacity       | **300.000 per event**; `QUEUE_FULL` fail-fast. Halaman utama menampilkan `status` + `queue_state` + `display` — lihat FR-03a..e |
 | Payment grace        | **30 detik** `PENDING_CANCELLATION` setelah TTL Pembayaran; stok tetap di-hold, callback sukses masih diterima |
-| Queue session        | **Tidak ada TTL antrian absolut dan tidak ada grace antrian**; slot yang di-grant tapi tidak diklaim direbut kembali oleh TTL Booking itu sendiri (maks 2× re-admit) |
+| Queue session        | **Tidak ada TTL antrian absolut dan tidak ada grace antrian**; slot yang di-grant tapi tidak diklaim direbut kembali oleh TTL Booking itu sendiri. **Tidak ada re-admit**: `LAPSED` final, slot hilang (ADR-005 Bagian 7) |
 | Anchor TTL           | Booking dari `granted_at`, pembayaran dari `held_at` — berurutan, maksimum **15,5 menit** |
 | NIK verification     | **Fail-closed**; bukti verifikasi tersimpan (akun + Daftar NIK Teman + cache 24 jam) dipakai ulang untuk menekan biaya Dukcapil |
 | Degradasi dependensi | Circuit breaker Dukcapil **atau** payment gateway OPEN (= dependensi sedang tidak dapat dipakai) → **pause admission**: tidak ada grant baru, antrian berhenti maju, tidak ada posisi yang hilang. Berlaku sama untuk kedua dependensi, tanpa pengecualian |
@@ -235,7 +235,7 @@ antrian penuh sebelum mengklik.
     │
     ├── Saat menerima event "grant" (server push saat giliran tiba):
     │   └── Frontend hit: GET /queue/{event}/me
-    │       ├── Sukses → access_token → redirect ke Detail Tiket
+    │       ├── Sukses → grant_token → redirect ke Detail Tiket
     │       └── Tiket habis → tampilkan "Tiket Habis"
     │
     ├── Fallback (SSE tidak tersedia): GET /queue/{event}/serving → { now_serving }
@@ -244,7 +244,7 @@ antrian penuh sebelum mengklik.
     ↓
 [Detail Ticket Page]
     │
-    ├── Akses dijaga: access_token harus valid
+    ├── Akses dijaga: grant_token harus valid (header X-Grant-Token)
     ├── Pilih kategori & jumlah tiket (max 3)
     ├── Pilih NIK per tiket:
     │   ├── NIK Terdaftar (akun)      → tanpa panggilan Dukcapil
