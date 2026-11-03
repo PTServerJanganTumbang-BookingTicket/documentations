@@ -1,11 +1,23 @@
 # Rusuh Booking Tiket — API Contracts
 
-**Versi**: 2.4  
+**Versi**: 2.5.1  
 **Tanggal**: 3 November 2026  
 **Status**: Draft  
 **Base URL**: `https://api.rusuh.id/v1`  
 **Selaras dengan**: ADR-005 (Keputusan Arsitektur Final — SSE + ECS Fargate)
 
+> **v2.5** memperbaiki kontrak terhadap API Midtrans yang sebenarnya, dan menurunkan
+> `server_time` ke envelope. Webhook §5.5 sebelumnya mendeklarasikan header
+> `X-Callback-Signature` yang **tidak pernah dikirim Midtrans** dan memetakan idempotency ke
+> field `event_id` yang **tidak ada** di notifikasinya; keduanya diganti dengan field yang
+> benar-benar dikirim. `server_time` kini bagian dari `meta` pada **setiap** respons (BR-10,
+> §7), bukan diulang per endpoint. Empat contoh yang bertentangan dengan keputusan POC
+> dihapus: `holder_name` dan error "nama tidak cocok" (§4.3) melawan FR-15a yang menyatakan
+> nama tidak pernah dikumpulkan, dan contoh penolakan kartu (§5.4) melawan §5.1 yang
+> mengeluarkan kartu dari lingkup. `GET /auth/verify-email` (§1.7) didokumentasikan — ia
+> sudah berjalan di `user-service` tetapi tidak pernah masuk kontrak. Rinciannya di
+> Appendix C.
+>
 > **v2.4** menutup lima hal yang v2.3 tinggalkan terbuka. `expires_in` **1080 → 22740**
 > detik: sesi akun dimulai saat login, *sebelum* antrian, jadi 1080 — yang diturunkan dari
 > perjalanan — mati di ruang tunggu untuk hampir seluruh antrian; ia sekarang diturunkan dari
@@ -469,6 +481,62 @@ memanggil Dukcapil lagi**. Maksimal 5 per akun. Tidak tersedia untuk guest.
 
 ---
 
+### 1.7 Verify Email Address
+
+Mengonfirmasi kepemilikan alamat email setelah registrasi (FR-31). **Berbeda dari §1.3**:
+§1.3 adalah login tanpa kata sandi dan menerbitkan sesi; endpoint ini hanya mengisi
+`accounts.email_verified_at` dan tidak menerbitkan token apa pun.
+
+**Endpoint**: `GET /auth/verify-email`
+
+**Query Parameters**:
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| `token` | string | Yes | Token dari tautan email `account.verify`; berlaku **15 menit**, sekali pakai. Sama dengan TTL tautan login — `magic_tokens` memakai satu konstanta untuk kedua `purpose` |
+
+**Response** (200):
+```json
+{
+  "meta": {
+    "code": 200,
+    "message": "Email verified",
+    "server_time": "2026-11-03T09:12:00Z"
+  },
+  "data": { "email_verified": true }
+}
+```
+
+**Response** (400 - `TOKEN_INVALID`): token tidak dikenal, sudah dipakai, atau kedaluwarsa.
+
+> **Akun yang belum terverifikasi tetap dapat membeli.** Verifikasi email hanya membuka
+> riwayat pesanan (FR-31, ADR-005 Bagian 12); ia tidak pernah menghalangi pembelian. Yang
+> memblokir pembelian adalah `nik_verified_at IS NULL`, dan itu urusan §1.5.
+
+> **Tautan ini kedaluwarsa dalam 15 menit, dan itu bukan jalan buntu — jangan bangun
+> endpoint resend untuknya.** §1.3 **juga** mengisi `email_verified_at`: menebus tautan login
+> membuktikan kendali atas alamat itu, yaitu hal yang sama persis yang dibuktikan tautan
+> verifikasi. Jadi customer yang tautannya kedaluwarsa cukup meminta magic link (§1.1) dan
+> login — akunnya terverifikasi sebagai efek sampingnya. Penulisannya idempoten
+> (`COALESCE(email_verified_at, now())`), sehingga timestamp pertama yang menang.
+>
+> Konsekuensinya endpoint ini adalah **kenyamanan, bukan satu-satunya jalan**: ia melayani
+> customer yang ingin mengonfirmasi tanpa login. `POST /auth/magic-link/resend` menerbitkan
+> `purpose = LOGIN`, dan itu memang benar — ia menyelesaikan kedua kebutuhan sekaligus.
+>
+> Dinyatakan di sini karena TTL 15 menit tanpa catatan ini mengundang kesimpulan yang salah:
+> bahwa tautan yang terlewat mengunci akun dalam keadaan belum terverifikasi selamanya, lalu
+> seseorang membangun jalur resend kedua yang menulis kolom yang sama dengan prasyarat yang
+> sedikit berbeda.
+
+> **Mengapa diberi nomor §1.7 dan bukan §1.4.** Endpoint ini sudah berjalan di
+> `user-service` sejak branch `user-notif-nikverify-outboxpublisher` tetapi tidak pernah
+> masuk kontrak. Menempatkannya di urutan logis berarti menggeser §1.4–§1.6, dan ketiganya
+> dirujuk lintas dokumen. Nomor di akhir adalah pilihan yang tidak memecahkan rujukan apa pun.
+
+**Requirement Coverage**: FR-31
+
+---
+
 ## 2. Events
 
 ### 2.1 List Events
@@ -835,7 +903,26 @@ Authorization: Bearer {access_token}   # bila login — mengaktifkan BR-07 dan a
 Klien mengambil token baru dan mencoba lagi — **tanpa** mendapat `ticket_no`, sehingga
 percobaan yang gagal tidak memakan posisi antrian.
 
-**Response** (429): melewati `rl:join:{ip}` (20 / 5 menit).
+**Response** (429): melewati `rl:join:{ip}` (20 / 5 menit), atau — bila pemanggil login —
+melewati batas 3 join per akun per menit.
+
+**Response** (409 - sale belum dibuka): `queue:{ev}:state` masih `SCHEDULED`.
+```json
+{
+  "meta": { "code": 409, "message": "Penjualan belum dibuka" },
+  "data": { "queue_state": "NOT_OPEN", "sale_starts_at": "2026-11-10T02:00:00Z" }
+}
+```
+
+> **Ini keadaan AWAL, bukan tepi.** 300.000 orang berkumpul **sebelum** gerbang dibuka, bukan
+> sesudah. Tanpa penolakan di sini mereka semua mendapat `ticket_no` untuk sale yang belum
+> ada. Halaman utama sudah menampilkan `queue_state: NOT_OPEN` + `sale_starts_at` (§2.1);
+> penolakan di sini adalah penegaknya.
+
+**Response** (400 - `DEVICE_ID_REQUIRED`): pemanggil anonim tidak mengirim `X-Device-Id`.
+
+> Ditolak **di sini**, bukan nanti: grant tanpa pengikatan tidak dapat diikat belakangan
+> (Appendix C).
 
 > **Provider CAPTCHA tidak tersedia → join tetap diterima (fail-open).** Aturannya:
 > *fail-closed bila yang dipertaruhkan kebenaran, fail-open bila hanya keadilan.* Dukcapil
@@ -978,8 +1065,19 @@ data: {"message":"Tiket sudah habis"}
 > detik berukuran ~6× lebih besar dan tetap berisiko kena idle timeout ALB (default 60s,
 > dikonfigurasi 3600s).
 
-**Response** (410 - stream ditolak): event sudah sold out. `EventSource` berhenti permanen
-pada status non-200 — ini disengaja.
+**Response** (429 - terlalu banyak koneksi): melewati `rl:sse:{ip}` (5 koneksi / detik).
+
+> Rate limit ini duduk di **sse-server**, bukan di API Gateway — endpoint ini satu-satunya
+> yang dilayani ALB. Ia pengganti WAF di gerbang itu (ADR-005 Bagian 4).
+
+**Response** (409 - sale belum dibuka): `queue:{ev}:state` masih `SCHEDULED`.
+
+**Response** (410 - stream ditolak): `queue:{ev}:state` sudah `CLOSED`. `EventSource` berhenti
+permanen pada status non-200 — ini disengaja.
+
+> **`SOLD_OUT` TIDAK menjawab 410.** Stream tetap dibuka seperti biasa: stok dapat kembali
+> dari booking yang kedaluwarsa, dan klien sengaja dipertahankan. Hanya `CLOSED` — yang
+> disetel `SOLD_OUT_HOLD_SECONDS` (930 detik) setelah `sold_out_at` — yang memutus.
 
 **Requirement Coverage**: FR-07, FR-08, FR-09, FR-10, BR-10, NFR-06
 
@@ -1201,6 +1299,19 @@ X-Device-Id: {device_id}               # wajib bila customer TIDAK login
   }
 }
 ```
+
+> **Endpoint ini MENGUBAH STATE, meskipun ia `GET`.** Pemuatannya adalah *claim*:
+> `bookings.status` berpindah `GRANTED → SELECTING` dan `slot_claimed_at` dicatat. Tenggat
+> **tidak** diubah — `booking_expires_at` sudah ditetapkan saat GRANT, dan tidak ada grace
+> antrian (ADR-005 Bagian 7).
+>
+> Transisi ini idempoten: memuat ulang halaman saat status sudah `SELECTING` tidak
+> melakukan apa pun, dan status `HELD` atau `AWAITING_PAYMENT` tetap merender halaman —
+> customer yang menekan Back dari halaman pembayaran harus melihat pilihannya, bukan error.
+>
+> Konsekuensi operasional: **respons ini tidak boleh di-cache**, dan tidak boleh di-prefetch
+> oleh klien. `Cache-Control: no-store`. ADR-005 Bagian 6 menugaskan transisi ini ke
+> `booking-service` tanpa menyebut endpoint mana yang menjalankannya; ini endpointnya.
 
 **Requirement Coverage**: FR-11, FR-12, FR-13, FR-17, BR-01, BR-02
 
@@ -1433,14 +1544,12 @@ X-Device-Id: {device_id}               # wajib bila customer TIDAK login
       {
         "category": "VIP",
         "price": 1500000,
-        "nik_masked": "3171********xx22",
-        "holder_name": "JOHN DOE"
+        "nik_masked": "3171********xx22"
       },
       {
         "category": "VIP",
         "price": 1500000,
-        "nik_masked": "3171********xx33",
-        "holder_name": "JANE DOE"
+        "nik_masked": "3171********xx33"
       }
     ],
     "summary": {
@@ -1480,16 +1589,10 @@ X-Device-Id: {device_id}               # wajib bila customer TIDAK login
 }
 ```
 
-**Response** (400 - NIK Name Mismatch):
-```json
-{
-  "meta": {
-    "code": 400,
-    "message": "NIK 3171********xx22: nama tidak cocok"
-  },
-  "data": {}
-}
-```
+> **Tidak ada error "nama tidak cocok", dan tidak ada field nama pada respons.** Dukcapil
+> memvalidasi **NIK saja**; form tidak mengumpulkan nama dan §4.2 tidak pernah
+> mengembalikannya (FR-15a). v2.4 masih memuat keduanya sebagai sisa versi lama — dihapus di
+> v2.5.
 
 **Response** (409 - NIK Already Used):
 ```json
@@ -1938,7 +2041,7 @@ X-Device-Id: {device_id}               # wajib bila customer TIDAK login
   "meta": { "code": 200, "message": "Payment failed" },
   "data": {
     "status": "FAILED",
-    "reason": "Kartu ditolak penerbit",
+    "reason": "Pembayaran ditolak penyedia",
     "can_retry": true,
     "attempt": 2,
     "payment_expires_at": "2026-10-25T10:25:00Z",
@@ -1946,6 +2049,11 @@ X-Device-Id: {device_id}               # wajib bila customer TIDAK login
   }
 }
 ```
+
+> `reason` diteruskan apa adanya dari `status_message` gateway dan **tidak** diterjemahkan —
+> ia untuk dukungan, bukan untuk dirender sebagai pesan utama. Frontend menampilkan teks
+> lokalnya sendiri dan menaruh `reason` di detail. Dengan kartu di luar lingkup (§5.1),
+> penolakan yang mungkin terjadi hanya berasal dari `bank_transfer` dan `gopay`.
 
 > **Inilah satu-satunya sinyal bahwa pembayaran gagal.** Tanpa status ini customer menatap
 > countdown yang terus berjalan tanpa tahu kartunya ditolak. Frontend yang menerimanya
@@ -1975,26 +2083,49 @@ Callback dari payment gateway. Endpoint internal — tidak dipanggil klien.
 
 **Endpoint**: `POST /payments/webhook`
 
-**Headers**:
-```
-X-Callback-Signature: sha256=...
-```
+**Headers**: tidak ada header kustom.
 
-> Dilindungi **resource policy API Gateway** (allowlist IP gateway) ditambah verifikasi HMAC.
-> Tidak ada CAPTCHA dan tidak ada rate limit per-IP pada endpoint ini.
+> **v2.4 mendeklarasikan `X-Callback-Signature: sha256=...` dan itu salah dua kali.** Midtrans
+> **tidak mengirim header tanda tangan apa pun** pada HTTP notification Core API — tanda
+> tangannya adalah field `signature_key` **di dalam body**. Dan skemanya SHA512, bukan SHA256;
+> contoh header v2.4 bertentangan dengan formula yang ditulis lima baris di bawahnya.
+> Implementasi yang mengikuti v2.4 secara literal akan menuntut header yang tidak pernah
+> datang, lalu **menolak setiap notifikasi yang sah**.
 
-**Request** (dari gateway):
+> Dilindungi **resource policy API Gateway** (allowlist IP gateway) ditambah verifikasi
+> `signature_key`. Tidak ada CAPTCHA dan tidak ada rate limit per-IP pada endpoint ini.
+
+**Request** (dari gateway) — bentuk Core API yang sebenarnya:
 ```json
 {
-  "event_id": "evt_9f2a1c7b",
-  "transaction_id": "pay_123",
-  "external_id": "RB-00912",
-  "status": "PAID",
-  "paid_amount": 1500000,
-  "paid_at": "2026-10-24T13:23:00Z",
-  "payment_method": "va"
+  "transaction_time": "2026-10-24 20:23:00",
+  "transaction_status": "settlement",
+  "transaction_id": "9f2a1c7b-4e1a-4c7d-9f3b-2a1c7b9f2a1c",
+  "status_message": "midtrans payment notification",
+  "status_code": "200",
+  "signature_key": "fe5f725ea770c451…",
+  "settlement_time": "2026-10-24 20:23:05",
+  "payment_type": "bank_transfer",
+  "order_id": "RB-00912:1",
+  "merchant_id": "G123456789",
+  "gross_amount": "3000000.00",
+  "fraud_status": "accept",
+  "currency": "IDR",
+  "va_numbers": [{ "bank": "bca", "va_number": "8801234567890" }]
 }
 ```
+
+> **v2.4 memuat bentuk generik** (`external_id`, `status: "PAID"`, `paid_amount`) yang
+> bertentangan dengan tabel transisi di bawahnya sendiri — tabel itu memakai
+> `transaction_status` dan `fraud_status`. Tidak satu pun field dalam contoh v2.4 dikirim
+> Midtrans. Diganti dengan bentuk yang sebenarnya.
+>
+> `gross_amount` datang sebagai **string berdesimal** (`"3000000.00"`), bukan integer. Ia
+> masuk formula tanda tangan **apa adanya**: menormalkannya lebih dulu menghasilkan hash yang
+> tidak pernah cocok.
+>
+> `transaction_time` dan `settlement_time` berformat `YYYY-MM-DD HH:mm:ss` **waktu WIB tanpa
+> penanda zona** — bukan ISO-8601. Parse sebagai `Asia/Jakarta`.
 
 **Verifikasi tanda tangan**:
 
@@ -2008,12 +2139,43 @@ ubah status apa pun.
 > Dokumentasi Midtrans memuat dua skema tanda tangan. SHA256withRSA pada halaman *Security
 > Specification* berlaku untuk lini API lain, **bukan** webhook Core API.
 
-**Idempotency**: `event_id` disimpan di `payment_events.gateway_event_id` dengan constraint
-`UNIQUE`. Pengiriman ulang memicu unique violation, seluruh transaksi batal, dan endpoint
-tetap menjawab `200`.
+> **`gross_amount` dipakai sebagai string yang diterima**, termasuk desimalnya. Formulanya
+> konkatenasi mentah; `3000000` dan `"3000000.00"` menghasilkan dua hash berbeda dan hanya
+> yang kedua cocok.
 
-> **Kuncinya adalah ID event milik gateway, bukan `booking_id`.** Memakai `booking_id` akan
-> menelan setiap event sah berikutnya untuk booking yang sama (pending → settled → refund).
+> **Pemeriksaan kedua yang direkomendasikan Midtrans**: panggil Get Transaction Status dan
+> bandingkan hasilnya dengan notifikasi. Di sistem ini pemeriksaan itu **sudah ada** sebagai
+> charge reconciler (`rusuh-admission-ctl`, tiap 5 menit, read-only) — jadi notifikasi tidak
+> perlu memanggilnya inline dan menambah latensi ke jalur webhook.
+
+**Idempotency**: kunci **diturunkan**, karena Midtrans tidak mengirim ID event.
+
+```
+gateway_event_id = order_id + ':' + transaction_status + ':' + status_code
+```
+
+Disimpan di `payment_events.gateway_event_id` dengan constraint `UNIQUE`. Pengiriman ulang
+memicu unique violation, seluruh transaksi batal, dan endpoint tetap menjawab `200`.
+
+> **v2.4 memetakan idempotency ke field `event_id`, dan field itu tidak ada.** Notifikasi
+> Core API tidak memuat ID event dalam bentuk apa pun, sehingga pemetaan itu tidak dapat
+> diimplementasikan: `gateway_event_id` akan selalu NULL dan constraint `UNIQUE` tidak
+> menjaga apa pun.
+>
+> **Mengapa bukan `transaction_id` saja.** Ia stabil **sepanjang hidup satu transaksi**:
+> notifikasi `pending` dan `settlement` untuk pembayaran yang sama membawa `transaction_id`
+> yang identik. Memakainya sendirian karena itu mengulangi persis kesalahan yang dihindari
+> dengan tidak memakai `booking_id` — ia **menelan setiap event sah berikutnya** untuk
+> transaksi yang sama.
+>
+> **Mengapa bukan `transaction_id` + status.** Ia bekerja, tetapi ketiga komponen di atas
+> adalah **field yang sama yang masuk formula tanda tangan** (`order_id`, `status_code`) plus
+> `transaction_status` yang sudah dipakai tabel transisi. Tidak ada field tambahan yang perlu
+> dipercaya, dan `order_id` sudah memuat `booking_id` dan nomor percobaan — sehingga kunci ini
+> dapat dibaca manusia saat rekonsiliasi (§6.3).
+>
+> **Yang tetap**: satu baris per *event*, bukan per *booking*. `pending → settlement → refund`
+> menghasilkan tiga baris, dan ketiganya diproses.
 
 **Perlakuan per tipe event**:
 
@@ -2234,11 +2396,29 @@ grant token antrian.
 {
   "meta": {
     "code": 200,
-    "message": "Success"
+    "message": "Success",
+    "server_time": "2026-11-03T09:12:00.412Z"
   },
   "data": { ... }
 }
 ```
+
+> **`server_time` ada pada SETIAP respons, sukses maupun error** (BR-10). Ia bukan field
+> per-endpoint: ia bagian dari envelope, diisi satu kali di layer respons bersama dan tidak
+> pernah ditulis oleh handler.
+>
+> **Tidak ada `GET /time`.** Klien menghitung `offset = server_time − jam lokal` sekali dari
+> panggilan yang memang harus ia lakukan, lalu merender **semua** hitung mundur terhadap
+> offset itu. Jam perangkat tidak pernah dipercaya langsung. Klien yang belum membuka stream
+> karena itu sudah punya offsetnya; yang sudah membuka stream mendapat `serverTime` pada
+> setiap payload SSE (§3.2).
+>
+> **Contoh per endpoint di dokumen ini menghilangkan `server_time` demi keringkasan.** Ia
+> tetap selalu ada. Yang **tidak** dihilangkan adalah `server_time` di dalam `data` — pada
+> §3.3, §4.1, §4.3, §4.4, §5.2, §5.3 dan §5.4 ia menyertai sebuah **tenggat tertentu**
+> (`expires_at`, `payment_expires_at`), dan itu hal yang berbeda: envelope memberi jam
+> server, field di dalam `data` memberi pasangan jam-dan-tenggat yang hitung mundurnya
+> diturunkan darinya.
 
 ### Success Response with Pagination
 
@@ -2247,6 +2427,7 @@ grant token antrian.
   "meta": {
     "code": 200,
     "message": "Success",
+    "server_time": "2026-11-03T09:12:00.412Z",
     "pagination": {
       "totalData": 10,
       "totalPage": 1,
@@ -2264,7 +2445,8 @@ grant token antrian.
 {
   "meta": {
     "code": 400,
-    "message": "NIK must be exactly 16 digits"
+    "message": "NIK must be exactly 16 digits",
+    "server_time": "2026-11-03T09:12:00.412Z"
   },
   "data": {}
 }
@@ -2581,6 +2763,35 @@ Penyelarasan dengan ADR-005. Yang memutus kompatibilitas ditandai **BREAKING**.
 
 ---
 
+### v2.4 → v2.5
+
+| # | Perubahan | Alasan |
+|---|---|---|
+| 49 | **BREAKING** §5.5: header `X-Callback-Signature` **dihapus**; tanda tangan dibaca dari field `signature_key` **di body** | Midtrans tidak mengirim header tanda tangan apa pun pada HTTP notification Core API. Contoh v2.4 juga menulis `sha256=` sementara formula lima baris di bawahnya SHA512. Implementasi yang mengikuti v2.4 secara literal menuntut header yang tidak pernah datang dan **menolak setiap notifikasi yang sah** — endpoint pembayaran yang tidak pernah mengonfirmasi satu pun booking |
+| 50 | **BREAKING** §5.5: contoh request diganti ke bentuk Core API yang sebenarnya | v2.4 memuat `event_id`, `external_id`, `status: "PAID"`, `paid_amount` — tidak satu pun dikirim Midtrans, dan semuanya bertentangan dengan tabel transisi di §5.5 itu sendiri, yang memakai `transaction_status` dan `fraud_status`. Ditambahkan dua hal yang mudah salah: `gross_amount` adalah **string berdesimal** yang masuk formula tanda tangan apa adanya, dan `transaction_time` adalah WIB tanpa penanda zona |
+| 51 | **BREAKING** §5.5: `gateway_event_id` **diturunkan** dari `order_id + ':' + transaction_status + ':' + status_code` | v2.4 memetakannya ke `event_id`, yang tidak ada. Kolomnya akan selalu NULL dan `UNIQUE` tidak menjaga apa pun. `transaction_id` sendirian juga tidak cukup: ia stabil sepanjang hidup satu transaksi, jadi `pending` dan `settlement` membawa nilai identik dan yang kedua akan ditelan — persis kesalahan yang dihindari dengan tidak memakai `booking_id`. Ketiga komponen yang dipilih sudah dipercaya di tempat lain: dua di antaranya masuk formula tanda tangan |
+| 52 | §7: `server_time` menjadi bagian **envelope** `meta`, pada setiap respons | BR-10 menuntut server sebagai sumber waktu, dan ADR-005 Bagian 6 menyatakan setiap respons REST membawanya supaya tidak ada `GET /time`. v2.4 hanya memuatnya di dalam `data` pada tujuh endpoint, sehingga klien yang memanggil endpoint lain tidak punya cara menghitung offset jamnya. Diisi di layer respons bersama, bukan oleh handler |
+| 53 | §4.3: `holder_name` dan error "nama tidak cocok" **dihapus** | Keduanya melawan §4.2 dan FR-15a di dokumen yang sama: Dukcapil memvalidasi NIK saja, form tidak mengumpulkan nama, dan §4.2 tidak pernah mengembalikannya. Sisa versi sebelum FR-15a dipersempit |
+| 54 | §5.4: contoh `reason` tidak lagi menyebut kartu | §5.1 mengeluarkan kartu dari lingkup POC karena `custom_expiry` tidak berlaku padanya. Contoh "Kartu ditolak penerbit" menjelaskan kegagalan dari metode yang tidak dibuka. Ditambahkan juga bahwa `reason` adalah passthrough `status_message` untuk dukungan, bukan teks yang dirender |
+| 55 | §1.7 `GET /auth/verify-email` didokumentasikan | Endpoint ini sudah berjalan di `user-service` tetapi tidak pernah masuk kontrak — tidak di markdown, tidak di OpenAPI, tidak di koleksi Apidog. Diberi nomor di akhir §1 agar §1.4–§1.6 tidak bergeser, karena ketiganya dirujuk lintas dokumen |
+| 56 | §3.1: tambah `409` (state `SCHEDULED`) dan `400 DEVICE_ID_REQUIRED` | Keduanya ada di Appendix A dan di ADR-005 tetapi tidak terdaftar sebagai respons endpoint. `409` bukan kasus tepi: ia keadaan **awal** sale, dan layar pra-buka adalah layar terpadat yang dilihat 300.000 orang |
+| 57 | §3.2: tambah `429` (`rl:sse:{ip}`) dan `409`; `410` dinyatakan hanya untuk `CLOSED` | ADR-005 Bagian 4 menaruh `rl:sse:{ip}` di gerbang ALB sebagai pengganti WAF, tetapi kontrak tidak pernah mendaftarkannya sehingga tidak ada yang menegakkannya. Dan v2.4 menulis 410 sebagai "event sudah sold out", yang membalik keputusan `SOLD_OUT` reversibel: 410 hanya untuk `CLOSED` |
+| 58 | §4.1 dinyatakan **mengubah state**: `GRANTED → SELECTING` + `Cache-Control: no-store` | ADR-005 Bagian 6 menugaskan transisi claim ke `booking-service` tanpa menyebut endpoint mana yang menjalankannya, sehingga `SELECTING` tidak dapat dicapai dan §4.3 — yang menuntut status `SELECTING` — tidak pernah dapat berhasil. Sebuah `GET` yang punya efek samping harus dikatakan, atau seseorang akan men-cache-nya |
+
+> **Yang tidak berubah.** Tidak ada perubahan pada kredensial, TTL, alur antrian, alur
+> booking, atau aturan pembayaran. Butir 49–51 memperbaiki kontrak terhadap API pihak ketiga;
+> butir 52–58 menutup hal-hal yang ADR-005 sudah putuskan tetapi kontrak tidak pernah
+> menuliskan.
+
+> **Dampak ke artefak turunan.** `rusuh-booking-openapi.yaml` dan `rusuh-booking-apidog.json`
+> keduanya diekspor dari keadaan yang mendahului beberapa keputusan v2.4 dan **tidak** dapat
+> dianggap sinkron: CAPTCHA (`captcha_token` pada §3.1, `captcha.site_key` pada §2.2) tidak
+> ada di satu pun dari keduanya, dan koleksi Apidog juga kehilangan `rejoined`,
+> `already_used`, `PENDING_CANCELLATION` dan field `source` pada §4.2. Markdown ini adalah
+> sumber kebenaran; keduanya diregenerasi darinya, bukan diedit sendiri-sendiri.
+
+---
+
 ### v2.3 → v2.4
 
 | # | Perubahan | Alasan |
@@ -2594,6 +2805,17 @@ Penyelarasan dengan ADR-005. Yang memutus kompatibilitas ditandai **BREAKING**.
 
 | 47 | **`LAPSED` bersifat final — kesempatan kedua (`readmit`) dihapus seluruhnya** | Tiga alasan. **Keadilan FCFS**: pengurasan `readmit` mendahului antrian dan *mengurangi* `deficit` yang tersisa untuknya, sehingga customer yang sudah mendapat giliran dan membakar 300 detiknya dilayani **mendahului** orang di posisi 150.000 yang belum pernah mendapat giliran. FCFS memberi satu giliran, bukan giliran tanpa batas. **Biaya slot**: satu no-show menahan slot hingga 600 detik tanpa pernah memilih tiket, pada 300.000 orang untuk 10.000 tiket. **Tidak dapat dibedakan**: push yang tertahan OS dan customer yang pergi menghasilkan `LAPSED` identik, jadi membayari yang pertama ikut memberi hadiah pada yang kedua. Menjaga perangkat menyala selama perang tiket ada di sisi customer |
 | 48 | `LAPSED` kini melepas **semua** kredensialnya: `grant:{token}`, `acct:{ev}:{account_id}`, `token:{uuid}` | Konsekuensi langsung butir 47, dan satu perbaikan yang terpisah: `grant:{token}` punya `EX 1080` sementara TTL booking 300 detik, sehingga sebelumnya grant yang sudah mati tetap lolos verifikasi ~780 detik lagi. Bukan lubang akses — klausa kepemilikan menemukan booking `LAPSED` dan validasi status menolaknya — tetapi penolakannya datang dari validasi status, bukan dari kredensialnya, dan satu-satunya kredensial yang dapat dicabut seketika justru tidak dicabut. Butir 47 juga membalikkan pemecahan tabel BR-07 yang sempat diperlukan: tanpa kesempatan kedua, tidak ada keadaan "LAPSED tapi masih menunggu" |
+
+### v2.5 → v2.5.1 (koreksi, bukan perubahan perilaku)
+
+| # | Perubahan | Alasan |
+|---|---|---|
+| 59 | §1.7: TTL token verifikasi **24 jam → 15 menit** | v2.5 mendokumentasikan 24 jam; implementasinya tidak pernah demikian. `Register` memakai `entity.MagicTokenTTL`, satu konstanta yang dipakai kedua `purpose`, dan nilainya 15 menit. Kontraknya yang salah, bukan kodenya — jadi ini koreksi dokumen, dan tidak ada kode yang berubah |
+| 60 | §1.7: ditambahkan catatan bahwa §1.3 **juga** mengisi `email_verified_at` | Tanpa itu, TTL 15 menit terbaca sebagai jalan buntu permanen, dan tindak lanjut yang wajar adalah membangun `POST /auth/verify-email/resend`. Itu akan menduplikasi apa yang sudah dilakukan login: menebus tautan login membuktikan kendali atas alamat, dan kode sudah menandai verifikasi di jalur itu. Dua penulis untuk satu kolom dengan prasyarat berbeda adalah yang kelak menyimpang |
+
+> **Mengapa 2.5.1 dan bukan 2.6.** Tidak ada perilaku yang berubah dan tidak ada kode yang
+> disentuh; dua pernyataan tentang perilaku yang sudah berjalan diperbaiki. Menaikkan minor
+> akan menyiratkan ada sesuatu yang perlu diintegrasikan ulang.
 
 > **Yang tidak berubah.** `GRANT_TOKEN_TTL_SECONDS` tetap 1080 — perubahan 41 memisahkan dua
 > TTL yang kebetulan sama, bukan menaikkan keduanya. Rotasi dan umur refresh token tidak

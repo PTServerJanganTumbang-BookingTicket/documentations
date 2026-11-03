@@ -167,11 +167,18 @@
                             "message": {
                               "type": "string",
                               "example": "Login link sent to your email"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons; klien menyinkronkan jamnya dari sini (BR-10)"
                             }
                           },
                           "x-apidog-orders": [
                             "code",
-                            "message"
+                            "message",
+                            "server_time"
                           ]
                         }
                       },
@@ -203,11 +210,18 @@
                             "message": {
                               "type": "string",
                               "example": "Please wait before requesting another link"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons; klien menyinkronkan jamnya dari sini (BR-10)"
                             }
                           },
                           "x-apidog-orders": [
                             "code",
-                            "message"
+                            "message",
+                            "server_time"
                           ]
                         },
                         "data": {
@@ -238,7 +252,7 @@
                 "responseExamples": [
                   {
                     "name": "Success",
-                    "data": "{\"meta\":{\"code\":200,\"message\":\"Login link sent to your email\"}}",
+                    "data": "{\"meta\":{\"code\":200,\"message\":\"Login link sent to your email\",\"server_time\":\"2026-11-03T09:12:00.412Z\"}}",
                     "responseId": "130746055",
                     "description": "",
                     "oasKey": "",
@@ -246,7 +260,7 @@
                   },
                   {
                     "name": "Success",
-                    "data": "{\"meta\":{\"code\":429,\"message\":\"Please wait before requesting another link\"},\"data\":{\"retry_after\":60}}",
+                    "data": "{\"meta\":{\"code\":429,\"message\":\"Please wait before requesting another link\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{\"retry_after\":60}}",
                     "responseId": "118215294",
                     "description": "",
                     "oasKey": "",
@@ -344,11 +358,18 @@
                             "message": {
                               "type": "string",
                               "example": "New login link sent"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons; klien menyinkronkan jamnya dari sini (BR-10)"
                             }
                           },
                           "x-apidog-orders": [
                             "code",
-                            "message"
+                            "message",
+                            "server_time"
                           ]
                         }
                       },
@@ -366,7 +387,7 @@
                 "responseExamples": [
                   {
                     "name": "Success",
-                    "data": "{\"meta\":{\"code\":200,\"message\":\"New login link sent\"}}",
+                    "data": "{\"meta\":{\"code\":200,\"message\":\"New login link sent\",\"server_time\":\"2026-11-03T09:12:00.412Z\"}}",
                     "responseId": "163446125",
                     "description": "",
                     "oasKey": "",
@@ -488,11 +509,18 @@
                             "message": {
                               "type": "string",
                               "example": "Login successful"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons; klien menyinkronkan jamnya dari sini (BR-10)"
                             }
                           },
                           "x-apidog-orders": [
                             "code",
-                            "message"
+                            "message",
+                            "server_time"
                           ]
                         },
                         "data": {
@@ -597,7 +625,7 @@
                 "responseExamples": [
                   {
                     "name": "Success",
-                    "data": "{\"meta\":{\"code\":200,\"message\":\"Login successful\"},\"data\":{\"access_token\":\"eyJhbG...\",\"refresh_token\":\"eyJhbG...\",\"expires_in\":22740,\"user\":{\"id\":\"usr_123\",\"email\":\"you@example.com\",\"nik\":\"3171xxxxxxxxxx22\"},\"redirect_context\":{\"type\":\"booking\",\"event_id\":\"evt_konser_a\",\"booking_id\":\"RB-00912\",\"message\":\"Booking context restored\"}}}",
+                    "data": "{\"meta\":{\"code\":200,\"message\":\"Login successful\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{\"access_token\":\"eyJhbG...\",\"refresh_token\":\"eyJhbG...\",\"expires_in\":22740,\"user\":{\"id\":\"usr_123\",\"email\":\"you@example.com\",\"nik\":\"3171xxxxxxxxxx22\"},\"redirect_context\":{\"type\":\"booking\",\"event_id\":\"evt_konser_a\",\"booking_id\":\"RB-00912\",\"message\":\"Booking context restored\"}}}",
                     "responseId": "189484958",
                     "description": "",
                     "oasKey": "",
@@ -673,11 +701,18 @@
                             "message": {
                               "type": "string",
                               "example": "Session refreshed"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons; klien menyinkronkan jamnya dari sini (BR-10)"
                             }
                           },
                           "x-apidog-orders": [
                             "code",
-                            "message"
+                            "message",
+                            "server_time"
                           ]
                         },
                         "data": {
@@ -734,11 +769,18 @@
                             "message": {
                               "type": "string",
                               "example": "refresh_token is required"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons; klien menyinkronkan jamnya dari sini (BR-10)"
                             }
                           },
                           "x-apidog-orders": [
                             "code",
-                            "message"
+                            "message",
+                            "server_time"
                           ]
                         },
                         "data": {
@@ -773,11 +815,18 @@
                             "message": {
                               "type": "string",
                               "example": "Session ended; please sign in again"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons; klien menyinkronkan jamnya dari sini (BR-10)"
                             }
                           },
                           "x-apidog-orders": [
                             "code",
-                            "message"
+                            "message",
+                            "server_time"
                           ]
                         },
                         "data": {
@@ -799,7 +848,7 @@
                 "responseExamples": [
                   {
                     "name": "Success",
-                    "data": "{\"meta\":{\"code\":200,\"message\":\"Session refreshed\"},\"data\":{\"access_token\":\"eyJhbG...\",\"refresh_token\":\"wB3nT8kM2pQ7vF1xJ9cL5gH4dZ6yA0sR\",\"expires_in\":22740}}",
+                    "data": "{\"meta\":{\"code\":200,\"message\":\"Session refreshed\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{\"access_token\":\"eyJhbG...\",\"refresh_token\":\"wB3nT8kM2pQ7vF1xJ9cL5gH4dZ6yA0sR\",\"expires_in\":22740}}",
                     "responseId": "200410001",
                     "description": "",
                     "oasKey": "",
@@ -807,7 +856,7 @@
                   },
                   {
                     "name": "Replayed or expired",
-                    "data": "{\"meta\":{\"code\":401,\"message\":\"Session ended; please sign in again\"},\"data\":{}}",
+                    "data": "{\"meta\":{\"code\":401,\"message\":\"Session ended; please sign in again\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{}}",
                     "responseId": "200410003",
                     "description": "",
                     "oasKey": "",
@@ -906,11 +955,18 @@
                             "message": {
                               "type": "string",
                               "example": "Verification link sent to your email"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons; klien menyinkronkan jamnya dari sini (BR-10)"
                             }
                           },
                           "x-apidog-orders": [
                             "code",
-                            "message"
+                            "message",
+                            "server_time"
                           ]
                         },
                         "data": {
@@ -954,11 +1010,18 @@
                             "message": {
                               "type": "string",
                               "example": "NIK must be exactly 16 digits"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons; klien menyinkronkan jamnya dari sini (BR-10)"
                             }
                           },
                           "x-apidog-orders": [
                             "code",
-                            "message"
+                            "message",
+                            "server_time"
                           ]
                         },
                         "data": {
@@ -995,11 +1058,18 @@
                             "message": {
                               "type": "string",
                               "example": "NIK already registered to another account"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons; klien menyinkronkan jamnya dari sini (BR-10)"
                             }
                           },
                           "x-apidog-orders": [
                             "code",
-                            "message"
+                            "message",
+                            "server_time"
                           ]
                         },
                         "data": {
@@ -1049,7 +1119,7 @@
                 "responseExamples": [
                   {
                     "name": "Success",
-                    "data": "{\"meta\":{\"code\":200,\"message\":\"Verification link sent to your email\"},\"data\":{\"user_id\":\"usr_456\"}}",
+                    "data": "{\"meta\":{\"code\":200,\"message\":\"Verification link sent to your email\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{\"user_id\":\"usr_456\"}}",
                     "responseId": "160517353",
                     "description": "",
                     "oasKey": "",
@@ -1057,7 +1127,7 @@
                   },
                   {
                     "name": "Success",
-                    "data": "{\"meta\":{\"code\":400,\"message\":\"NIK must be exactly 16 digits\"},\"data\":{}}",
+                    "data": "{\"meta\":{\"code\":400,\"message\":\"NIK must be exactly 16 digits\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{}}",
                     "responseId": "100521867",
                     "description": "",
                     "oasKey": "",
@@ -1065,7 +1135,7 @@
                   },
                   {
                     "name": "Success",
-                    "data": "{\"meta\":{\"code\":409,\"message\":\"NIK already registered to another account\"},\"data\":{}}",
+                    "data": "{\"meta\":{\"code\":409,\"message\":\"NIK already registered to another account\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{}}",
                     "responseId": "194384079",
                     "description": "",
                     "oasKey": "",
@@ -1143,6 +1213,159 @@
                 "operationId": "registerAccount",
                 "sourceUrl": "",
                 "ordering": 30,
+                "cases": [],
+                "mocks": [],
+                "customApiFields": "{}",
+                "advancedSettings": {
+                  "disabledSystemHeaders": {}
+                },
+                "mockScript": {},
+                "codeSamples": [],
+                "commonResponseStatus": {},
+                "responseChildren": [],
+                "visibility": "INHERITED",
+                "moduleId": 1505827,
+                "oasExtensions": "",
+                "type": "http",
+                "preProcessors": [],
+                "postProcessors": [],
+                "inheritPostProcessors": {},
+                "inheritPreProcessors": {}
+              }
+            },
+            {
+              "name": "Verify Email Address",
+              "api": {
+                "id": "46280777",
+                "method": "get",
+                "path": "/auth/verify-email",
+                "parameters": {
+                  "path": [],
+                  "cookie": [],
+                  "header": [],
+                  "query": [
+                    {
+                      "id": "VerifyEmailTok1",
+                      "name": "token",
+                      "required": true,
+                      "enable": true,
+                      "description": "Token dari tautan email account.verify; berlaku 15 MENIT, sekali pakai — sama dengan TTL tautan login, karena magic_tokens memakai satu konstanta untuk kedua purpose.",
+                      "example": "",
+                      "type": "string",
+                      "schema": {
+                        "type": "string"
+                      }
+                    }
+                  ]
+                },
+                "auth": {},
+                "securityScheme": {},
+                "commonParameters": {},
+                "responses": [
+                  {
+                    "id": "200420001",
+                    "code": "200",
+                    "name": "Success",
+                    "headers": [],
+                    "contentType": "json",
+                    "description": "Email verified",
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 200
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Email verified"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "server_time"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "email_verified": {
+                              "type": "boolean",
+                              "example": true
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "email_verified"
+                          ]
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "oasExtensions": "",
+                    "mediaType": ""
+                  },
+                  {
+                    "id": "400420001",
+                    "code": "400",
+                    "name": "TOKEN_INVALID",
+                    "headers": [],
+                    "contentType": "json",
+                    "description": "TOKEN_INVALID — token tidak dikenal, sudah dipakai, atau kedaluwarsa",
+                    "jsonSchema": {
+                      "type": "object"
+                    },
+                    "oasExtensions": "",
+                    "mediaType": ""
+                  }
+                ],
+                "responseExamples": [
+                  {
+                    "name": "Success",
+                    "responseId": "200420001",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": "",
+                    "data": "{\"meta\":{\"code\":200,\"message\":\"Email verified\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{\"email_verified\":true}}"
+                  },
+                  {
+                    "name": "Invalid token",
+                    "responseId": "400420001",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": "",
+                    "data": "{\"meta\":{\"code\":400,\"message\":\"Tautan verifikasi tidak valid atau sudah kedaluwarsa\",\"error_code\":\"TOKEN_INVALID\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":null}"
+                  }
+                ],
+                "requestBody": {
+                  "type": "none",
+                  "parameters": [],
+                  "mediaType": "none",
+                  "oasExtensions": "",
+                  "required": false,
+                  "additionalContentTypes": [],
+                  "examples": []
+                },
+                "description": "Mengonfirmasi kepemilikan alamat email setelah registrasi (FR-31).\n\nBERBEDA DARI GET /auth/verify: yang itu adalah login tanpa kata sandi dan menerbitkan sesi. Endpoint ini hanya mengisi accounts.email_verified_at dan tidak menerbitkan token apa pun.\n\nAkun yang belum terverifikasi TETAP DAPAT MEMBELI — verifikasi email hanya membuka riwayat pesanan. Yang memblokir pembelian adalah nik_verified_at IS NULL.\n\nEndpoint ini sudah berjalan di user-service tetapi tidak pernah masuk kontrak sebelum v2.5.\n\nTAUTAN INI KEDALUWARSA DALAM 15 MENIT, DAN ITU BUKAN JALAN BUNTU — jangan bangun endpoint resend untuknya. GET /auth/verify JUGA mengisi email_verified_at: menebus tautan login membuktikan kendali atas alamat itu, hal yang sama persis yang dibuktikan tautan verifikasi. Customer yang tautannya kedaluwarsa cukup meminta magic link (POST /auth/magic-link) dan login — akunnya terverifikasi sebagai efek sampingnya, idempoten lewat COALESCE(email_verified_at, now()). Endpoint ini karena itu kenyamanan, bukan satu-satunya jalan: ia melayani customer yang ingin mengonfirmasi tanpa login.\n\nRequirement: FR-31",
+                "tags": [
+                  "Authentication"
+                ],
+                "status": "released",
+                "serverId": "",
+                "operationId": "verifyEmail",
+                "sourceUrl": "",
+                "ordering": 31,
                 "cases": [],
                 "mocks": [],
                 "customApiFields": "{}",
@@ -1262,11 +1485,18 @@
                             "message": {
                               "type": "string",
                               "example": "Success"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons; klien menyinkronkan jamnya dari sini (BR-10)"
                             }
                           },
                           "x-apidog-orders": [
                             "code",
-                            "message"
+                            "message",
+                            "server_time"
                           ]
                         },
                         "data": {
@@ -1333,7 +1563,7 @@
                 "responseExamples": [
                   {
                     "name": "Success",
-                    "data": "{\"meta\":{\"code\":200,\"message\":\"Success\"},\"data\":{\"max_entries\":5,\"saved_niks\":[{\"id\":\"snk_1\",\"nik_masked\":\"3171********22\",\"label\":\"Budi\",\"verified_at\":\"2026-10-20T08:11:00Z\",\"status\":\"VERIFIED\"}]}}",
+                    "data": "{\"meta\":{\"code\":200,\"message\":\"Success\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{\"max_entries\":5,\"saved_niks\":[{\"id\":\"snk_1\",\"nik_masked\":\"3171********22\",\"label\":\"Budi\",\"verified_at\":\"2026-10-20T08:11:00Z\",\"status\":\"VERIFIED\"}]}}",
                     "responseId": "145025221",
                     "description": "",
                     "oasKey": "",
@@ -1762,12 +1992,19 @@
                                 "limit",
                                 "offset"
                               ]
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons; klien menyinkronkan jamnya dari sini (BR-10)"
                             }
                           },
                           "x-apidog-orders": [
                             "code",
                             "message",
-                            "pagination"
+                            "pagination",
+                            "server_time"
                           ]
                         },
                         "data": {
@@ -1902,7 +2139,7 @@
                 "responseExamples": [
                   {
                     "name": "Success",
-                    "data": "{\"meta\":{\"code\":200,\"message\":\"Success\",\"pagination\":{\"totalData\":2,\"totalPage\":1,\"limit\":10,\"offset\":0}},\"data\":[{\"id\":\"evt_konser_a\",\"name\":\"Konser A\",\"category\":\"LIVE MUSIC\",\"location\":{\"venue\":\"GBK\",\"city\":\"Jakarta\"},\"date\":\"2026-12-25\",\"image_url\":\"https://cdn.rusuh.id/events/konser-a.jpg\",\"status\":\"SELLING_OUT_FAST\",\"queue_state\":\"FULL\",\"queue_depth\":300000,\"queue_capacity\":300000,\"sale_starts_at\":\"2026-11-10T02:00:00Z\",\"display\":{\"enabled\":false,\"action\":\"NONE\",\"label_key\":\"queue_full\",\"badge_key\":null},\"min_price\":500000,\"max_price\":1500000}]}",
+                    "data": "{\"meta\":{\"code\":200,\"message\":\"Success\",\"pagination\":{\"totalData\":2,\"totalPage\":1,\"limit\":10,\"offset\":0},\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":[{\"id\":\"evt_konser_a\",\"name\":\"Konser A\",\"category\":\"LIVE MUSIC\",\"location\":{\"venue\":\"GBK\",\"city\":\"Jakarta\"},\"date\":\"2026-12-25\",\"image_url\":\"https://cdn.rusuh.id/events/konser-a.jpg\",\"status\":\"SELLING_OUT_FAST\",\"queue_state\":\"FULL\",\"queue_depth\":300000,\"queue_capacity\":300000,\"sale_starts_at\":\"2026-11-10T02:00:00Z\",\"display\":{\"enabled\":false,\"action\":\"NONE\",\"label_key\":\"queue_full\",\"badge_key\":null},\"min_price\":500000,\"max_price\":1500000}]}",
                     "responseId": "119868031",
                     "description": "",
                     "oasKey": "",
@@ -1991,11 +2228,18 @@
                             "message": {
                               "type": "string",
                               "example": "Success"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons; klien menyinkronkan jamnya dari sini (BR-10)"
                             }
                           },
                           "x-apidog-orders": [
                             "code",
-                            "message"
+                            "message",
+                            "server_time"
                           ]
                         },
                         "data": {
@@ -2132,6 +2376,24 @@
                                   "status"
                                 ]
                               }
+                            },
+                            "captcha": {
+                              "type": "object",
+                              "properties": {
+                                "provider": {
+                                  "type": "string",
+                                  "example": "turnstile"
+                                },
+                                "site_key": {
+                                  "type": "string",
+                                  "example": "0x4AAAAAAA..."
+                                }
+                              },
+                              "x-apidog-orders": [
+                                "provider",
+                                "site_key"
+                              ],
+                              "description": "Klien memakai ini untuk mengambil token CAPTCHA SEBELUM gerbang buka dan menyegarkannya tiap ~60 detik, sehingga join hanya membawa token yang sudah segar."
                             }
                           },
                           "x-apidog-orders": [
@@ -2149,7 +2411,8 @@
                             "queue_capacity",
                             "sale_starts_at",
                             "display",
-                            "ticket_categories"
+                            "ticket_categories",
+                            "captcha"
                           ]
                         }
                       },
@@ -2181,7 +2444,7 @@
                 "responseExamples": [
                   {
                     "name": "Success",
-                    "data": "{\"meta\":{\"code\":200,\"message\":\"Success\"},\"data\":{\"id\":\"evt_konser_a\",\"name\":\"Konser A\",\"category\":\"LIVE MUSIC\",\"location\":{\"venue\":\"GBK\",\"city\":\"Jakarta\"},\"date\":\"2026-12-25\",\"time\":\"19:00\",\"image_url\":\"https://cdn.rusuh.id/events/konser-a.jpg\",\"description\":\"Energi panggung.\",\"status\":\"AVAILABLE\",\"queue_state\":\"OPEN\",\"queue_depth\":1248,\"queue_capacity\":300000,\"sale_starts_at\":\"2026-11-10T02:00:00Z\",\"display\":{\"enabled\":true,\"action\":\"JOIN_QUEUE\",\"label_key\":\"join_queue\",\"badge_key\":null},\"ticket_categories\":[{\"id\":\"cat_vip\",\"name\":\"VIP\",\"description\":\"Lebih dekat.\",\"price\":1500000,\"available\":12,\"status\":\"AVAILABLE\"},{\"id\":\"cat_festival\",\"name\":\"Festival\",\"description\":\"Area festival.\",\"price\":850000,\"available\":240,\"status\":\"AVAILABLE\"},{\"id\":\"cat_tribune\",\"name\":\"Tribune\",\"description\":\"Area tribun.\",\"price\":500000,\"available\":0,\"status\":\"SOLD_OUT\"}]}}",
+                    "data": "{\"meta\":{\"code\":200,\"message\":\"Success\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{\"id\":\"evt_konser_a\",\"name\":\"Konser A\",\"category\":\"LIVE MUSIC\",\"location\":{\"venue\":\"GBK\",\"city\":\"Jakarta\"},\"date\":\"2026-12-25\",\"time\":\"19:00\",\"image_url\":\"https://cdn.rusuh.id/events/konser-a.jpg\",\"description\":\"Energi panggung.\",\"status\":\"AVAILABLE\",\"queue_state\":\"OPEN\",\"queue_depth\":1248,\"queue_capacity\":300000,\"sale_starts_at\":\"2026-11-10T02:00:00Z\",\"display\":{\"enabled\":true,\"action\":\"JOIN_QUEUE\",\"label_key\":\"join_queue\",\"badge_key\":null},\"ticket_categories\":[{\"id\":\"cat_vip\",\"name\":\"VIP\",\"description\":\"Lebih dekat.\",\"price\":1500000,\"available\":12,\"status\":\"AVAILABLE\"},{\"id\":\"cat_festival\",\"name\":\"Festival\",\"description\":\"Area festival.\",\"price\":850000,\"available\":240,\"status\":\"AVAILABLE\"},{\"id\":\"cat_tribune\",\"name\":\"Tribune\",\"description\":\"Area tribun.\",\"price\":500000,\"available\":0,\"status\":\"SOLD_OUT\"}],\"captcha\":{\"provider\":\"turnstile\",\"site_key\":\"0x4AAAAAAA...\"}}}",
                     "responseId": "176251152",
                     "description": "",
                     "oasKey": "",
@@ -2342,11 +2605,18 @@
                             "message": {
                               "type": "string",
                               "example": "Successfully joined queue"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons; klien menyinkronkan jamnya dari sini (BR-10)"
                             }
                           },
                           "x-apidog-orders": [
                             "code",
-                            "message"
+                            "message",
+                            "server_time"
                           ]
                         },
                         "data": {
@@ -2412,6 +2682,230 @@
                     "oasExtensions": ""
                   },
                   {
+                    "id": "400430001",
+                    "code": "400",
+                    "name": "CAPTCHA_REQUIRED",
+                    "headers": [],
+                    "contentType": "json",
+                    "mediaType": "application/json",
+                    "description": "captcha_token tidak disertakan, tidak valid, sudah dipakai, atau kedaluwarsa",
+                    "oasExtensions": "",
+                    "itemSchema": {},
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 400
+                            },
+                            "message": {
+                              "type": "string"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "CAPTCHA_REQUIRED"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ]
+                    }
+                  },
+                  {
+                    "id": "403430001",
+                    "code": "403",
+                    "name": "CAPTCHA_FAILED",
+                    "headers": [],
+                    "contentType": "json",
+                    "mediaType": "application/json",
+                    "description": "Verifikasi CAPTCHA ditolak penyedia",
+                    "oasExtensions": "",
+                    "itemSchema": {},
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 403
+                            },
+                            "message": {
+                              "type": "string"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "CAPTCHA_FAILED"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ]
+                    }
+                  },
+                  {
+                    "id": "409430001",
+                    "code": "409",
+                    "name": "SALE_NOT_OPEN",
+                    "headers": [],
+                    "contentType": "json",
+                    "mediaType": "application/json",
+                    "description": "state = SCHEDULED — gerbang belum buka; body memuat sale_starts_at",
+                    "oasExtensions": "",
+                    "itemSchema": {},
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 409
+                            },
+                            "message": {
+                              "type": "string"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "SALE_NOT_OPEN"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "queue_state": {
+                              "type": "string",
+                              "example": "SCHEDULED"
+                            },
+                            "sale_starts_at": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-10T02:00:00Z"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "queue_state",
+                            "sale_starts_at"
+                          ]
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ]
+                    }
+                  },
+                  {
+                    "id": "429430001",
+                    "code": "429",
+                    "name": "TOO_MANY_REQUESTS",
+                    "headers": [],
+                    "contentType": "json",
+                    "mediaType": "application/json",
+                    "description": "rl:join:{ip} 20 per 5 menit, ATAU batas kedua 3 join per akun per menit",
+                    "oasExtensions": "",
+                    "itemSchema": {},
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 429
+                            },
+                            "message": {
+                              "type": "string"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "TOO_MANY_REQUESTS"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "retry_after": {
+                              "type": "integer",
+                              "example": 42
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "retry_after"
+                          ]
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ]
+                    }
+                  },
+                  {
                     "id": "171958166",
                     "code": "503",
                     "headers": [],
@@ -2428,11 +2922,18 @@
                             "message": {
                               "type": "string",
                               "example": "Antrian sedang penuh"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons; klien menyinkronkan jamnya dari sini (BR-10)"
                             }
                           },
                           "x-apidog-orders": [
                             "code",
-                            "message"
+                            "message",
+                            "server_time"
                           ]
                         },
                         "data": {
@@ -2468,7 +2969,7 @@
                 "responseExamples": [
                   {
                     "name": "New queue position",
-                    "data": "{\"meta\":{\"code\":200,\"message\":\"Successfully joined queue\"},\"data\":{\"ticket_no\":32748,\"now_serving\":31500,\"position\":1248,\"estimated_wait_minutes\":4,\"sse_url\":\"/queue/stream\",\"event\":{\"id\":\"evt_konser_a\",\"name\":\"Konser A\"}}}",
+                    "data": "{\"meta\":{\"code\":200,\"message\":\"Successfully joined queue\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{\"ticket_no\":32748,\"now_serving\":31500,\"position\":1248,\"estimated_wait_minutes\":4,\"sse_url\":\"/queue/stream\",\"event\":{\"id\":\"evt_konser_a\",\"name\":\"Konser A\"}}}",
                     "responseId": "186209177",
                     "description": "",
                     "oasKey": "joined",
@@ -2476,21 +2977,76 @@
                   },
                   {
                     "name": "Queue full",
-                    "data": "{\"meta\":{\"code\":503,\"message\":\"Antrian sedang penuh\"},\"data\":{\"queue_state\":\"FULL\",\"queue_capacity\":300000}}",
+                    "data": "{\"meta\":{\"code\":503,\"message\":\"Antrian sedang penuh\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{\"queue_state\":\"FULL\",\"queue_capacity\":300000}}",
                     "responseId": "171958166",
                     "description": "",
                     "oasKey": "",
                     "oasExtensions": ""
+                  },
+                  {
+                    "name": "CAPTCHA missing",
+                    "responseId": "400430001",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": "",
+                    "data": "{\"meta\":{\"code\":400,\"message\":\"Verifikasi CAPTCHA diperlukan\",\"error_code\":\"CAPTCHA_REQUIRED\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":null}"
+                  },
+                  {
+                    "name": "Device id missing (guest)",
+                    "responseId": "400430001",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": "",
+                    "data": "{\"meta\":{\"code\":400,\"message\":\"X-Device-Id wajib untuk pembeli tamu\",\"error_code\":\"DEVICE_ID_REQUIRED\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":null}"
+                  },
+                  {
+                    "name": "Gate not open",
+                    "responseId": "409430001",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": "",
+                    "data": "{\"meta\":{\"code\":409,\"message\":\"Penjualan belum dibuka\",\"error_code\":\"SALE_NOT_OPEN\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{\"queue_state\":\"SCHEDULED\",\"sale_starts_at\":\"2026-11-10T02:00:00Z\"}}"
+                  },
+                  {
+                    "name": "Rate limited",
+                    "responseId": "429430001",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": "",
+                    "data": "{\"meta\":{\"code\":429,\"message\":\"Terlalu banyak percobaan\",\"error_code\":\"TOO_MANY_REQUESTS\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{\"retry_after\":42}}"
                   }
                 ],
                 "requestBody": {
-                  "type": "none",
+                  "type": "application/json",
                   "parameters": [],
-                  "required": false,
+                  "mediaType": "application/json",
+                  "oasExtensions": "",
+                  "required": true,
                   "additionalContentTypes": [],
-                  "oasExtensions": ""
+                  "jsonSchema": {
+                    "type": "object",
+                    "required": [
+                      "captcha_token"
+                    ],
+                    "properties": {
+                      "captcha_token": {
+                        "type": "string",
+                        "description": "Token CAPTCHA TAK TERLIHAT, diambil klien SEBELUM gerbang buka dan disegarkan tiap ~60 detik. ticket_no berasal dari INCR issued saat join: bila klien harus menyelesaikan tantangan lebih dulu, manusia yang butuh tiga detik mendapat nomor LEBIH BESAR daripada bot yang menembus layanan pemecah dalam 200 ms. Mode interaktif TIDAK BOLEH dipakai di endpoint ini. Berlaku untuk tamu DAN user login — mengecualikan login menjadikannya jalur ramah bot (akun hanya 5/IP/jam)."
+                      }
+                    },
+                    "x-apidog-orders": [
+                      "captcha_token"
+                    ]
+                  },
+                  "examples": [
+                    {
+                      "mediaType": "application/json",
+                      "description": "",
+                      "value": "{\"captcha_token\":\"0.AbCdEf...\"}"
+                    }
+                  ]
                 },
-                "description": "Join queue.",
+                "description": "Join queue.\n\nURUTAN PEMERIKSAAN: rate limit DULU, CAPTCHA kemudian. Rate limit adalah panggilan Redis lokal; verifikasi CAPTCHA adalah round trip eksternal. Membaliknya berarti membayar satu panggilan pihak ketiga untuk tiap percobaan yang akhirnya ditolak.\n\nCookie: Max-Age diturunkan dari SALE_WINDOW_SECONDS, bukan dipatok 7200 — ia harus kedaluwarsa bersamaan dengan token:{uuid} yang dirujuknya.",
                 "tags": [
                   "Queue"
                 ],
@@ -2583,9 +3139,60 @@
                       "properties": {}
                     },
                     "itemSchema": {},
-                    "description": "Sold out",
+                    "description": "state = CLOSED saja. SOLD_OUT TIDAK menutup stream: stok dapat kembali dari booking yang kedaluwarsa, dan admission lanjut. EventSource berhenti permanen pada status non-200 — itu disengaja, dan hanya benar untuk CLOSED.",
                     "contentType": "noContent",
                     "oasExtensions": ""
+                  },
+                  {
+                    "id": "429440001",
+                    "code": "429",
+                    "name": "TOO_MANY_REQUESTS",
+                    "headers": [],
+                    "contentType": "json",
+                    "mediaType": "application/json",
+                    "description": "rl:sse:{ip} — batas koneksi stream per IP",
+                    "oasExtensions": "",
+                    "itemSchema": {},
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 429
+                            },
+                            "message": {
+                              "type": "string"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "TOO_MANY_REQUESTS"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ]
+                    }
                   }
                 ],
                 "responseExamples": [
@@ -2705,11 +3312,18 @@
                             "message": {
                               "type": "string",
                               "example": "Success"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons; klien menyinkronkan jamnya dari sini (BR-10)"
                             }
                           },
                           "x-apidog-orders": [
                             "code",
-                            "message"
+                            "message",
+                            "server_time"
                           ]
                         },
                         "data": {
@@ -2763,7 +3377,7 @@
                 "responseExamples": [
                   {
                     "name": "Masih mengantre",
-                    "data": "{\"meta\":{\"code\":200,\"message\":\"Success\"},\"data\":{\"state\":\"QUEUED\",\"ticket_no\":31842,\"now_serving\":31600}}",
+                    "data": "{\"meta\":{\"code\":200,\"message\":\"Success\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{\"state\":\"QUEUED\",\"ticket_no\":31842,\"now_serving\":31600}}",
                     "responseId": "123813032",
                     "description": "",
                     "oasKey": "queued",
@@ -2771,7 +3385,7 @@
                   },
                   {
                     "name": "Giliran tiba",
-                    "data": "{\"meta\":{\"code\":200,\"message\":\"Success\"},\"data\":{\"state\":\"GRANTED\",\"grant_token\":\"gt_abc123\",\"booking_expires_at\":\"2026-10-23T13:15:00Z\",\"server_time\":\"2026-10-23T13:10:00Z\"}}",
+                    "data": "{\"meta\":{\"code\":200,\"message\":\"Success\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{\"state\":\"GRANTED\",\"grant_token\":\"gt_abc123\",\"booking_expires_at\":\"2026-10-23T13:15:00Z\",\"server_time\":\"2026-10-23T13:10:00Z\"}}",
                     "responseId": "123813032",
                     "description": "",
                     "oasKey": "granted",
@@ -2779,7 +3393,7 @@
                   },
                   {
                     "name": "Expired",
-                    "data": "{\"meta\":{\"code\":200,\"message\":\"Success\"},\"data\":{\"state\":\"EXPIRED\"}}",
+                    "data": "{\"meta\":{\"code\":200,\"message\":\"Success\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{\"state\":\"EXPIRED\"}}",
                     "responseId": "123813032",
                     "description": "",
                     "oasKey": "expired",
@@ -2868,11 +3482,18 @@
                             "message": {
                               "type": "string",
                               "example": "Success"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons; klien menyinkronkan jamnya dari sini (BR-10)"
                             }
                           },
                           "x-apidog-orders": [
                             "code",
-                            "message"
+                            "message",
+                            "server_time"
                           ]
                         },
                         "data": {
@@ -2923,7 +3544,7 @@
                 "responseExamples": [
                   {
                     "name": "Success",
-                    "data": "{\"meta\":{\"code\":200,\"message\":\"Success\"},\"data\":{\"now_serving\":31600,\"rate_per_min\":318,\"paused\":false,\"server_time\":\"2026-10-24T13:10:00.412Z\",\"poll_after_ms\":5000}}",
+                    "data": "{\"meta\":{\"code\":200,\"message\":\"Success\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{\"now_serving\":31600,\"rate_per_min\":318,\"paused\":false,\"server_time\":\"2026-10-24T13:10:00.412Z\",\"poll_after_ms\":5000}}",
                     "responseId": "170191745",
                     "description": "",
                     "oasKey": "",
@@ -3101,11 +3722,18 @@
                             "message": {
                               "type": "string",
                               "example": "Success"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons; klien menyinkronkan jamnya dari sini (BR-10)"
                             }
                           },
                           "x-apidog-orders": [
                             "code",
-                            "message"
+                            "message",
+                            "server_time"
                           ]
                         },
                         "data": {
@@ -3259,7 +3887,7 @@
                 "responseExamples": [
                   {
                     "name": "Success",
-                    "data": "{\"meta\":{\"code\":200,\"message\":\"Success\"},\"data\":{\"event\":{\"id\":\"evt_konser_a\",\"name\":\"Konser A\",\"date\":\"2026-12-25\",\"venue\":\"GBK, Jakarta\",\"image_url\":\"https://cdn.rusuh.id/events/konser-a.jpg\"},\"session\":{\"expires_at\":\"2026-10-23T13:15:00Z\",\"ttl_seconds\":287,\"server_time\":\"2026-10-23T13:10:13Z\"},\"categories\":[{\"id\":\"cat_vip\",\"name\":\"VIP\",\"description\":\"Lebih dekat.\",\"price\":1500000,\"available\":12,\"max_per_order\":3},{\"id\":\"cat_festival\",\"name\":\"Festival\",\"description\":\"Area festival.\",\"price\":850000,\"available\":240,\"max_per_order\":3},{\"id\":\"cat_tribune\",\"name\":\"Tribune\",\"description\":\"Area tribun.\",\"price\":500000,\"available\":0,\"max_per_order\":0}],\"rules\":{\"max_tickets_per_order\":3,\"one_nik_per_ticket\":true}}}",
+                    "data": "{\"meta\":{\"code\":200,\"message\":\"Success\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{\"event\":{\"id\":\"evt_konser_a\",\"name\":\"Konser A\",\"date\":\"2026-12-25\",\"venue\":\"GBK, Jakarta\",\"image_url\":\"https://cdn.rusuh.id/events/konser-a.jpg\"},\"session\":{\"expires_at\":\"2026-10-23T13:15:00Z\",\"ttl_seconds\":287,\"server_time\":\"2026-10-23T13:10:13Z\"},\"categories\":[{\"id\":\"cat_vip\",\"name\":\"VIP\",\"description\":\"Lebih dekat.\",\"price\":1500000,\"available\":12,\"max_per_order\":3},{\"id\":\"cat_festival\",\"name\":\"Festival\",\"description\":\"Area festival.\",\"price\":850000,\"available\":240,\"max_per_order\":3},{\"id\":\"cat_tribune\",\"name\":\"Tribune\",\"description\":\"Area tribun.\",\"price\":500000,\"available\":0,\"max_per_order\":0}],\"rules\":{\"max_tickets_per_order\":3,\"one_nik_per_ticket\":true}}}",
                     "responseId": "168132602",
                     "description": "",
                     "oasKey": "",
@@ -3387,11 +4015,18 @@
                             "message": {
                               "type": "string",
                               "example": "Booking created successfully"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons; klien menyinkronkan jamnya dari sini (BR-10)"
                             }
                           },
                           "x-apidog-orders": [
                             "code",
-                            "message"
+                            "message",
+                            "server_time"
                           ]
                         },
                         "data": {
@@ -3448,17 +4083,12 @@
                                   "nik_masked": {
                                     "type": "string",
                                     "example": "3171********xx22"
-                                  },
-                                  "holder_name": {
-                                    "type": "string",
-                                    "example": "JOHN DOE"
                                   }
                                 },
                                 "x-apidog-orders": [
                                   "category",
                                   "price",
-                                  "nik_masked",
-                                  "holder_name"
+                                  "nik_masked"
                                 ]
                               }
                             },
@@ -3550,11 +4180,18 @@
                             "message": {
                               "type": "string",
                               "example": "Maximum 3 tickets per order"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons; klien menyinkronkan jamnya dari sini (BR-10)"
                             }
                           },
                           "x-apidog-orders": [
                             "code",
-                            "message"
+                            "message",
+                            "server_time"
                           ]
                         },
                         "data": {
@@ -3591,11 +4228,18 @@
                             "message": {
                               "type": "string",
                               "example": "NIK sudah digunakan untuk event ini"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons; klien menyinkronkan jamnya dari sini (BR-10)"
                             }
                           },
                           "x-apidog-orders": [
                             "code",
-                            "message"
+                            "message",
+                            "server_time"
                           ]
                         },
                         "data": {
@@ -3619,7 +4263,7 @@
                 "responseExamples": [
                   {
                     "name": "Success",
-                    "data": "{\"meta\":{\"code\":201,\"message\":\"Booking created successfully\"},\"data\":{\"booking_id\":\"RB-00912\",\"status\":\"PENDING_PAYMENT\",\"event\":{\"id\":\"evt_konser_a\",\"name\":\"Konser A\",\"date\":\"2026-12-25\",\"venue\":\"GBK, Jakarta\"},\"tickets\":[{\"category\":\"VIP\",\"price\":1500000,\"nik_masked\":\"3171********xx22\",\"holder_name\":\"JOHN DOE\"},{\"category\":\"Festival\",\"price\":850000,\"nik_masked\":\"3171********xx33\",\"holder_name\":\"JANE DOE\"}],\"summary\":{\"subtotal\":2350000,\"service_fee\":0,\"total\":2350000},\"payment_ttl\":{\"expires_at\":\"2026-10-23T13:25:00Z\",\"ttl_seconds\":600,\"server_time\":\"2026-10-23T13:15:00Z\"},\"redirect_url\":\"/bookings/RB-00912/payment\"}}",
+                    "data": "{\"meta\":{\"code\":201,\"message\":\"Booking created successfully\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{\"booking_id\":\"RB-00912\",\"status\":\"PENDING_PAYMENT\",\"event\":{\"id\":\"evt_konser_a\",\"name\":\"Konser A\",\"date\":\"2026-12-25\",\"venue\":\"GBK, Jakarta\"},\"tickets\":[{\"category\":\"VIP\",\"price\":1500000,\"nik_masked\":\"3171********xx22\"},{\"category\":\"Festival\",\"price\":850000,\"nik_masked\":\"3171********xx33\"}],\"summary\":{\"subtotal\":2350000,\"service_fee\":0,\"total\":2350000},\"payment_ttl\":{\"expires_at\":\"2026-10-23T13:25:00Z\",\"ttl_seconds\":600,\"server_time\":\"2026-10-23T13:15:00Z\"},\"redirect_url\":\"/bookings/RB-00912/payment\"}}",
                     "responseId": "139987344",
                     "description": "",
                     "oasKey": "",
@@ -3627,7 +4271,7 @@
                   },
                   {
                     "name": "Max tickets",
-                    "data": "{\"meta\":{\"code\":400,\"message\":\"Maximum 3 tickets per order\"},\"data\":{}}",
+                    "data": "{\"meta\":{\"code\":400,\"message\":\"Maximum 3 tickets per order\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{}}",
                     "responseId": "158035727",
                     "description": "",
                     "oasKey": "max_tickets",
@@ -3635,7 +4279,7 @@
                   },
                   {
                     "name": "NIK taken",
-                    "data": "{\"meta\":{\"code\":409,\"message\":\"NIK sudah digunakan untuk event ini\"},\"data\":{}}",
+                    "data": "{\"meta\":{\"code\":409,\"message\":\"NIK sudah digunakan untuk event ini\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{}}",
                     "responseId": "133003445",
                     "description": "",
                     "oasKey": "nik_taken",
@@ -3843,11 +4487,18 @@
                             "message": {
                               "type": "string",
                               "example": "Success"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons; klien menyinkronkan jamnya dari sini (BR-10)"
                             }
                           },
                           "x-apidog-orders": [
                             "code",
-                            "message"
+                            "message",
+                            "server_time"
                           ]
                         },
                         "data": {
@@ -4001,7 +4652,7 @@
                 "responseExamples": [
                   {
                     "name": "Pending payment",
-                    "data": "{\"meta\":{\"code\":200,\"message\":\"Success\"},\"data\":{\"booking_id\":\"RB-00912\",\"status\":\"PENDING_PAYMENT\",\"event\":{\"id\":\"evt_konser_a\",\"name\":\"Konser A\",\"date\":\"2026-12-25\",\"venue\":\"GBK, Jakarta\",\"image_url\":\"https://cdn.rusuh.id/events/konser-a.jpg\"},\"tickets\":[{\"category\":\"VIP\",\"price\":1500000,\"nik_masked\":\"3171********xx22\"}],\"summary\":{\"quantity\":1,\"price_per_ticket\":1500000,\"total\":1500000},\"payment_ttl\":{\"expires_at\":\"2026-10-23T13:25:00Z\",\"ttl_seconds\":342,\"server_time\":\"2026-10-23T13:19:18Z\"}}}",
+                    "data": "{\"meta\":{\"code\":200,\"message\":\"Success\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{\"booking_id\":\"RB-00912\",\"status\":\"PENDING_PAYMENT\",\"event\":{\"id\":\"evt_konser_a\",\"name\":\"Konser A\",\"date\":\"2026-12-25\",\"venue\":\"GBK, Jakarta\",\"image_url\":\"https://cdn.rusuh.id/events/konser-a.jpg\"},\"tickets\":[{\"category\":\"VIP\",\"price\":1500000,\"nik_masked\":\"3171********xx22\"}],\"summary\":{\"quantity\":1,\"price_per_ticket\":1500000,\"total\":1500000},\"payment_ttl\":{\"expires_at\":\"2026-10-23T13:25:00Z\",\"ttl_seconds\":342,\"server_time\":\"2026-10-23T13:19:18Z\"}}}",
                     "responseId": "136154444",
                     "description": "",
                     "oasKey": "pending_payment",
@@ -4009,7 +4660,7 @@
                   },
                   {
                     "name": "Paid",
-                    "data": "{\"meta\":{\"code\":200,\"message\":\"Success\"},\"data\":{\"booking_id\":\"RB-00912\",\"status\":\"PAID\",\"event\":{\"id\":\"evt_konser_a\",\"name\":\"Konser A\",\"date\":\"2026-12-25\",\"venue\":\"GBK, Jakarta\",\"image_url\":\"https://cdn.rusuh.id/events/konser-a.jpg\"},\"tickets\":[{\"ticket_id\":\"TKT-001\",\"category\":\"VIP\",\"price\":1500000,\"nik_masked\":\"3171********xx22\",\"eticket_url\":\"/tickets/TKT-001/eticket\"}],\"summary\":{\"quantity\":1,\"total\":1500000},\"paid_at\":\"2026-10-23T13:20:00Z\",\"payment_method\":\"Virtual Account\"}}",
+                    "data": "{\"meta\":{\"code\":200,\"message\":\"Success\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{\"booking_id\":\"RB-00912\",\"status\":\"PAID\",\"event\":{\"id\":\"evt_konser_a\",\"name\":\"Konser A\",\"date\":\"2026-12-25\",\"venue\":\"GBK, Jakarta\",\"image_url\":\"https://cdn.rusuh.id/events/konser-a.jpg\"},\"tickets\":[{\"ticket_id\":\"TKT-001\",\"category\":\"VIP\",\"price\":1500000,\"nik_masked\":\"3171********xx22\",\"eticket_url\":\"/tickets/TKT-001/eticket\"}],\"summary\":{\"quantity\":1,\"total\":1500000},\"paid_at\":\"2026-10-23T13:20:00Z\",\"payment_method\":\"Virtual Account\"}}",
                     "responseId": "136154444",
                     "description": "",
                     "oasKey": "paid",
@@ -4150,11 +4801,18 @@
                             "message": {
                               "type": "string",
                               "example": "Success"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons; klien menyinkronkan jamnya dari sini (BR-10)"
                             }
                           },
                           "x-apidog-orders": [
                             "code",
-                            "message"
+                            "message",
+                            "server_time"
                           ]
                         },
                         "data": {
@@ -4208,7 +4866,7 @@
                 "responseExamples": [
                   {
                     "name": "Success",
-                    "data": "{\"meta\":{\"code\":200,\"message\":\"Success\"},\"data\":[{\"ticket_id\":\"TKT-001\",\"category\":\"VIP\",\"price\":1500000,\"nik_masked\":\"3171********xx22\",\"eticket_url\":\"/tickets/TKT-001/eticket\"},{\"ticket_id\":\"TKT-002\",\"category\":\"Festival\",\"price\":850000,\"nik_masked\":\"3171********xx33\",\"eticket_url\":\"/tickets/TKT-002/eticket\"}]}",
+                    "data": "{\"meta\":{\"code\":200,\"message\":\"Success\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":[{\"ticket_id\":\"TKT-001\",\"category\":\"VIP\",\"price\":1500000,\"nik_masked\":\"3171********xx22\",\"eticket_url\":\"/tickets/TKT-001/eticket\"},{\"ticket_id\":\"TKT-002\",\"category\":\"Festival\",\"price\":850000,\"nik_masked\":\"3171********xx33\",\"eticket_url\":\"/tickets/TKT-002/eticket\"}]}",
                     "responseId": "169253594",
                     "description": "",
                     "oasKey": "",
@@ -4373,11 +5031,18 @@
                             "message": {
                               "type": "string",
                               "example": "NIK is valid"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons; klien menyinkronkan jamnya dari sini (BR-10)"
                             }
                           },
                           "x-apidog-orders": [
                             "code",
-                            "message"
+                            "message",
+                            "server_time"
                           ]
                         },
                         "data": {
@@ -4441,11 +5106,18 @@
                             "message": {
                               "type": "string",
                               "example": "NIK must be exactly 16 digits"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons; klien menyinkronkan jamnya dari sini (BR-10)"
                             }
                           },
                           "x-apidog-orders": [
                             "code",
-                            "message"
+                            "message",
+                            "server_time"
                           ]
                         },
                         "data": {
@@ -4482,11 +5154,18 @@
                             "message": {
                               "type": "string",
                               "example": "Please wait before validating another NIK"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons; klien menyinkronkan jamnya dari sini (BR-10)"
                             }
                           },
                           "x-apidog-orders": [
                             "code",
-                            "message"
+                            "message",
+                            "server_time"
                           ]
                         },
                         "data": {
@@ -4517,7 +5196,7 @@
                 "responseExamples": [
                   {
                     "name": "NIK valid",
-                    "data": "{\"meta\":{\"code\":200,\"message\":\"NIK is valid\"},\"data\":{\"nik\":\"3171xxxxxxxxxx22\",\"valid\":true,\"name\":\"JOHN DOE\",\"status\":\"ACTIVE\",\"source\":\"verified\"}}",
+                    "data": "{\"meta\":{\"code\":200,\"message\":\"NIK is valid\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{\"nik\":\"3171xxxxxxxxxx22\",\"valid\":true,\"name\":\"JOHN DOE\",\"status\":\"ACTIVE\",\"source\":\"verified\"}}",
                     "responseId": "174461759",
                     "description": "",
                     "oasKey": "valid",
@@ -4525,7 +5204,7 @@
                   },
                   {
                     "name": "NIK not found",
-                    "data": "{\"meta\":{\"code\":200,\"message\":\"NIK not found\"},\"data\":{\"nik\":\"0000000000000000\",\"valid\":false,\"reason\":\"NIK_NOT_FOUND\"}}",
+                    "data": "{\"meta\":{\"code\":200,\"message\":\"NIK not found\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{\"nik\":\"0000000000000000\",\"valid\":false,\"reason\":\"NIK_NOT_FOUND\"}}",
                     "responseId": "174461759",
                     "description": "",
                     "oasKey": "not_found",
@@ -4533,7 +5212,7 @@
                   },
                   {
                     "name": "Format error",
-                    "data": "{\"meta\":{\"code\":400,\"message\":\"NIK must be exactly 16 digits\"},\"data\":{}}",
+                    "data": "{\"meta\":{\"code\":400,\"message\":\"NIK must be exactly 16 digits\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{}}",
                     "responseId": "112520923",
                     "description": "",
                     "oasKey": "",
@@ -4541,7 +5220,7 @@
                   },
                   {
                     "name": "Rate limited",
-                    "data": "{\"meta\":{\"code\":429,\"message\":\"Please wait before validating another NIK\"},\"data\":{\"retry_after\":5}}",
+                    "data": "{\"meta\":{\"code\":429,\"message\":\"Please wait before validating another NIK\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{\"retry_after\":5}}",
                     "responseId": "168255820",
                     "description": "",
                     "oasKey": "",
@@ -4743,11 +5422,18 @@
                             "message": {
                               "type": "string",
                               "example": "Success"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons; klien menyinkronkan jamnya dari sini (BR-10)"
                             }
                           },
                           "x-apidog-orders": [
                             "code",
-                            "message"
+                            "message",
+                            "server_time"
                           ]
                         },
                         "data": {
@@ -4835,7 +5521,7 @@
                 "responseExamples": [
                   {
                     "name": "Success",
-                    "data": "{\"meta\":{\"code\":200,\"message\":\"Success\"},\"data\":{\"methods\":[{\"id\":\"bank_transfer\",\"name\":\"Transfer Bank / Virtual Account\",\"description\":\"Verifikasi otomatis.\",\"icon_url\":\"https://cdn.rusuh.id/icons/bank.svg\",\"enabled\":true,\"banks\":[{\"code\":\"bca\",\"name\":\"BCA\",\"icon_url\":\"https://cdn.rusuh.id/icons/bca.svg\"},{\"code\":\"bni\",\"name\":\"BNI\",\"icon_url\":\"https://cdn.rusuh.id/icons/bni.svg\"},{\"code\":\"bri\",\"name\":\"BRI\",\"icon_url\":\"https://cdn.rusuh.id/icons/bri.svg\"},{\"code\":\"cimb\",\"name\":\"CIMB Niaga\",\"icon_url\":\"https://cdn.rusuh.id/icons/cimb.svg\"}]},{\"id\":\"gopay\",\"name\":\"E-Wallet (GoPay / QRIS)\",\"description\":\"Scan QR.\",\"icon_url\":\"https://cdn.rusuh.id/icons/ewallet.svg\",\"enabled\":true}]}}",
+                    "data": "{\"meta\":{\"code\":200,\"message\":\"Success\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{\"methods\":[{\"id\":\"bank_transfer\",\"name\":\"Transfer Bank / Virtual Account\",\"description\":\"Verifikasi otomatis.\",\"icon_url\":\"https://cdn.rusuh.id/icons/bank.svg\",\"enabled\":true,\"banks\":[{\"code\":\"bca\",\"name\":\"BCA\",\"icon_url\":\"https://cdn.rusuh.id/icons/bca.svg\"},{\"code\":\"bni\",\"name\":\"BNI\",\"icon_url\":\"https://cdn.rusuh.id/icons/bni.svg\"},{\"code\":\"bri\",\"name\":\"BRI\",\"icon_url\":\"https://cdn.rusuh.id/icons/bri.svg\"},{\"code\":\"cimb\",\"name\":\"CIMB Niaga\",\"icon_url\":\"https://cdn.rusuh.id/icons/cimb.svg\"}]},{\"id\":\"gopay\",\"name\":\"E-Wallet (GoPay / QRIS)\",\"description\":\"Scan QR.\",\"icon_url\":\"https://cdn.rusuh.id/icons/ewallet.svg\",\"enabled\":true}]}}",
                     "responseId": "139860009",
                     "description": "",
                     "oasKey": "",
@@ -4976,11 +5662,18 @@
                             "message": {
                               "type": "string",
                               "example": "Payment initiated"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons; klien menyinkronkan jamnya dari sini (BR-10)"
                             }
                           },
                           "x-apidog-orders": [
                             "code",
-                            "message"
+                            "message",
+                            "server_time"
                           ]
                         },
                         "data": {
@@ -5062,7 +5755,7 @@
                 "responseExamples": [
                   {
                     "name": "VA BCA",
-                    "data": "{\"meta\":{\"code\":200,\"message\":\"Payment initiated\"},\"data\":{\"payment_id\":\"RB-00912:1\",\"method\":\"bank_transfer\",\"status\":\"PENDING\",\"instructions\":{\"bank\":\"bca\",\"va_number\":\"8801234567890\"},\"ttl\":{\"expires_at\":\"2026-10-25T10:25:00Z\",\"ttl_seconds\":540,\"server_time\":\"2026-10-25T10:16:00Z\"}}}",
+                    "data": "{\"meta\":{\"code\":200,\"message\":\"Payment initiated\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{\"payment_id\":\"RB-00912:1\",\"method\":\"bank_transfer\",\"status\":\"PENDING\",\"instructions\":{\"bank\":\"bca\",\"va_number\":\"8801234567890\"},\"ttl\":{\"expires_at\":\"2026-10-25T10:25:00Z\",\"ttl_seconds\":540,\"server_time\":\"2026-10-25T10:16:00Z\"}}}",
                     "responseId": "187223650",
                     "description": "",
                     "oasKey": "bank_transfer",
@@ -5070,7 +5763,7 @@
                   },
                   {
                     "name": "GoPay",
-                    "data": "{\"meta\":{\"code\":200,\"message\":\"Payment initiated\"},\"data\":{\"payment_id\":\"RB-00912:1\",\"method\":\"gopay\",\"status\":\"PENDING\",\"instructions\":{\"qr_url\":\"https://api.midtrans.com/v2/gopay/.../qr-code\",\"deeplink_url\":\"https://gojek.link/...\"},\"ttl\":{\"expires_at\":\"2026-10-25T10:25:00Z\",\"ttl_seconds\":540,\"server_time\":\"2026-10-25T10:16:00Z\"}}}",
+                    "data": "{\"meta\":{\"code\":200,\"message\":\"Payment initiated\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{\"payment_id\":\"RB-00912:1\",\"method\":\"gopay\",\"status\":\"PENDING\",\"instructions\":{\"qr_url\":\"https://api.midtrans.com/v2/gopay/.../qr-code\",\"deeplink_url\":\"https://gojek.link/...\"},\"ttl\":{\"expires_at\":\"2026-10-25T10:25:00Z\",\"ttl_seconds\":540,\"server_time\":\"2026-10-25T10:16:00Z\"}}}",
                     "responseId": "187223650",
                     "description": "",
                     "oasKey": "gopay",
@@ -5256,11 +5949,18 @@
                             "message": {
                               "type": "string",
                               "example": "Previous payment cancelled"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons; klien menyinkronkan jamnya dari sini (BR-10)"
                             }
                           },
                           "x-apidog-orders": [
                             "code",
-                            "message"
+                            "message",
+                            "server_time"
                           ]
                         },
                         "data": {
@@ -5316,7 +6016,7 @@
                 "responseExamples": [
                   {
                     "name": "Success",
-                    "data": "{\"meta\":{\"code\":200,\"message\":\"Previous payment cancelled\"},\"data\":{\"booking_id\":\"RB-00912\",\"status\":\"HELD\",\"attempt\":2,\"cancelled_order_id\":\"RB-00912:1\",\"payment_expires_at\":\"2026-10-25T10:25:00Z\",\"server_time\":\"2026-10-25T10:23:10Z\"}}",
+                    "data": "{\"meta\":{\"code\":200,\"message\":\"Previous payment cancelled\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{\"booking_id\":\"RB-00912\",\"status\":\"HELD\",\"attempt\":2,\"cancelled_order_id\":\"RB-00912:1\",\"payment_expires_at\":\"2026-10-25T10:25:00Z\",\"server_time\":\"2026-10-25T10:23:10Z\"}}",
                     "responseId": "172338784",
                     "description": "",
                     "oasKey": "",
@@ -5457,11 +6157,18 @@
                             "message": {
                               "type": "string",
                               "example": "Payment pending"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons; klien menyinkronkan jamnya dari sini (BR-10)"
                             }
                           },
                           "x-apidog-orders": [
                             "code",
-                            "message"
+                            "message",
+                            "server_time"
                           ]
                         },
                         "data": {
@@ -5502,7 +6209,7 @@
                 "responseExamples": [
                   {
                     "name": "Pending",
-                    "data": "{\"meta\":{\"code\":200,\"message\":\"Payment pending\"},\"data\":{\"status\":\"PENDING\",\"server_time\":\"2026-10-23T13:22:00Z\",\"ttl_seconds\":180}}",
+                    "data": "{\"meta\":{\"code\":200,\"message\":\"Payment pending\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{\"status\":\"PENDING\",\"server_time\":\"2026-10-23T13:22:00Z\",\"ttl_seconds\":180}}",
                     "responseId": "197531305",
                     "description": "",
                     "oasKey": "pending",
@@ -5510,7 +6217,7 @@
                   },
                   {
                     "name": "Paid",
-                    "data": "{\"meta\":{\"code\":200,\"message\":\"Payment successful\"},\"data\":{\"status\":\"PAID\",\"paid_at\":\"2026-10-23T13:23:00Z\",\"redirect_url\":\"/bookings/RB-00912/success\"}}",
+                    "data": "{\"meta\":{\"code\":200,\"message\":\"Payment successful\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{\"status\":\"PAID\",\"paid_at\":\"2026-10-23T13:23:00Z\",\"redirect_url\":\"/bookings/RB-00912/success\"}}",
                     "responseId": "197531305",
                     "description": "",
                     "oasKey": "paid",
@@ -5518,7 +6225,7 @@
                   },
                   {
                     "name": "Failed",
-                    "data": "{\"meta\":{\"code\":200,\"message\":\"Payment failed\"},\"data\":{\"status\":\"FAILED\",\"reason\":\"Kartu ditolak penerbit\",\"can_retry\":true,\"attempt\":2,\"payment_expires_at\":\"2026-10-25T10:25:00Z\",\"server_time\":\"2026-10-25T10:19:40Z\"}}",
+                    "data": "{\"meta\":{\"code\":200,\"message\":\"Payment failed\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{\"status\":\"FAILED\",\"reason\":\"Pembayaran ditolak penyedia\",\"can_retry\":true,\"attempt\":2,\"payment_expires_at\":\"2026-10-25T10:25:00Z\",\"server_time\":\"2026-10-25T10:19:40Z\"}}",
                     "responseId": "197531305",
                     "description": "",
                     "oasKey": "failed",
@@ -5532,7 +6239,7 @@
                   "additionalContentTypes": [],
                   "oasExtensions": ""
                 },
-                "description": "Payment status.",
+                "description": "Payment status.\n\nreason adalah PASSTHROUGH status_message dari penyedia, untuk support — bukan teks tampilan. Kartu kredit tidak dibuka di POC ini, jadi contoh bernuansa kartu menyesatkan.",
                 "tags": [
                   "Payment"
                 ],
@@ -5571,20 +6278,7 @@
                   "path": [],
                   "query": [],
                   "cookie": [],
-                  "header": [
-                    {
-                      "id": "qf7UonFdbV",
-                      "name": "X-Callback-Signature",
-                      "required": true,
-                      "enable": true,
-                      "description": "HMAC SHA512",
-                      "example": "",
-                      "type": "string",
-                      "schema": {
-                        "type": "string"
-                      }
-                    }
-                  ]
+                  "header": []
                 },
                 "auth": {},
                 "securityScheme": {},
@@ -5607,11 +6301,18 @@
                             "message": {
                               "type": "string",
                               "example": "Callback processed"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons; klien menyinkronkan jamnya dari sini (BR-10)"
                             }
                           },
                           "x-apidog-orders": [
                             "code",
-                            "message"
+                            "message",
+                            "server_time"
                           ]
                         },
                         "data": {
@@ -5635,7 +6336,7 @@
                 "responseExamples": [
                   {
                     "name": "Success",
-                    "data": "{\"meta\":{\"code\":200,\"message\":\"Callback processed\"},\"data\":{}}",
+                    "data": "{\"meta\":{\"code\":200,\"message\":\"Callback processed\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{}}",
                     "responseId": "156976844",
                     "description": "",
                     "oasKey": "",
@@ -5649,15 +6350,89 @@
                   "oasExtensions": "",
                   "required": true,
                   "additionalContentTypes": [],
+                  "jsonSchema": {
+                    "type": "object",
+                    "required": [
+                      "order_id",
+                      "transaction_status",
+                      "signature_key",
+                      "status_code",
+                      "gross_amount"
+                    ],
+                    "properties": {
+                      "order_id": {
+                        "type": "string",
+                        "description": "RB-00912 — booking_id kami, dikirim sebagai order_id"
+                      },
+                      "transaction_status": {
+                        "type": "string",
+                        "description": "capture | settlement | pending | deny | cancel | expire | refund"
+                      },
+                      "fraud_status": {
+                        "type": "string",
+                        "description": "accept | challenge | deny. WAJIB diperiksa saat transaction_status=capture"
+                      },
+                      "signature_key": {
+                        "type": "string",
+                        "description": "SHA512(order_id + status_code + gross_amount + ServerKey) — konkatenasi polos, TANPA pemisah"
+                      },
+                      "status_code": {
+                        "type": "string",
+                        "description": "200 | 201 | 202 | 407 — string, bukan integer; masuk hash apa adanya"
+                      },
+                      "gross_amount": {
+                        "type": "string",
+                        "description": "Desimal sebagai STRING, mis. \"1500000.00\". Masuk signature apa adanya — jangan dinormalisasi"
+                      },
+                      "transaction_id": {
+                        "type": "string",
+                        "description": "ID Midtrans. TIDAK dapat dipakai sendiri sebagai kunci idempotency: stabil lintas pending → settlement"
+                      },
+                      "payment_type": {
+                        "type": "string",
+                        "description": "bank_transfer | gopay"
+                      },
+                      "transaction_time": {
+                        "type": "string",
+                        "description": "WIB tanpa penanda zona, mis. \"2026-11-03 09:12:00\""
+                      },
+                      "status_message": {
+                        "type": "string",
+                        "description": "Teks penyedia; diteruskan ke reason pada GET /payments/{id}/status untuk support"
+                      },
+                      "merchant_id": {
+                        "type": "string",
+                        "description": "ID merchant Midtrans"
+                      },
+                      "currency": {
+                        "type": "string",
+                        "description": "IDR"
+                      }
+                    },
+                    "x-apidog-orders": [
+                      "order_id",
+                      "transaction_status",
+                      "fraud_status",
+                      "signature_key",
+                      "status_code",
+                      "gross_amount",
+                      "transaction_id",
+                      "payment_type",
+                      "transaction_time",
+                      "status_message",
+                      "merchant_id",
+                      "currency"
+                    ]
+                  },
                   "examples": [
                     {
-                      "value": "{\"event_id\":\"evt_9f2a1c7b\",\"transaction_id\":\"pay_123\",\"external_id\":\"RB-00912\",\"status\":\"PAID\",\"paid_amount\":1500000,\"paid_at\":\"2026-10-24T13:23:00Z\",\"payment_method\":\"va\"}",
                       "mediaType": "application/json",
-                      "description": ""
+                      "description": "",
+                      "value": "{\"transaction_time\": \"2026-11-03 09:12:00\", \"transaction_status\": \"settlement\", \"transaction_id\": \"9aa6b8e1-7b1f-4f0e-8a2d-1c3e5f7a9b0d\", \"status_message\": \"midtrans payment notification\", \"status_code\": \"200\", \"signature_key\": \"4f0e8a2d1c3e5f7a9b0d...\", \"payment_type\": \"bank_transfer\", \"order_id\": \"RB-00912\", \"merchant_id\": \"G123456789\", \"gross_amount\": \"1500000.00\", \"fraud_status\": \"accept\", \"currency\": \"IDR\"}"
                     }
                   ]
                 },
-                "description": "Payment webhook.",
+                "description": "Callback Midtrans Core API.\n\nTIDAK ADA HEADER TANDA TANGAN. Midtrans tidak mengirim X-Callback-Signature; tanda tangan ada DI DALAM BODY sebagai signature_key. v2.4 mendeklarasikan header itu dan itu salah dua kali — header tidak ada, dan contohnya SHA256 sementara rumusnya SHA512.\n\nVERIFIKASI: SHA512(order_id + status_code + gross_amount + ServerKey), konkatenasi polos tanpa pemisah. gross_amount adalah string desimal dan masuk hash APA ADANYA — menormalisasinya (\"1500000.00\" → \"1500000\") membuat setiap tanda tangan gagal.\n\nIDEMPOTENCY: gateway_event_id = order_id + ':' + transaction_status + ':' + status_code. Midtrans tidak mengirim event_id, dan transaction_id saja tidak cukup karena ia stabil lintas pending → settlement — memakainya akan membuang notifikasi settlement sebagai duplikat dari pending.\n\nPemeriksaan kedua yang disarankan Midtrans (query status transaksi) sudah dijalankan charge reconciler.\n\nRequirement: FR-25, FR-22, FR-23, FR-26, NFR-07",
                 "tags": [
                   "Payment"
                 ],
@@ -5853,12 +6628,19 @@
                                 "limit",
                                 "offset"
                               ]
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons; klien menyinkronkan jamnya dari sini (BR-10)"
                             }
                           },
                           "x-apidog-orders": [
                             "code",
                             "message",
-                            "pagination"
+                            "pagination",
+                            "server_time"
                           ]
                         },
                         "data": {
@@ -5950,7 +6732,7 @@
                 "responseExamples": [
                   {
                     "name": "Success",
-                    "data": "{\"meta\":{\"code\":200,\"message\":\"Success\",\"pagination\":{\"totalData\":1,\"totalPage\":1,\"limit\":10,\"offset\":0}},\"data\":[{\"ticket_id\":\"TKT-001\",\"booking_id\":\"RB-00912\",\"event\":{\"id\":\"evt_konser_a\",\"name\":\"Konser A\",\"date\":\"2026-12-25\",\"venue\":\"GBK\",\"image_url\":\"https://cdn.rusuh.id/events/konser-a.jpg\"},\"category\":\"VIP\",\"price\":1500000,\"status\":\"VALID\",\"eticket_url\":\"/tickets/TKT-001/eticket\"}]}",
+                    "data": "{\"meta\":{\"code\":200,\"message\":\"Success\",\"pagination\":{\"totalData\":1,\"totalPage\":1,\"limit\":10,\"offset\":0},\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":[{\"ticket_id\":\"TKT-001\",\"booking_id\":\"RB-00912\",\"event\":{\"id\":\"evt_konser_a\",\"name\":\"Konser A\",\"date\":\"2026-12-25\",\"venue\":\"GBK\",\"image_url\":\"https://cdn.rusuh.id/events/konser-a.jpg\"},\"category\":\"VIP\",\"price\":1500000,\"status\":\"VALID\",\"eticket_url\":\"/tickets/TKT-001/eticket\"}]}",
                     "responseId": "135332372",
                     "description": "",
                     "oasKey": "",
@@ -6081,11 +6863,18 @@
                             "message": {
                               "type": "string",
                               "example": "Success"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons; klien menyinkronkan jamnya dari sini (BR-10)"
                             }
                           },
                           "x-apidog-orders": [
                             "code",
-                            "message"
+                            "message",
+                            "server_time"
                           ]
                         },
                         "data": {
@@ -6190,7 +6979,7 @@
                 "responseExamples": [
                   {
                     "name": "Success",
-                    "data": "{\"meta\":{\"code\":200,\"message\":\"Success\"},\"data\":{\"ticket_id\":\"TKT-001\",\"event\":{\"name\":\"Konser A\",\"date\":\"2026-12-25\",\"time\":\"19:00\",\"venue\":\"GBK, Jakarta\"},\"category\":\"VIP\",\"holder\":{\"nik_masked\":\"3171********xx22\"},\"qr_code\":\"data:image/png;base64,iVBORw0KGgo...\",\"qr_value\":\"TKT-001|evt_konser_a|3171xxxxxxxxxx22\",\"instructions\":\"Tunjukkan QR code dan identitas pemegang saat masuk venue.\"}}",
+                    "data": "{\"meta\":{\"code\":200,\"message\":\"Success\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{\"ticket_id\":\"TKT-001\",\"event\":{\"name\":\"Konser A\",\"date\":\"2026-12-25\",\"time\":\"19:00\",\"venue\":\"GBK, Jakarta\"},\"category\":\"VIP\",\"holder\":{\"nik_masked\":\"3171********xx22\"},\"qr_code\":\"data:image/png;base64,iVBORw0KGgo...\",\"qr_value\":\"TKT-001|evt_konser_a|3171xxxxxxxxxx22\",\"instructions\":\"Tunjukkan QR code dan identitas pemegang saat masuk venue.\"}}",
                     "responseId": "190393879",
                     "description": "",
                     "oasKey": "",
@@ -6345,11 +7134,18 @@
                             "message": {
                               "type": "string",
                               "example": "Success"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons; klien menyinkronkan jamnya dari sini (BR-10)"
                             }
                           },
                           "x-apidog-orders": [
                             "code",
-                            "message"
+                            "message",
+                            "server_time"
                           ]
                         },
                         "data": {
@@ -6431,7 +7227,7 @@
                 "responseExamples": [
                   {
                     "name": "Success",
-                    "data": "{\"meta\":{\"code\":200,\"message\":\"Success\"},\"data\":{\"disputed\":[{\"booking_id\":\"RB-00912\",\"order_id\":\"RB-00912:2\",\"gateway_event_id\":\"evt_9f2a1c7b\",\"gross_amount\":1500000,\"payment_type\":\"bank_transfer\",\"paid_at\":\"2026-10-26T10:25:48Z\",\"cancelled_at\":\"2026-10-26T10:25:30Z\",\"contact_email\":\"buyer@example.com\",\"refund_status\":\"PENDING_MANUAL\"}]}}",
+                    "data": "{\"meta\":{\"code\":200,\"message\":\"Success\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{\"disputed\":[{\"booking_id\":\"RB-00912\",\"order_id\":\"RB-00912:2\",\"gateway_event_id\":\"evt_9f2a1c7b\",\"gross_amount\":1500000,\"payment_type\":\"bank_transfer\",\"paid_at\":\"2026-10-26T10:25:48Z\",\"cancelled_at\":\"2026-10-26T10:25:30Z\",\"contact_email\":\"buyer@example.com\",\"refund_status\":\"PENDING_MANUAL\"}]}}",
                     "responseId": "161913092",
                     "description": "",
                     "oasKey": "",
