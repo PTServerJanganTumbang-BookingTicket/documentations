@@ -7,6 +7,29 @@
 **Modul Go**: `github.com/PTServerJanganTumbang-BookingTicket/be-rusuh-war-ticketing`
 **Menggantikan**: implementation-plan v1.0
 
+> ⚠️ **Diamandemen oleh ADR-006 (5 November 2026, antrian), kontrak v2.7.** Bagian berikut
+> **belum** ditulis ulang dan harus dibaca bersama ADR-006 serta
+> `be-rusuh-war-ticketing/docs/04-queue/` sampai rewrite per bagian dilakukan saat implementasi:
+>
+> | Bagian | Yang berubah |
+> |---|---|
+> | §3.1 `pkg/rediskeys` | hapus `regrant:{ev}`, `slots:open:{ev}`, kanal `sse-grant`; `ctl:leader`, `ctl:epoch`, `qpersist:{ev}` ditunda ke produksi |
+> | §5.6 Abandon, §10.5 webhook inline, §13.2 outbox | `DECRBY slots:open` + `EVALSHA advance_now_serving.lua` + `PUBLISH` **dihapus**; tick admission-ctl berikutnya memakai tempat yang bebas |
+> | §7.2 Join | bypass Lua → tunggu ≤ 1 detik untuk tick berikutnya (baca saja); tanpa `RPUSH qpersist` |
+> | §7.3 `/me` | cek ulang di writer; status pending; masuk normal lewat `nowServing ≥ ticket_no` |
+> | §7.4 `/serving` | tanpa query string, `poll_tiers` |
+> | §8 sse-server | tanpa peta token → koneksi, tanpa `sse-grant` |
+> | §9.6 tick admission-ctl | RECOVER → SNAPSHOT → COUNT (Aurora) → ADVANCE → FINISH → BROADCAST; `rate_per_min` per ADR-006 §6 |
+> | §9.2 lease, §9.7 drain qpersist | **ditunda ke produksi** (ADR-006 §9); POC 1 task, deploy min 0 % / max 100 % |
+> | §9.8 rekonsiliasi | rekonsiliasi `slots:open` dihapus; rekonsiliasi stok tetap |
+> | §14.1 Lua | diganti ADR-006 §3.4; **satu** pemanggil (admission-ctl) |
+> | §14.2 `hold_booking.lua` | tidak menyentuh penghitung slot apa pun |
+> | §18 kepemilikan | baris `slots:open` dihapus |
+> | **Semua bagian yang menyebut pause** (`paused`, gerbang ADVANCE, `PAUSE_TTL_GRACE_SECONDS`, `pause:{ev}:grace_applied`, BR-13a, BR-22, metrik `PauseTransitions` / `PauseTtlGrantedSeconds`) | **dihapus** (ADR-006 §4.3). Breaker tetap fail closed, antrian tetap maju |
+> | §8 payload SSE | `{nowServing, state, ratePerMin, serverTime}`; event `status {state}` tiap transisi; indikator basi = event `stale` (ADR-006 §4.2) |
+> | §5 booking-service: `GET /bookings/{id}/tickets`, `get_booking_tickets.go`, `booking_tickets.go`, `GetBookingTickets`, §5.5 usecase kedua | **dihapus** (ADR-006 §8.8). `GetBooking` saat `CONFIRMED` menerbitkan `eticket_url` bertoken lewat `pkg/eticket.Mint`; §3.5 pemakai `pkg/grantauth` menjadi delapan |
+> | §7.2 Join | respons membawa `queue_token` (untuk mobile); tanpa `estimated_wait_minutes` — estimasi dihitung frontend (ADR-006 §6.2) |
+
 > **Rev 2.1** — v2.0 ditulis terhadap kontrak v2.4, yang naik ke v2.5 pada sesi yang sama.
 > Tiga temuan §21.3 sudah diperbaiki di sana dan ditandai selesai; `pkg/eticket` ditambahkan
 > karena token e-tiket §6.2 tidak punya pemilik di v2.0 sementara FR-26 bergantung padanya.
@@ -40,7 +63,7 @@ menuliskannya ulang. Yang berubah secara material:
 **Komponen yang di v1.0 tidak ada sama sekali** dan kini punya pemilik: job pembuka sale,
 seeding Redis, `metrics-scraper` (FR-33/34/35, NFR-09), pause TTL grace, fencing token
 `ctl:epoch`, charge reconciler, rekonsiliasi `nik:used` ↔ `nik_claims`, `DELETE nik_claims`
-saat expiry, nisan `settled:{uuid}`, `CtlHeartbeatAge`, `GET /bookings/{id}/tickets`,
+saat expiry, nisan `settled:{uuid}`, `CtlHeartbeatAge`, ~~`GET /bookings/{id}/tickets`~~ (dihapus, ADR-006 §8.8),
 `GET /admin/reconciliation/disputed`, `rl:sse:{ip}`, `server_time` pada tiap respons REST,
 penghitung rebind device, transisi `ABANDONED`, penolakan join saat `SCHEDULED`.
 
@@ -425,9 +448,9 @@ Isi ketiga skrip inti ada di §14. `leader_renew.lua` dan `leader_release.lua` a
 ### 3.5 `pkg/grantauth` — middleware grant token + pengikatan device
 
 **Pemakai**, dari kontrak: `GET /events/{ev}/tickets`, `POST /nik/validate`,
-`POST /bookings`, `GET /bookings/{id}`, `GET /bookings/{id}/tickets`,
+`POST /bookings`, `GET /bookings/{id}`,
 `GET /payments/{id}/methods`, `POST /payments/{id}`, `POST /payments/{id}/retry`,
-`GET /payments/{id}/status` — sembilan endpoint di tiga service. v1.0 tidak
+`GET /payments/{id}/status` — delapan endpoint (sembilan sebelum ADR-006 §8.8) di tiga service. v1.0 tidak
 mendaftarkannya sebagai kode bersama sama sekali, dan memberi tiap service "grant.go"
 sendiri.
 
@@ -691,7 +714,8 @@ keduanya menyertai tenggat tertentu, bukan jam server secara umum.
 ### 3.10 `pkg/eticket` — token e-tiket untuk pemegang NIK
 
 **Mengapa ia bersama, bukan milik satu service.** Dua service menyentuh kunci yang sama dan
-dari dua sisi: `notification` **menerbitkan** token ke dalam tautan email, `user-service`
+dari dua sisi: `notification` **menerbitkan** token ke dalam tautan email (dan, sejak ADR-006 §8.8,
+`booking-service` ke dalam `eticket_url` pada `GET /bookings/{id}`), `user-service`
 **memverifikasinya** pada `GET /tickets/{id}/eticket?t=…` (kontrak §6.2). Menduplikasi HMAC
 di dua tempat berarti dua definisi tentang apa yang ditandatangani, dan yang pertama
 menyimpang akan membuat setiap tautan yang sudah terkirim gagal — tanpa cara mengetahuinya
@@ -1064,9 +1088,11 @@ kategori hardcoded (`domain/valueobject/category.go`), tanpa DB, Redis, atau NIK
 Completion mengganti seluruh layer infrastruktur dan menambah tiga endpoint.
 
 **Endpoint yang dimiliki service ini**: `GET /events/{event_id}/tickets` (§4.1 kontrak),
-`POST /bookings` (§4.3), `GET /bookings/{booking_id}` (§4.4),
-`GET /bookings/{booking_id}/tickets` (FR-27, ADR §4 dan §9 langkah 5).
+`POST /bookings` (§4.3), `GET /bookings/{booking_id}` (§4.4, termasuk `eticket_url` bertoken saat
+`CONFIRMED` — FR-27, NFR-10). ~~`GET /bookings/{booking_id}/tickets`~~ dihapus (ADR-006 §8.8).
 
+> ⚠️ **Tidak berlaku lagi (ADR-006 §8.8): endpoint di bawah dihapus; catatan dipertahankan sebagai riwayat.**
+>
 > **`GET /bookings/{id}/tickets` ditugaskan ke sini, bukan ke user-service.** ADR §12
 > mendaftarkannya pada tabel kepemilikan objek sebagai endpoint ber-grant, dan
 > user-service tidak punya middleware grant (ia bekerja dengan JWT akun). ADR §9 langkah 5
@@ -1082,7 +1108,6 @@ services/booking/internal/booking/
     get_ticket_selection.go  ← BARU: GET /events/{id}/tickets + claim GRANTED→SELECTING
     create_booking.go        ← tulis ulang penuh
     get_booking.go           ← ganti repo in-memory dengan Postgres
-    get_booking_tickets.go   ← BARU: GET /bookings/{id}/tickets
     abandon_booking.go       ← BARU: transisi ABANDONED (§5.6)
     init.go                  ← tambah port baru
   domain/
@@ -1104,7 +1129,7 @@ services/booking/internal/booking/
       booking.go             ← BARU: IBookingRepository
       booking_item.go        ← BARU: booking_items + nik_claims dalam satu transaksi
       category.go            ← BARU: ticket_categories
-      ticket.go              ← BARU: baca tickets untuk /bookings/{id}/tickets
+      ticket.go              ← BARU: baca tickets untuk GET /bookings/{id} (CONFIRMED)
     redis/
       init.go                ← BARU
       stock.go               ← BARU: hold + release via pkg/redisscript
@@ -1115,12 +1140,11 @@ services/booking/internal/booking/
     http/
       booking.go             ← handler
       ticket_selection.go    ← BARU
-      booking_tickets.go     ← BARU
-      router.go              ← + 2 rute, + pkg/grantauth.Middleware
+      router.go              ← + 1 rute, + pkg/grantauth.Middleware
       init.go
   memory/                    ← HAPUS seluruh direktori
   port/
-    inbound/booking.go       ← + GetTicketSelection, GetBookingTickets, Abandon
+    inbound/booking.go       ← + GetTicketSelection, Abandon
     outbound/
       booking.go             ← IBookingRepository
       booking_item.go        ← BARU: IBookingItemRepository
@@ -1372,7 +1396,7 @@ seluruh UPDATE/INSERT**, dan langkahnya **UPDATE** baris yang ada, bukan INSERT 
       -- memuat holder_name adalah sisa versi lama — lihat §21.
 ```
 
-### 5.5 Usecase: `GetBooking` dan `GetBookingTickets`
+### 5.5 Usecase: `GetBooking`
 
 ```
 GET /bookings/{booking_id}            -- kontrak §4.4
@@ -1381,15 +1405,9 @@ GET /bookings/{booking_id}            -- kontrak §4.4
   3. status  := bookingstate.ToAPI(booking.Status)    -- pkg/bookingstate
   4. bila CONFIRMED: tickets := ticketRepo.ListByBooking(id)
        sertakan ticket_id + eticket_url per kursi
+       eticket_url = "/tickets/{ticket_id}/eticket?t=" + pkg/eticket.Mint(ticket_id, event_date + 1 hari)
+       (token sama dengan email; NFR-10 tanpa endpoint terpisah, ADR-006 §8.8)
   5. payment_ttl dari booking.PaymentExpiresAt (bukan dihitung ulang)
-
-GET /bookings/{booking_id}/tickets    -- FR-27
-  1. booking := repo.GetOwned(id, grant.Token)   -- 0 baris → 404
-  2. status != CONFIRMED → 409
-  3. tickets := ticketRepo.ListByBooking(id)
-       qr_payload := row.qr_nonce          -- pemetaan nama, §2.3
-  4. Halaman pembayaran MEMANG memakai polling GET /bookings/{id} tiap 2 detik
-     (ADR-005 §13); endpoint ini dipanggil sekali setelah CONFIRMED.
 ```
 
 ### 5.6 Usecase: `Abandon` — transisi `ABANDONED`
@@ -4488,7 +4506,7 @@ pembayaran habis → `PENDING_CANCELLATION` lalu EXPIRED + Midtrans expire.
 | 17 | `services/queue` | Lambda | 1–7, 15 | `POST …/join`, `GET …/me`, `GET …/serving` |
 | 18 | `services/admission-ctl` | **ECS Fargate** | 1–6, 8, 12–14 | Loop 500 ms: lease, pause+grace, sweep ×5 status, advance, broadcast, 2 rekonsiliasi, drain, charge reconciler |
 | 19 | `services/sse-server` | **ECS Fargate** | 1, 3, 8 | `GET …/queue/stream`, `CtlHeartbeatAge` |
-| 20 | `services/booking` (completion) | Lambda | 13, 5, 7, 18 | `GET /events/{id}/tickets`, `POST /bookings`, `GET /bookings/{id}`, `GET /bookings/{id}/tickets` |
+| 20 | `services/booking` (completion) | Lambda | 13, 5, 7, 18 | `GET /events/{id}/tickets`, `POST /bookings`, `GET /bookings/{id}` |
 | 21 | `services/payment-api` | Lambda | 13, 4–7, 20 | `/payments/*`, webhook, `/admin/reconciliation/disputed` |
 | 22 | `services/outbox-publisher` (perubahan) | Lambda | 6, 9, 21 | Efek samping per tipe, bukan hanya SQS |
 | 23 | `services/notification` (perubahan) | Lambda | 9, 22 | `booking.expired` multi-holder, locale |
