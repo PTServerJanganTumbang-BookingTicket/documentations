@@ -4,6 +4,7 @@
 **Tanggal**: 24 Oktober 2026
 **Decider**: SJT Team
 **Supersedes**: ADR-003, ADR-004
+**Amended by**: ADR-006 (antrian: pending grant, formula admission, hitungan dari Aurora, satu penulis grant, broadcast saja, **pause admission dihapus**, estimasi waktu tunggu di frontend). Semua penyebutan `paused`, "pause admission", BR-13a, BR-22 dan `PAUSE_TTL_GRACE_SECONDS` di dokumen ini **tidak berlaku lagi** (ADR-006 §4.3)
 **Dokumen Referensi**: `requirement/requirements.md` v1.0 (Finalized), Tender Rusuh Booking Ticket.pdf, ADR-001, ADR-002
 
 ---
@@ -90,6 +91,8 @@ dikelola lewat Bagian 11.
 
 ## 4. Arsitektur Final
 
+> ⚠️ **Diubah oleh ADR-006** — diagram di bagian ini masih menampilkan `regrant`, `slots:open` dan `sse-grant`; ketiganya dihapus (ADR-006 §2, §3, §4).
+
 ```
   ┌──────────────────────────────┐              ┌──────────────────────────────┐
   │         Web Browser          │              │         Mobile App           │
@@ -131,7 +134,6 @@ dikelola lewat Bagian 11.
   │   token bucket Redis per IP      │      │ POST /nik/validate         FR-15a│
   │   rl:join:{ip}  20 / 5 menit     │      │ POST /bookings              FR-16│
   │   rl:sse:{ip}   5 conn / detik   │      │ GET  /bookings/{id}         FR-17│
-  │                                  │      │ GET  /bookings/{id}/tickets FR-27│
   │                                  │      │ GET  /payments/{id}/methods FR-20│
   │                                  │      │ POST /payments/{id}         FR-20│
   │                                  │      │ POST /payments/{id}/retry        │
@@ -358,6 +360,8 @@ dikelola lewat Bagian 11.
 
 ## 5. Halaman Utama dan Jalur Masuk
 
+> ⚠️ **Diubah oleh ADR-006** — bypass FR-05 tidak lagi menjalankan Lua di Lambda join; join hanya menunggu ≤ 1 detik sampai tick admission-ctl berikutnya memberi grant (ADR-006 §4.1).
+
 | Requirement | Implementasi |
 |---|---|
 | FR-01 daftar event | `GET /events` — Lambda + cache CloudFront 30 detik. Halaman utama dapat di-cache; ia tidak punya konsep freshness per-customer |
@@ -372,6 +376,8 @@ tidak ada jalur admission kedua yang bisa menyimpang dari yang utama.
 ---
 
 ## 6. Satu Jalur Admission, dan Integritas `slots:open`
+
+> ⚠️ **Diubah oleh ADR-006** — Lua `advance_now_serving.lua` di bawah **digantikan** oleh ADR-006 §3.4 (tanpa `ZREM`, tanpa `regrant`, formula `min(MAX − open, ceil(stock/3) − browsing)`, `now_serving ≤ issued`, pagar CAS). **Jangan menyalin Lua di bagian ini.**
 
 Saat `POST /events/{ev}/queue/join`, dalam urutan ini:
 
@@ -560,6 +566,8 @@ sekaligus secara atomik.
 
 ### Baris `bookings` dibuat saat GRANTED
 
+> ⚠️ **Diubah oleh ADR-006** — kompensasi `DECRBY slots:open` + `SADD regrant` digantikan oleh pending grant yang diulang tanpa batas; INSERT idempoten via `UNIQUE (event_id, queue_token)` (ADR-006 §2).
+
 Prasyarat rekonsiliasi (tanpa baris ini `COUNT(*)` tidak melihat slot granted-unclaimed,
 sehingga rekonsiliasi justru menyebabkan over-admission) dan penutup celah rebuild.
 
@@ -595,6 +603,8 @@ pelanggaran NFR-02 "Jangan PHP" paling langsung.
 
 ### Kepemilikan `slots:open`
 
+> ⚠️ **Diubah oleh ADR-006** — `slots:open:{ev}` dihapus. `open` dan `browsing` dihitung dari Aurora tiap tick; tidak ada komponen yang men-DECR penghitung antrian (ADR-006 §3).
+
 > **Berkurang HANYA pada transisi TERMINAL.** Lua hanya `INCR`. `DECR` oleh pemanggil,
 > **sebelum** `EVALSHA`, hanya bila `UPDATE` Aurora mengenai tepat 1 baris.
 
@@ -615,6 +625,8 @@ pelanggaran NFR-02 "Jangan PHP" paling langsung.
 Double-DECR → `slots:open` negatif → `deficit = target − (−n)` → over-admission.
 
 ### Rekonsiliasi
+
+> ⚠️ **Diubah oleh ADR-006** — rekonsiliasi `slots:open` tidak berlaku lagi karena penghitungnya dihapus; `COUNT` yang sama kini dipakai langsung tiap tick untuk admission (ADR-006 §3). Rekonsiliasi stok di bawah tetap berlaku.
 
 ```
 Tiap tick ke-20 (≈10 detik):
@@ -868,6 +880,8 @@ menghukum customer yang menunggu lama karena antrian memang panjang.
 
 ### `regrant:{ev}` dan pause/resume
 
+> ⚠️ **Diubah oleh ADR-006** — `regrant:{ev}` dihapus. Token yang INSERT-nya gagal tetap di `by_ticket` sebagai pending grant dan diulang tiap tick (ADR-006 §2.3). Aturan pause di bagian ini tetap berlaku untuk ADVANCE dan RECOVER.
+
 `regrant:{ev}` memegang token yang **kita** gagal layani: token yang sudah dipilih untuk
 di-grant, tetapi batch INSERT `bookings`-nya gagal setelah `GRANT_INSERT_MAX_RETRIES`. Slot
 dikembalikan (`DECRBY slots:open`) dan token masuk sini, karena alternatifnya adalah
@@ -942,6 +956,8 @@ post-sale job: DEL regrant:{ev} by_ticket
 > jadi dalam operasi normal ia kosong dan `deficit` seluruhnya menjadi milik antrian.
 
 ### Apa yang dihentikan `paused`, dan apa yang tetap jalan
+
+> ⚠️ **Dihapus oleh ADR-006 §4.3** — pause admission dihapus seluruhnya (BR-13a, BR-22). Breaker tetap fail closed, tetapi tidak menghentikan antrian; tidak ada grace +60 detik dan tidak ada field `paused`.
 
 `paused` bukan sekadar field untuk banner. Ia **melewati seluruh langkah ADVANCE** pada tick
 admission-ctl (Bagian 4 langkah 2):
@@ -1024,6 +1040,8 @@ panggilan yang memang harus ia lakukan. Klien menghitung
 ---
 
 ## 7. Expiry: Aurora Otoritatif, ZSET Penjadwal
+
+> ⚠️ **Dihapus oleh ADR-006 §4.3** — pause admission dihapus seluruhnya (BR-13a, BR-22). Breaker tetap fail closed, tetapi tidak menghentikan antrian; tidak ada grace +60 detik dan tidak ada field `paused`.
 
 ### Dua TTL yang berurutan, bukan tumpang tindih
 
@@ -1579,6 +1597,8 @@ Payment sukses      →  keduanya tetap (kursi final, NIK terpakai untuk event i
 
 ### Rate limiter terdistribusi dan circuit breaker
 
+> ⚠️ **Dihapus oleh ADR-006 §4.3** — pause admission dihapus seluruhnya (BR-13a, BR-22). Breaker tetap fail closed, tetapi tidak menghentikan antrian; tidak ada grace +60 detik dan tidak ada field `paused`.
+
 | | Dukcapil | Payment Gateway |
 |---|---|---|
 | Sifat | Read / verify | **Write — memindahkan uang** |
@@ -1893,6 +1913,8 @@ ke charge reconciler (Bagian 8).
 
 ### Langkah 2 — Webhook: commit, lalu terbitkan inline
 
+> ⚠️ **Diubah oleh ADR-006** — langkah inline `DECR slots:open` + `EVALSHA advance_now_serving.lua` + `PUBLISH sse-broadcast / sse-grant` **dihapus tanpa pengganti**: tempat yang bebas terpakai pada tick admission-ctl berikutnya (≤ 500 ms). Hanya admission-ctl yang memberi grant (ADR-006 §4.1). Berlaku juga untuk konsumer outbox (Langkah 4).
+
 ```
 POST /payments/webhook
   ← Resource policy API Gateway: allowlist IP gateway (dulu rule WAF)
@@ -2043,12 +2065,14 @@ pencarian manual.
 
 ### Langkah 5 — Email tidak boleh menggagalkan transaksi
 
+> ⚠️ **Diubah oleh ADR-006 §8.8** — `GET /bookings/{id}/tickets` dihapus. Jalur NFR-10 kini `GET /bookings/{id}` saat `PAID`: `tickets[].eticket_url` sudah membawa `?t={eticket_token}`, jadi e-tiket dapat dibuka tanpa akun dan tanpa email.
+
 > **Booking `CONFIRMED` sejak pembayaran tercatat di Aurora.** Kegagalan SES tidak mengubah
 > status booking — sesuai NFR-10.
 
 ```
 SES gagal → SQS retry backoff → N percobaan → DLQ → alarm ops
-GET /bookings/{id}/tickets    ← e-tiket SELALU dapat diambil dari tabel tickets
+GET /bookings/{id}           ← e-tiket SELALU dapat dibuka: eticket_url bertoken ?t= (ADR-006 §8.8)
 ```
 
 Email adalah kenyamanan; endpoint ini adalah sumbernya. Tanpa endpoint ini, "kegagalan email
@@ -2145,6 +2169,8 @@ dibayar untuk task yang tidak melakukan apa pun.
 > menghapus gunanya pada kasus yang sebenarnya, yaitu task tertinggal setelah sale.
 
 ### `admission-ctl`: jumlah instance bukan jawabannya
+
+> ⚠️ **Diubah oleh ADR-006** — leader lease + standby **ditunda ke produksi** (ADR-006 §9). POC menjalankan 1 task; ECS mengganti task yang mati, pending grant mencegah kehilangan data.
 
 `rusuh-admission-ctl` adalah **control loop**, bukan request handler, dan karena itu
 `desired_count` dinaikkan ke **2 — 1 leader + 1 standby — dengan leader lease**:
@@ -2427,6 +2453,8 @@ function broadcast(eventId, payload) {  // chunk + backpressure
 
 ### Handler klien — SSE (web dan mobile)
 
+> ⚠️ **Diubah oleh ADR-006** — tidak ada lagi event `grant`. Handler memanggil `GET /queue/me` saat `nowServing ≥ ticket_no` pada payload apa pun, termasuk snapshot setelah reconnect (ADR-006 §4.2).
+
 ```javascript
 const es = new EventSource(url, { withCredentials: true });
 
@@ -2458,6 +2486,8 @@ es.onerror = () => { /* biarkan retry bawaan; 410 menghentikannya sendiri */ };
 ---
 
 ## 12. Autentikasi, Identitas, Kontak, dan Re-entrancy
+
+> ⚠️ **Diubah oleh ADR-006** — baris yang menyebut `regrant` (RTO, rebuild) dibaca sebagai pending grant (ADR-006 §2.6). Masuk normal kini selalu lewat `/queue/me` setelah `nowServing ≥ ticket_no` (ADR-006 §4.2).
 
 Stream-ticket sekali pakai **merusak reconnect bawaan** `EventSource`: percobaan ulang ke URL
 yang sama menemui ticket yang sudah dipakai → `401` → menurut HTML Living Standard status
@@ -2518,6 +2548,8 @@ dan menjual slot antriannya — dan di antrian 300.000 untuk 10.000 tiket, slot 
 > itulah mengapa login tidak memerlukan pemeriksaan ini sama sekali.
 
 ### Posisi antrian durabel: buffer di Redis, tulis ter-batch ke Aurora
+
+> ⚠️ **Diubah oleh ADR-006** — `qpersist` + `queue_entries` + rebuild **ditunda ke produksi** (ADR-006 §9). POC bergantung pada Redis Multi-AZ.
 
 Posisi antrian yang belum di-grant adalah satu-satunya state yang dulu tidak punya salinan
 durabel: `ticket_no` hanya ada di `token:{uuid}` dan `by_ticket`, sementara baris Aurora baru
@@ -2782,7 +2814,7 @@ customer bersamaan enumerasinya sepele.
 | Endpoint | Terikat |
 |---|---|
 | `GET /bookings/{id}` | ✅ |
-| `GET /bookings/{id}/tickets` | ✅ |
+| ~~`GET /bookings/{id}/tickets`~~ (dihapus, ADR-006 §8.8) | — |
 | `GET /payments/{id}/methods` | ✅ |
 | `POST /payments/{id}` | ✅ |
 | `POST /payments/{id}/retry` | ✅ |
@@ -2847,6 +2879,8 @@ verifikasi hanya membuka riwayat pesanan.
 
 ## 13. Mobile, Polling Fallback, Dashboard, i18n
 
+> ⚠️ **Diubah oleh ADR-006** — `/queue/serving` tanpa query string, TTL CDN 1 detik, respons menambah `poll_tiers` (ADR-006 §8.5). Klien mobile tidak menunggu event `grant` (ADR-006 §4.2).
+
 **Mobile** memakai `react-native-sse` pada endpoint yang sama; auth via header; keepalive 15
 detik; reconnect otomatis dengan `Last-Event-ID`; **handler `sold-out` wajib memanggil
 `close()` sama seperti web**. API identik untuk web dan mobile (FR-24, NFR-08).
@@ -2894,6 +2928,8 @@ yang diterbitkan `outbox-publisher`.
 ---
 
 ## 14. Pemenuhan Requirement
+
+> ⚠️ **Diubah oleh ADR-006** — FR-05 dipenuhi oleh join yang menunggu ≤ 1 detik untuk grant dari admission-ctl (bukan bypass Lua), FR-08 oleh `nowServing ≥ ticket_no` → `/queue/me` (bukan `event: grant`), FR-09 oleh ADR-006 §6.
 
 | ID | Requirement | Dipenuhi oleh |
 |---|---|---|
@@ -3004,6 +3040,8 @@ Working set Redis pada 300.000 ≈ 80 MB terhadap 13 GB per node: sizing didasar
 
 ## 16. Konsekuensi
 
+> ⚠️ **Diubah oleh ADR-006** — baris "Batch INSERT GRANTED gagal" dan "`regrant` livelock" digantikan oleh pending grant yang diulang tanpa batas + alarm 5 detik (ADR-006 §2.3).
+
 **Positif**
 
 - NFR-06 terpenuhi pada semua jalur normal: ~157ms (pembayaran inline), ~632ms (expiry)
@@ -3093,6 +3131,8 @@ Working set Redis pada 300.000 ≈ 80 MB terhadap 13 GB per node: sizing didasar
 
 ## 17. Yang Masih Terbuka
 
+> ⚠️ **Diubah oleh ADR-006** — #5 (formula admission) dan #10 (`SALE_WINDOW_SECONDS` untuk POC) diputuskan di ADR-006 §3 dan §8.2; nilai `MAX_CONCURRENT_SLOTS` tetap terbuka. Butir terbuka baru ada di ADR-006 §10.
+
 | # | Item | Pemilik |
 |---|---|---|
 | 1 | `DUKCAPIL_RATE_LIMIT_RPS` dan **SLA ketersediaan** Dukcapil | **Pemilik tender / Dukcapil** |
@@ -3165,5 +3205,6 @@ seluruh endpoint.
   ilustrasi polling + CDN di dalamnya digantikan SSE pada dokumen ini)*
 - ADR-003 — Mekanisme Pengiriman Update Posisi Antrian ke Client *(superseded by ADR-005)*
 - ADR-004 — Pemilihan Compute Service *(superseded by ADR-005)*
+- ADR-006 — Amandemen Antrian *(mengamandemen ADR-005)*
 - [HTML Living Standard: Server-sent events](https://html.spec.whatwg.org/multipage/server-sent-events.html)
   — `retry:`, `Last-Event-ID`, dan perilaku *fail the connection* pada status non-200

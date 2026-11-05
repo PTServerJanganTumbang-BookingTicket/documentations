@@ -1,7 +1,10 @@
+# ARCHIVED 2026-11-05 — NOT MAINTAINED.
+# Source of truth for the API is now Apidog (`../rusuh-booking-apidog.json`) + `../api-contracts.md`.
+# Kept for history (tender rule 5). GET /bookings/{booking_id}/tickets removed 2026-11-05 (ADR-006 §8.8). Last version: 2.7.0. Export a fresh OpenAPI from Apidog when a tool needs one.
 openapi: 3.0.3
 info:
   title: Rusuh Booking Tiket API
-  version: "2.5.1"
+  version: "2.7.0"
   description: |
     API contracts untuk sistem penjualan tiket konser Rusuh dengan Virtual Waiting Room.
 
@@ -55,7 +58,8 @@ info:
     ### Status Antrian
     Setelah `POST /events/{id}/queue/join`, klien membuka SSE stream.
     Posisi dihitung klien: `position = ticket_no − nowServing`.
-    Saat menerima event `grant`, klien memanggil `GET /events/{id}/queue/me` untuk mendapat `grant_token`.
+    Saat `nowServing ≥ ticket_no` (pada payload SSE mana pun, termasuk snapshot), klien memanggil
+    `GET /events/{id}/queue/me` untuk mendapat `grant_token`. Tidak ada event `grant` (ADR-006 §4.2).
 
 servers:
   - url: https://api.rusuh.id/v1
@@ -66,6 +70,8 @@ tags:
     description: Magic link login, refresh sesi, dan registrasi akun
   - name: Accounts
     description: Manajemen NIK tersimpan (Daftar_NIK_Teman)
+  - name: Tickets
+    description: Tiket milik user dan e-ticket. Di Apidog berada di dalam folder Accounts (Accounts › Tickets)
   - name: Events
     description: Daftar dan detail event konser
   - name: Queue
@@ -76,8 +82,6 @@ tags:
     description: Validasi NIK ke Dukcapil
   - name: Payment
     description: Inisiasi pembayaran, status, webhook gateway
-  - name: User
-    description: Tiket milik user dan e-ticket
   - name: Admin
     description: Rekonsiliasi operasional (bukan jalur customer)
 
@@ -98,8 +102,8 @@ components:
       in: header
       name: X-Grant-Token
       description: >
-        Grant slot opaque (`gt_…`), diperoleh dari `GET /events/{event_id}/queue/me` setelah
-        event `grant`. Membuktikan pemegangnya punya slot, bukan siapa dirinya — tamu
+        Grant slot opaque (`gt_…`), diperoleh dari `GET /events/{event_id}/queue/me` saat
+        `nowServing ≥ ticket_no` (atau langsung dari join bila antrian kosong). Membuktikan pemegangnya punya slot, bukan siapa dirinya — tamu
         mendapatkannya juga. Wajib pada seluruh endpoint booking dan payment. Tersimpan di
         `grant:{token} EX GRANT_TOKEN_TTL_SECONDS`, jadi setiap verifikasi membacanya dari
         Redis dan satu `DEL` mencabutnya.
@@ -153,6 +157,190 @@ components:
             GET /time. Diisi di layer respons bersama, bukan oleh handler.
             Contoh per endpoint di file ini menghilangkannya demi keringkasan — ia tetap
             selalu ada.
+
+    SaleState:
+      type: string
+      enum: [SCHEDULED, OPEN, SOLD_OUT, CLOSED]
+      description: >
+        State sale (`queue:{ev}:state`). SOLD_OUT reversibel (stok dapat kembali dari booking
+        yang kedaluwarsa); CLOSED final, disetel SOLD_OUT_HOLD_SECONDS (930 detik) setelah sold_out_at.
+      example: OPEN
+
+    QueueJoinData:
+      type: object
+      description: >
+        `data` respons POST /queue/join. Bentuk antre (ticket_no, position, queue_token) atau
+        bentuk antrian kosong (granted, grant_token). Estimasi waktu tunggu TIDAK dikirim:
+        frontend menghitungnya dari ratePerMin (api-contracts §3.5).
+      properties:
+        ticket_no:
+          type: integer
+          example: 32748
+        now_serving:
+          type: integer
+          example: 31500
+        position:
+          type: integer
+          description: ticket_no − now_serving. ≤ 0 berarti giliran tiba (panggil /queue/me).
+          example: 1248
+        queue_token:
+          type: string
+          description: >
+            Token ruang tunggu. Mobile menyimpannya di secure store dan mengirimnya sebagai
+            X-Queue-Token. Web mengabaikannya dan memakai cookie HttpOnly queue_token (jangan
+            simpan di localStorage).
+          example: qt_xyz789
+        sse_url:
+          type: string
+          example: /queue/stream
+        rejoined:
+          type: boolean
+          description: true bila keterlibatan yang ada dipulihkan (BR-07 / BR-09).
+        state:
+          type: string
+          description: Hanya pada rejoined. Keadaan engagement (§3.3); bila bukan QUEUED, rutekan sesuai state.
+          example: QUEUED
+        event:
+          type: object
+          properties:
+            id: { type: string, example: evt_konser_a }
+            name: { type: string, example: Konser A — Jakarta }
+        granted:
+          type: boolean
+          description: true bila antrian kosong dan admission-ctl memberi grant dalam ≤ 1 detik (FR-05).
+        grant_token:
+          type: string
+          description: Hanya bila granted. Dikirim sebagai X-Grant-Token ke endpoint booking dan payment.
+          example: gt_abc123
+        booking_expires_at:
+          type: string
+          format: date-time
+
+    QueueStateData:
+      type: object
+      required: [state]
+      description: "`data` respons GET /queue/me. Field yang ada bergantung pada `state`."
+      properties:
+        state:
+          type: string
+          enum: [QUEUED, GRANTED, SELECTING, AWAITING_PAYMENT, CONFIRMED, EXPIRED]
+        ticket_no:
+          type: integer
+          description: Hanya QUEUED.
+        now_serving:
+          type: integer
+          description: Hanya QUEUED. ticket_no ≤ now_serving = grant pending ("sebentar lagi"); ulangi setelah 1 detik.
+        grant_token:
+          type: string
+          description: GRANTED, SELECTING, AWAITING_PAYMENT. Dikirim sebagai X-Grant-Token.
+        booking_id:
+          type: string
+        booking_expires_at:
+          type: string
+          format: date-time
+        payment_expires_at:
+          type: string
+          format: date-time
+        payment_ref:
+          type: string
+        server_time:
+          type: string
+          format: date-time
+
+    NowServingData:
+      type: object
+      required: [now_serving, rate_per_min, state, server_time, poll_after_ms, poll_tiers]
+      properties:
+        now_serving:
+          type: integer
+          example: 31600
+        rate_per_min:
+          type: integer
+          description: Nomor yang dilewati now_serving per menit. Frontend memakai rumus estimasi api-contracts §3.5.
+          example: 318
+        state:
+          $ref: "#/components/schemas/SaleState"
+        server_time:
+          type: string
+          format: date-time
+        poll_after_ms:
+          type: integer
+          description: Default bila posisi tidak diketahui.
+          example: 1000
+        poll_tiers:
+          type: array
+          description: Tabel interval milik server; klien memilih baris pertama dengan max_position ≥ posisinya (null = tak terbatas).
+          items:
+            type: object
+            required: [max_position, poll_after_ms]
+            properties:
+              max_position:
+                type: integer
+                nullable: true
+              poll_after_ms:
+                type: integer
+
+    QueueStreamUpdate:
+      type: object
+      required: [nowServing, state, ratePerMin, serverTime]
+      description: >
+        SSE event default (tanpa nama): snapshot saat connect, tiap nowServing berubah, dan
+        heartbeat 10 detik. Byte identik untuk semua koneksi event. Baris `id:` = nowServing.
+      properties:
+        nowServing:
+          type: integer
+          example: 31604
+        state:
+          $ref: "#/components/schemas/SaleState"
+        ratePerMin:
+          type: integer
+          description: Nomor yang dilewati nowServing per menit (60 detik terakhir selama OPEN). Untuk estimasi di frontend.
+          example: 318
+        serverTime:
+          type: string
+          format: date-time
+          example: "2026-10-24T13:10:01.004Z"
+
+    QueueStreamStatus:
+      type: object
+      required: [state, serverTime]
+      description: >
+        SSE `event: status`: dikirim sekali pada tiap transisi state (OPEN → SOLD_OUT,
+        SOLD_OUT → OPEN, → CLOSED). Pada SOLD_OUT klien tetap tersambung; pada CLOSED event
+        sold-out menyusul.
+      properties:
+        state:
+          $ref: "#/components/schemas/SaleState"
+        soldOutAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: Hanya pada SOLD_OUT.
+        serverTime:
+          type: string
+          format: date-time
+
+    QueueStreamStale:
+      type: object
+      required: [stale]
+      description: >
+        SSE `event: stale`: data antrian berhenti segar (dulu event `status`). Hanya pada
+        transisi. Klien meredupkan angka dan menampilkan "Memperbarui…", TIDAK reconnect sendiri.
+      properties:
+        stale:
+          type: boolean
+        reason:
+          type: string
+          enum: [redis_disconnected, no_admission_updates]
+
+    QueueStreamSoldOut:
+      type: object
+      required: [message]
+      description: "SSE `event: sold-out`, setelah status CLOSED. Klien WAJIB es.close()."
+      properties:
+        message:
+          type: string
+          example: Tiket sudah habis
 
     MetaPagination:
       allOf:
@@ -953,9 +1141,11 @@ paths:
       description: |
         User bergabung ke antrian. Dipanggil saat klik "Beli Tiket" / "Masuk Antrian".
 
-        **FR-05 — Bypass antrian kosong**: bila `queue_depth == 0` dan stok tersedia,
-        Lua memberi grant pada permintaan yang sama. Respons berisi `granted: true` dan
-        `grant_token` — klien langsung ke Detail Ticket tanpa membuka SSE stream.
+        **FR-05 — Antrian kosong**: bila `ticket_no == now_serving + 1`, server menunggu hingga
+        1 detik sampai tick admission-ctl berikutnya (tiap 500 ms; satu-satunya penulis grant,
+        ADR-006 §4.1) memberi grant. Bila grant terbit dalam waktu itu, respons berisi `granted: true` dan
+        `grant_token` — klien langsung ke Detail Ticket tanpa membuka SSE stream. Bila belum,
+        respons antre biasa; giliran tiba lewat SSE + `GET /queue/me`.
 
         **Re-entrancy**: user yang sudah di antrian mendapat posisi lama kembali.
 
@@ -1044,6 +1234,13 @@ paths:
               description: queue_token HttpOnly cookie
           content:
             application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    $ref: "#/components/schemas/Meta"
+                  data:
+                    $ref: "#/components/schemas/QueueJoinData"
               examples:
                 joined:
                   summary: New queue position
@@ -1055,7 +1252,7 @@ paths:
                       ticket_no: 32748
                       now_serving: 31500
                       position: 1248
-                      estimated_wait_minutes: 4
+                      queue_token: qt_xyz789
                       sse_url: /queue/stream
                       event:
                         id: evt_konser_a
@@ -1070,7 +1267,7 @@ paths:
                       ticket_no: 32748
                       now_serving: 31520
                       position: 1228
-                      estimated_wait_minutes: 4
+                      queue_token: qt_xyz789
                       sse_url: /queue/stream
                       rejoined: true
                 bypass:
@@ -1148,17 +1345,22 @@ paths:
 
         | Event | Kapan | Payload |
         |---|---|---|
-        | *(unnamed, default)* | Tiap `nowServing` berubah, `paused` berubah, atau 10 detik (heartbeat) | `{nowServing, state, ratePerMin, paused, serverTime}` |
-        | `grant` | Giliran customer tiba (slot sudah diamankan) | `{}` — klien memanggil `GET /queue/me` |
-        | `status` | Koneksi Redis bermasalah | `{stale: bool}` |
-        | `sold-out` | Tiket habis saat menunggu | `{message}` — klien **WAJIB** `es.close()` |
+        | *(unnamed, default)* | Snapshot saat connect, tiap `nowServing` berubah, atau 10 detik (heartbeat) | `QueueStreamUpdate` `{nowServing, state, ratePerMin, serverTime}` |
+        | `status` | Tiap transisi state: `OPEN → SOLD_OUT`, `SOLD_OUT → OPEN`, `→ CLOSED` | `QueueStreamStatus` `{state, soldOutAt, serverTime}` |
+        | `stale` | Data berhenti segar (Redis putus / tanpa broadcast 30 detik), dan saat pulih | `QueueStreamStale` `{stale, reason}` |
+        | `sold-out` | Tepat setelah `status {state: CLOSED}` | `QueueStreamSoldOut` `{message}` — klien **WAJIB** `es.close()` |
         | `reconnect` | Task sedang shutdown | Retry jitter 1–15 detik |
         | `: keepalive` | Setiap 15 detik | Komentar SSE (tidak memicu handler) |
 
         **Snapshot awal** dikirim segera saat koneksi terbuka — posisi utuh tanpa menunggu tick berikutnya (FR-10).
 
-        Klien menghitung posisi: `position = ticket_no − nowServing`.
-        Saat `paused = true` tampilkan banner; jangan tampilkan error — antrian tidak hilang.
+        Semua koneksi event menerima **byte yang identik**. Frontend menghitung
+        `position = ticket_no − nowServing` dan estimasi menit dari `ratePerMin`
+        (api-contracts §3.5). Bila `nowServing ≥ ticket_no`, klien memanggil `GET /queue/me`.
+
+        Skema `data` tiap event ada di `components/schemas` (`QueueStreamUpdate`,
+        `QueueStreamStatus`, `QueueStreamStale`, `QueueStreamSoldOut`) dan dipetakan di
+        `x-sse-events` pada respons 200.
 
         **HTTP 410 Gone** bila event sudah sold out — `EventSource` berhenti permanen.
         **Requirement**: FR-07, FR-08, FR-09, FR-10, BR-10, NFR-06
@@ -1184,35 +1386,57 @@ paths:
             text/event-stream:
               schema:
                 type: string
+                description: >
+                  Aliran frame SSE (`event:` opsional, `id:` opsional, `data:` JSON). Skema
+                  JSON `data` per nama event ada di x-sse-events.
+              x-sse-events:
+                message:
+                  $ref: "#/components/schemas/QueueStreamUpdate"
+                status:
+                  $ref: "#/components/schemas/QueueStreamStatus"
+                stale:
+                  $ref: "#/components/schemas/QueueStreamStale"
+                sold-out:
+                  $ref: "#/components/schemas/QueueStreamSoldOut"
               examples:
                 initial_snapshot:
                   summary: Snapshot awal (dikirim segera saat connect)
                   value: |
                     id: 31600
-                    data: {"nowServing":31600,"state":"OPEN","ratePerMin":318,"paused":false,"serverTime":"2026-10-24T13:10:00.412Z"}
+                    data: {"nowServing":31600,"state":"OPEN","ratePerMin":318,"serverTime":"2026-10-24T13:10:00.412Z"}
 
                 position_update:
                   summary: Update posisi (default event)
                   value: |
-                    data: {"nowServing":31604,"state":"OPEN","ratePerMin":318,"paused":false,"serverTime":"2026-10-24T13:10:01.004Z"}
+                    id: 31604
+                    data: {"nowServing":31604,"state":"OPEN","ratePerMin":318,"serverTime":"2026-10-24T13:10:01.004Z"}
 
-                grant:
-                  summary: Giliran tiba — klien panggil GET /queue/me
+                status_sold_out:
+                  summary: Stok habis (reversibel) — klien tetap tersambung
                   value: |
-                    event: grant
-                    data: {}
+                    event: status
+                    data: {"state":"SOLD_OUT","soldOutAt":"2026-10-24T13:40:12.000Z","serverTime":"2026-10-24T13:40:12.120Z"}
 
-                sold_out:
-                  summary: Tiket habis — klien WAJIB es.close()
+                status_reopened:
+                  summary: Stok kembali dari booking kedaluwarsa
                   value: |
+                    event: status
+                    data: {"state":"OPEN","soldOutAt":null,"serverTime":"2026-10-24T13:44:02.501Z"}
+
+                closed:
+                  summary: Sale ditutup permanen — klien WAJIB es.close()
+                  value: |
+                    event: status
+                    data: {"state":"CLOSED","soldOutAt":null,"serverTime":"2026-10-24T13:55:42.000Z"}
+
                     event: sold-out
                     data: {"message":"Tiket sudah habis"}
 
-                status_stale:
-                  summary: Redis connection lost
+                stale:
+                  summary: Data antrian basi (Redis putus / ctl diam)
                   value: |
-                    event: status
-                    data: {"stale":true}
+                    event: stale
+                    data: {"stale":true,"reason":"no_admission_updates"}
 
                 keepalive:
                   summary: Keepalive comment (15 detik)
@@ -1245,7 +1469,9 @@ paths:
         Satu-satunya endpoint yang dipanggil klien saat kembali — setelah refresh, ganti tab,
         atau kembali dari aplikasi bank. Mengembalikan token yang sama selama TTL belum habis.
 
-        Juga dipanggil setelah menerima event `grant` dari SSE untuk mengambil `grant_token`.
+        Juga dipanggil saat payload SSE menunjukkan `nowServing ≥ ticket_no` (giliran tiba) untuk
+        mengambil `grant_token`. Grant pending atau lag replika menjawab `QUEUED` dengan
+        `ticket_no ≤ now_serving`, lalu klien mengulang setelah 1 detik.
 
         `state` yang dikembalikan:
 
@@ -1275,6 +1501,13 @@ paths:
           description: Current queue/booking state for re-entrancy
           content:
             application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    $ref: "#/components/schemas/Meta"
+                  data:
+                    $ref: "#/components/schemas/QueueStateData"
               examples:
                 queued:
                   summary: Masih mengantre
@@ -1351,13 +1584,19 @@ paths:
         Fallback polling — dipakai untuk hidrasi awal, jaringan yang memblokir `text/event-stream`,
         atau degraded mode saat tier SSE tidak sehat. **Bukan transport utama.**
 
-        `poll_after_ms` ditentukan server berdasarkan posisi:
-        - `>1000` → 10.000 ms
-        - `101–1000` → 5.000 ms
-        - `11–100` → 2.000 ms
+        **Tanpa query string** — satu entri CDN per event, `Cache-Control: public, max-age=1`.
+        Server tidak tahu posisi pemanggil, jadi server mengirim **seluruh tabel interval**
+        (`poll_tiers`) dan klien memilih baris untuk posisinya (ADR-006 §8.5):
         - `1–10` → 1.000 ms
+        - `11–100` → 2.000 ms
+        - `101–1000` → 5.000 ms
+        - `>1000` → 10.000 ms
 
-        Klien tidak menanam interval sendiri.
+        `poll_after_ms` adalah default untuk posisi yang tidak diketahui. Klien tidak menanam
+        interval sendiri — tabelnya milik server.
+
+        Dalam mode polling, frontend menghitung posisi dan estimasi dengan rumus api-contracts
+        §3.5 memakai `now_serving` dan `rate_per_min`, dan membaca `state` untuk SOLD_OUT / CLOSED.
         **Requirement**: FR-07 (fallback), NFR-08
       parameters:
         - name: event_id
@@ -1371,6 +1610,13 @@ paths:
           description: Current now_serving with server-suggested poll interval
           content:
             application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    $ref: "#/components/schemas/Meta"
+                  data:
+                    $ref: "#/components/schemas/NowServingData"
               example:
                 meta:
                   code: 200
@@ -1378,9 +1624,14 @@ paths:
                 data:
                   now_serving: 31600
                   rate_per_min: 318
-                  paused: false
+                  state: OPEN
                   server_time: "2026-10-24T13:10:00.412Z"
-                  poll_after_ms: 5000
+                  poll_after_ms: 1000
+                  poll_tiers:
+                    - { max_position: 10, poll_after_ms: 1000 }
+                    - { max_position: 100, poll_after_ms: 2000 }
+                    - { max_position: 1000, poll_after_ms: 5000 }
+                    - { max_position: null, poll_after_ms: 10000 }
 
   # ──────────────────────────────────────────────
   #  BOOKING — TICKET SELECTION
@@ -1835,52 +2086,6 @@ paths:
         "404":
           description: Booking tidak ditemukan atau bukan milik token ini
 
-  /bookings/{booking_id}/tickets:
-    get:
-      tags: [Booking]
-      summary: Get Booking Tickets
-      operationId: getBookingTickets
-      description: |
-        List tiket dalam sebuah booking setelah konfirmasi pembayaran.
-        **Requirement**: FR-27
-      parameters:
-        - name: booking_id
-          in: path
-          required: true
-          schema:
-            type: string
-          example: RB-00912
-        - name: X-Device-Id
-          in: header
-          required: false
-          description: >
-            Pengikatan device untuk grant anonim — WAJIB bila pemanggil tidak login (OpenAPI
-            tidak dapat menyatakan kewajiban bersyarat). Tidak cocok → 401 DEVICE_MISMATCH.
-          schema:
-            type: string
-      security:
-        - GrantToken: []
-      responses:
-        "200":
-          description: List of tickets in booking
-          content:
-            application/json:
-              example:
-                meta:
-                  code: 200
-                  message: Success
-                data:
-                  - ticket_id: TKT-001
-                    category: VIP
-                    price: 1500000
-                    nik_masked: "3171********xx22"
-                    eticket_url: /tickets/TKT-001/eticket
-                  - ticket_id: TKT-002
-                    category: Festival
-                    price: 850000
-                    nik_masked: "3171********xx33"
-                    eticket_url: /tickets/TKT-002/eticket
-
   # ──────────────────────────────────────────────
   #  PAYMENT
   # ──────────────────────────────────────────────
@@ -2051,7 +2256,7 @@ paths:
         "409":
           description: Status booking tidak sesuai (bukan HELD atau sudah terminal)
         "503":
-          description: Admission paused — circuit breaker payment gateway terbuka (ADMISSION_PAUSED)
+          description: Circuit breaker payment gateway terbuka (PAYMENT_GATEWAY_UNAVAILABLE). Booking tetap HELD; boleh di-retry selama tenggat pembayaran belum lewat. Menggantikan ADMISSION_PAUSED (v2.7, pause dihapus)
 
   /payments/{booking_id}/retry:
     post:
@@ -2277,12 +2482,12 @@ paths:
                 data: {}
 
   # ──────────────────────────────────────────────
-  #  USER — MY TICKETS
+  #  TICKETS (Accounts › Tickets) — MY TICKETS
   # ──────────────────────────────────────────────
 
   /users/me/tickets:
     get:
-      tags: [User]
+      tags: [Tickets]
       summary: Get My Tickets
       operationId: getMyTickets
       description: |
@@ -2336,7 +2541,7 @@ paths:
 
   /tickets/{ticket_id}/eticket:
     get:
-      tags: [User]
+      tags: [Tickets]
       summary: Get E-Ticket
       operationId: getEticket
       description: |

@@ -1,10 +1,26 @@
 # Rusuh Booking Tiket — API Contracts
 
-**Versi**: 2.5.1  
-**Tanggal**: 3 November 2026  
+**Versi**: 2.7.0  
+**Tanggal**: 5 November 2026  
 **Status**: Draft  
 **Base URL**: `https://api.rusuh.id/v1`  
-**Selaras dengan**: ADR-005 (Keputusan Arsitektur Final — SSE + ECS Fargate)
+**Selaras dengan**: ADR-005 (Keputusan Arsitektur Final — SSE + ECS Fargate), diamandemen ADR-006 (antrian)  
+**Pasangan mesin**: `rusuh-booking-apidog.json` (Apidog) — **sumber kebenaran bentuk respons**. Dokumen ini menjelaskan perilaku dan alasannya; keduanya wajib sinkron. `rusuh-booking-openapi.yaml` diarsipkan (`archive/`) dan tidak dipelihara lagi
+
+> **v2.7** (ADR-006 §4.2, §4.3, §6.2): **pause admission dihapus** — field `paused` hilang dari
+> payload SSE dan `/queue/serving`, error `ADMISSION_PAUSED` diganti `PAYMENT_GATEWAY_UNAVAILABLE`.
+> Event SSE **`status` kini membawa `state`** dan dikirim tiap transisi (`OPEN ↔ SOLD_OUT`,
+> `→ CLOSED`); indikator basi yang dulu bernama `status` menjadi event **`stale`** (BREAKING).
+> Respons join menambah **`queue_token`** (untuk mobile) dan **tidak lagi** membawa
+> `estimated_wait_minutes`: frontend menghitung estimasi dari `ratePerMin` (§3.5).
+> **Envelope distandarkan:** `data` selalu ada (`{}` bila kosong) dan setiap error membawa
+> **`meta.error_code`** (Appendix A). OpenAPI YAML diarsipkan; Apidog menjadi sumber kebenaran.
+
+> **v2.6** (ADR-006): event SSE `grant` dihapus — klien memanggil `/queue/me` saat
+> `nowServing ≥ ticket_no`. Join tidak lagi memberi grant sendiri: pada antrian kosong ia
+> menunggu ≤ 1 detik untuk tick admission-ctl berikutnya, sehingga `granted: true` tetap mungkin
+> (bentuk respons join tidak berubah).
+> `/queue/serving` menambah `poll_tiers` dan tidak menerima query string.
 
 > **v2.5** memperbaiki kontrak terhadap API Midtrans yang sebenarnya, dan menurunkan
 > `server_time` ke envelope. Webhook §5.5 sebelumnya mendeklarasikan header
@@ -63,7 +79,7 @@
 3. [Queue](#3-queue)
 4. [Booking](#4-booking)
 5. [Payment](#5-payment)
-6. [User](#6-user)
+6. [Tickets (Accounts › Tickets)](#6-tickets-accounts--tickets)
 7. [Common Response Structure](#7-common-response-structure)
 
 ---
@@ -85,9 +101,16 @@ Semua endpoint menggunakan format response yang konsisten:
 | Field | Type | Description |
 |-------|------|-------------|
 | `meta.code` | int | HTTP status code |
-| `meta.message` | string | Human-readable message (single message) |
+| `meta.message` | string | Human-readable message (single message) — untuk ditampilkan, **jangan** di-parse |
+| `meta.error_code` | string | **Hanya pada error (4xx/5xx).** Kode mesin dari Appendix A; frontend merutekan berdasarkan field ini |
+| `meta.server_time` | string | Jam server ISO-8601, pada **setiap** respons (BR-10, §7) |
 | `meta.pagination` | object | Pagination info (only on list endpoints) |
-| `data` | object/array | Response payload |
+| `data` | object/array | Response payload. **Selalu ada**: `{}` bila tidak ada isi, tidak pernah `null` atau dihilangkan |
+
+> **Contoh per endpoint menghilangkan `server_time` dan `error_code` demi keringkasan.** Keduanya
+> tetap selalu ada; kode error tertulis pada judul respons, mis. "Response (409 - `NIK_ALREADY_SAVED`)".
+> Bentuk lengkapnya ada di Apidog. Pengecualian: `204 No Content` (tanpa body, sesuai HTTP) dan
+> stream SSE §3.2.
 
 ---
 
@@ -112,7 +135,8 @@ Mengirim link login ke email. UI: "Send Login Link" button.
   "meta": {
     "code": 200,
     "message": "Login link sent to your email"
-  }
+  },
+  "data": {}
 }
 ```
 
@@ -202,7 +226,7 @@ access_token={access_token}
 
 | Field | Catatan |
 |---|---|
-| `access_token` | JWT HS256 **sesi akun**. `expires_in` **22740** detik (6 jam 19 menit) — diturunkan dari `SALE_WINDOW_SECONDS + 990 + 150` (ADR-005 §7). **Bukan** sama dengan `GRANT_TOKEN_TTL_SECONDS`: keduanya mengukur interval berbeda. Perpanjangannya lewat §1.4. Dikirim di `Authorization: Bearer` dan **tidak pernah diterima sebagai grant slot** — §4 dan §5 dijaga `X-Grant-Token` (§7) |
+| `access_token` | JWT HS256 **sesi akun**. `expires_in` **22740** detik (6 jam 19 menit) — diturunkan dari `SALE_WINDOW_SECONDS + 930 + 210` (ADR-005 §7; grace pause dihapus ADR-006 §4.3, total tetap). **Bukan** sama dengan `GRANT_TOKEN_TTL_SECONDS`: keduanya mengukur interval berbeda. Perpanjangannya lewat §1.4. Dikirim di `Authorization: Bearer` dan **tidak pernah diterima sebagai grant slot** — §4 dan §5 dijaga `X-Grant-Token` (§7) |
 | `refresh_token` | **Opaque, bukan JWT.** Nilai acak; server menyimpan hash-nya saja, sehingga membaca basis data tidak cukup untuk menerbitkan sesi |
 | `redirect_context` | **Dihilangkan** (bukan dikirim kosong) bila akun tidak punya keterlibatan aktif. Pemeriksaan frontend adalah "apakah field-nya ada", bukan "apakah isinya kosong" |
 
@@ -212,8 +236,8 @@ access_token={access_token}
 >
 > ```
 > SALE_WINDOW_SECONDS   21600   login → giliran tiba  (env; fallback 6 jam)
-> journey + pause BR-22    990   930 + 60
-> margin                   150
+> journey                  930   (BR-22 pause grace dihapus, ADR-006 §4.3)
+> margin                   210
 >                       ─────── = 22740 detik
 > ```
 >
@@ -831,7 +855,7 @@ Authorization: Bearer {access_token}   # bila login — mengaktifkan BR-07 dan a
     "ticket_no": 32748,
     "now_serving": 31500,
     "position": 1248,
-    "estimated_wait_minutes": 4,
+    "queue_token": "qt_xyz789",
     "sse_url": "/queue/stream",
     "event": {
       "id": "evt_konser_a",
@@ -840,6 +864,17 @@ Authorization: Bearer {access_token}   # bila login — mengaktifkan BR-07 dan a
   }
 }
 ```
+
+| Field | Tipe | Arti |
+|---|---|---|
+| `ticket_no` | int | Nomor antrian customer, tetap selama sale |
+| `now_serving` | int | Nomor global yang sedang dilayani saat respons dibuat |
+| `position` | int | `ticket_no − now_serving`. `≤ 0` berarti giliran sudah tiba: panggil §3.3 |
+| `queue_token` | string | Token ruang tunggu (`qt_…`). **Mobile** menyimpannya di secure store dan mengirimnya sebagai `X-Queue-Token` ke §3.2–§3.3. **Web mengabaikannya** dan memakai cookie HttpOnly (jangan simpan di `localStorage`) |
+| `sse_url` | string | Path stream §3.2 |
+
+> Estimasi waktu tunggu **tidak** dikirim di sini: frontend menghitungnya dari `ratePerMin` pada
+> snapshot SSE pertama (§3.5).
 
 > Server sets cookie on join:
 > ```
@@ -861,7 +896,7 @@ Authorization: Bearer {access_token}   # bila login — mengaktifkan BR-07 dan a
     "ticket_no": 32748,
     "now_serving": 31520,
     "position": 1228,
-    "estimated_wait_minutes": 4,
+    "queue_token": "qt_xyz789",
     "sse_url": "/queue/stream",
     "rejoined": true,
     "state": "QUEUED"
@@ -869,7 +904,7 @@ Authorization: Bearer {access_token}   # bila login — mengaktifkan BR-07 dan a
 }
 ```
 
-> **Dua jalan menuju response ini.** Pertama, `queue_token` yang sama kembali — re-entrancy
+> **Dua jalan menuju response "Rejoined".** Pertama, `queue_token` yang sama kembali — re-entrancy
 > BR-09. Kedua, **BR-07**: pemanggil sudah login dan akunnya sudah punya keterlibatan aktif
 > untuk event ini, mungkin dari perangkat lain. Keduanya memulihkan keterlibatan yang ada
 > dan menerbitkan ulang cookie untuknya; tidak ada keterlibatan kedua yang dibuat.
@@ -884,6 +919,20 @@ Authorization: Bearer {access_token}   # bila login — mengaktifkan BR-07 dan a
 >
 > **Customer tamu tidak terkena BR-07.** Tanpa identitas stabil tidak ada yang dapat
 > ditegakkan; batas bagi tamu adalah CAPTCHA + rate limit per IP.
+
+**Response** (200 - antrian kosong, FR-05): join menunggu ≤ 1 detik untuk tick admission-ctl
+berikutnya; bila grant terbit dalam jendela itu, customer langsung ke Detail Ticket.
+```json
+{
+  "meta": { "code": 200, "message": "No queue — access granted" },
+  "data": {
+    "granted": true,
+    "grant_token": "gt_abc123",
+    "queue_token": "qt_xyz789",
+    "booking_expires_at": "2026-11-10T02:05:00Z"
+  }
+}
+```
 
 **Response** (503 - `QUEUE_FULL`): antrian sudah mencapai `QUEUE_CAPACITY` (300.000).
 ```json
@@ -906,7 +955,7 @@ percobaan yang gagal tidak memakan posisi antrian.
 **Response** (429): melewati `rl:join:{ip}` (20 / 5 menit), atau — bila pemanggil login —
 melewati batas 3 join per akun per menit.
 
-**Response** (409 - sale belum dibuka): `queue:{ev}:state` masih `SCHEDULED`.
+**Response** (409 - `SALE_NOT_OPEN`): `queue:{ev}:state` masih `SCHEDULED`.
 ```json
 {
   "meta": { "code": 409, "message": "Penjualan belum dibuka" },
@@ -961,48 +1010,68 @@ ini posisi kosong sampai tick berikutnya, dan FR-10 tidak terpenuhi setelah refr
 
 ```
 id: 31600
-data: {"nowServing":31600,"state":"OPEN","ratePerMin":318,"paused":false,"serverTime":"2026-10-24T13:10:00.412Z"}
+data: {"nowServing":31600,"state":"OPEN","ratePerMin":318,"serverTime":"2026-10-24T13:10:00.412Z"}
 ```
 
-**Event default (tanpa nama)** — dikirim saat `nowServing` berubah, saat `paused` berubah,
-atau tiap 10 detik sebagai heartbeat isi.
+**Event default (tanpa nama)** — dikirim saat `nowServing` berubah, atau tiap 10 detik sebagai
+heartbeat isi. **Byte yang sama untuk semua koneksi event.**
 
 ```
-data: {"nowServing":31604,"state":"OPEN","ratePerMin":318,"paused":false,"serverTime":"2026-10-24T13:10:01.004Z"}
+data: {"nowServing":31604,"state":"OPEN","ratePerMin":318,"serverTime":"2026-10-24T13:10:01.004Z"}
 ```
 
 | Field | Tipe | Arti |
 |---|---|---|
 | `nowServing` | int | Nomor antrian global yang sedang dilayani |
 | `state` | string | `SCHEDULED` \| `OPEN` \| `SOLD_OUT` \| `CLOSED` |
-| `ratePerMin` | int | Laju antrian untuk estimasi waktu tunggu (FR-09) |
-| `paused` | bool | Admission dihentikan sementara (gangguan Dukcapil / payment gateway) |
+| `ratePerMin` | int | Laju antrian: nomor yang dilewati `nowServing` per menit. Dipakai frontend untuk estimasi (§3.5) |
 | `serverTime` | string | Waktu server ISO-8601 — klien menyinkronkan jamnya (BR-10) |
 
-> Frontend menghitung `position = ticket_no - nowServing`. Saat `paused = true`, tampilkan
-> banner; jangan tampilkan error — antrian tidak hilang.
+> Frontend menghitung `position = ticket_no − nowServing` dan estimasi menit (§3.5).
 
-> **Heartbeat 10 detik TIDAK bersyarat** — ia terbit juga saat `paused: true` dan saat
-> `state: SOLD_OUT`. Keheningan karena itu berarti satu hal saja: sisi server berhenti
-> bekerja. Itulah yang membuat `status {stale:true, reason:"no_admission_updates"}` di bawah
+> **Heartbeat 10 detik TIDAK bersyarat** — ia terbit juga saat `state: SOLD_OUT`, ketika
+> `nowServing` tidak bergerak. Keheningan karena itu berarti satu hal saja: sisi server berhenti
+> bekerja. Itulah yang membuat `stale {stale:true, reason:"no_admission_updates"}` di bawah
 > dapat dipercaya.
 
-**Event: `grant`** — giliran customer tiba. Payload kosong; token **tidak** dikirim lewat SSE.
+**Giliran tiba — tanpa event khusus (v2.6, ADR-006 §4.2).** Event `grant` dihapus. Pada setiap
+payload (termasuk snapshot awal setelah reconnect), bila `nowServing ≥ ticket_no`, klien memanggil `GET /events/{event_id}/queue/me` untuk mengambil
+`grant_token`.
 
-```
-event: grant
-data: {}
-```
+> admission-ctl mem-publish broadcast **setelah** baris booking tick itu tertulis, sehingga
+> `/queue/me` biasanya langsung menjawab `GRANTED`. Bila baris belum terbaca (grant pending atau
+> lag replika), `/queue/me` menjawab `QUEUED` dengan posisi 0 dan klien mengulang setelah 1 detik —
+> tidak pernah menolak customer yang gilirannya sudah tiba (NFR-02).
 
-> Klien merespons dengan `GET /events/{event_id}/queue/me` untuk mengambil `grant_token`.
-> Grant hanya diterbitkan **setelah** slot diamankan dan baris booking tertulis, sehingga
-> `/queue/me` tidak pernah menolak customer yang sudah menerima `grant` (NFR-02).
-
-**Event: `status`** — indikator **kesegaran data** antrian, bukan status antrian dan bukan
-status koneksi. Dua pemicu, satu payload, satu indikator.
+**Event: `status`** — **state sale berubah** (v2.7). Dikirim sekali pada setiap transisi
+`queue:{ev}:state`, ke semua koneksi event.
 
 ```
 event: status
+data: {"state":"SOLD_OUT","soldOutAt":"2026-10-24T13:40:12.000Z","serverTime":"2026-10-24T13:40:12.120Z"}
+```
+
+| Field | Tipe | Arti |
+|---|---|---|
+| `state` | string | State baru: `OPEN` \| `SOLD_OUT` \| `CLOSED` |
+| `soldOutAt` | string \| null | Hanya pada `SOLD_OUT`: kapan stok mencapai nol. `CLOSED` menyusul paling lambat `SOLD_OUT_HOLD_SECONDS` (930 detik) setelahnya |
+| `serverTime` | string | Waktu server (BR-10) |
+
+| Transisi | Klien |
+|---|---|
+| `OPEN → SOLD_OUT` | tampilkan "Tiket sedang habis — kursi dapat kembali dari booking yang dibatalkan", sembunyikan estimasi, **tetap tersambung** |
+| `SOLD_OUT → OPEN` | stok kembali; lanjutkan posisi dan estimasi seperti biasa |
+| `→ CLOSED` | diikuti event `sold-out`; klien menutup stream |
+
+> `state` tetap ada di setiap payload default, jadi klien yang baru reconnect tahu state dari
+> snapshot. Event `status` adalah sinyal "baru saja berubah", sehingga klien tidak perlu
+> membandingkan payload sendiri.
+
+**Event: `stale`** — indikator **kesegaran data** antrian, bukan state sale dan bukan status
+koneksi. Dua pemicu, satu payload, satu indikator. (Sampai v2.6 bernama `status`.)
+
+```
+event: stale
 data: {"stale": true, "reason": "no_admission_updates"}
 ```
 
@@ -1030,8 +1099,8 @@ Kedua pemicunya:
 > Dikirim **hanya pada transisi**, tidak diulang selama tetap basi. `{"stale": false}`
 > menyusul saat data mengalir lagi, dan posisinya berlanjut tanpa kode transisi khusus.
 
-**Event: `sold-out`** — sale ditutup permanen. Dikirim saat `state` menjadi **`CLOSED`**,
-bukan saat stok pertama kali mencapai nol.
+**Event: `sold-out`** — sale ditutup permanen. Dikirim tepat setelah `status {state: CLOSED}`,
+bukan saat stok pertama kali mencapai nol (itu `status {state: SOLD_OUT}`).
 
 ```
 event: sold-out
@@ -1065,14 +1134,16 @@ data: {"message":"Tiket sudah habis"}
 > detik berukuran ~6× lebih besar dan tetap berisiko kena idle timeout ALB (default 60s,
 > dikonfigurasi 3600s).
 
-**Response** (429 - terlalu banyak koneksi): melewati `rl:sse:{ip}` (5 koneksi / detik).
+**Response** (401 - `UNAUTHORIZED`): queue token tidak ada atau tidak dikenal.
+
+**Response** (429 - `TOO_MANY_REQUESTS`): melewati `rl:sse:{ip}` (5 koneksi / detik).
 
 > Rate limit ini duduk di **sse-server**, bukan di API Gateway — endpoint ini satu-satunya
 > yang dilayani ALB. Ia pengganti WAF di gerbang itu (ADR-005 Bagian 4).
 
-**Response** (409 - sale belum dibuka): `queue:{ev}:state` masih `SCHEDULED`.
+**Response** (409 - `SALE_NOT_OPEN`): `queue:{ev}:state` masih `SCHEDULED`.
 
-**Response** (410 - stream ditolak): `queue:{ev}:state` sudah `CLOSED`. `EventSource` berhenti
+**Response** (410 - `SALE_CLOSED`): `queue:{ev}:state` sudah `CLOSED`. `EventSource` berhenti
 permanen pada status non-200 — ini disengaja.
 
 > **`SOLD_OUT` TIDAK menjawab 410.** Stream tetap dibuka seperti biasa: stok dapat kembali
@@ -1121,6 +1192,9 @@ skenario kembali:
 | Selesai | `{"state":"CONFIRMED","booking_id":"RB-00912"}` | Halaman tiket |
 | Kedaluwarsa | `{"state":"EXPIRED"}` | Layar expired |
 
+> Grant pending atau lag replika menjawab `QUEUED` dengan `ticket_no ≤ now_serving` ("sebentar
+> lagi"); klien mengulang setelah 1 detik.
+
 #### Kapan kredensial antrian berhenti ada
 
 Cookie dan `token:{uuid}` punya TTL (`SALE_WINDOW_SECONDS`), tetapi TTL saja berarti
@@ -1158,15 +1232,9 @@ menghapusnya aktif:
 > tiba lalu menolaknya, pelanggaran langsung NFR-02 "Jangan PHP". Pada v2.0 grant hanya
 > diterbitkan setelah slot diamankan, jadi tidak ada jalur penolakan setelah `grant`.
 
-> **Tenggat dapat BERGESER, jadi baca ulang — jangan hanya menghitung turun.** Saat
-> admission di-pause, server menambahkan `PAUSE_TTL_GRACE_SECONDS` (60 detik) ke
-> `booking_expires_at` dan `payment_expires_at` setiap booking yang masih berjalan, supaya
-> customer tidak kehilangan waktu karena gangguan yang bukan kesalahannya. Klien yang
-> menghitung turun dari nilai lama akan meleset 60 detik.
->
-> Aturannya: **ketika `paused` berubah pada payload SSE, panggil endpoint ini lagi** dan
-> hitung ulang hitung mundur dari `booking_expires_at` yang baru. Ini perluasan aturan yang
-> sudah ada — hitung mundur selalu diturunkan dari tenggat, bukan dikurangi sendiri.
+> **Hitung mundur selalu dari tenggat server** (`booking_expires_at`, `payment_expires_at`) dan
+> `server_time`, bukan dikurangi sendiri. Sejak v2.7 tenggat **tidak pernah bergeser** (pause
+> dan BR-22 dihapus, ADR-006 §4.3).
 
 **Requirement Coverage**: FR-08, FR-10, BR-09, NFR-02, NFR-07
 
@@ -1186,17 +1254,74 @@ saat tier SSE tidak sehat. **Bukan** transport utama.
   "data": {
     "now_serving": 31600,
     "rate_per_min": 318,
-    "paused": false,
+    "state": "OPEN",
     "server_time": "2026-10-24T13:10:00.412Z",
-    "poll_after_ms": 5000
+    "poll_after_ms": 1000,
+    "poll_tiers": [
+      { "max_position": 10,   "poll_after_ms": 1000 },
+      { "max_position": 100,  "poll_after_ms": 2000 },
+      { "max_position": 1000, "poll_after_ms": 5000 },
+      { "max_position": null, "poll_after_ms": 10000 }
+    ]
   }
 }
 ```
 
-> `poll_after_ms` ditentukan **server**, mengikuti profil di `requirements.md` §5:
-> 10s (>1000) → 5s (101–1000) → 2s (11–100) → 1s (1–10). Klien tidak menanam interval sendiri.
+> Tabel interval ditentukan **server** (`poll_tiers`), mengikuti profil di `requirements.md` §5:
+> 10s (>1000) → 5s (101–1000) → 2s (11–100) → 1s (1–10). Endpoint **tidak menerima query
+> string** — satu entri CDN per event, `Cache-Control: public, max-age=1` — jadi server tidak
+> tahu posisi pemanggil; klien memilih baris `poll_tiers` untuk posisinya. `poll_after_ms`
+> adalah default bila posisi tidak diketahui. Klien tidak menanam interval sendiri (ADR-006 §8.5).
+
+> Dalam mode polling, frontend menghitung posisi dan estimasi dengan rumus §3.5 memakai
+> `now_serving` dan `rate_per_min` dari respons ini, dan mendeteksi perubahan state dari `state`.
 
 **Requirement Coverage**: FR-07 (fallback), NFR-08
+
+---
+
+### 3.5 Estimasi Waktu Tunggu (FR-09)
+
+Bukan endpoint: **frontend menghitung** estimasi dari data yang sudah ia punya. Server hanya
+mengirim `nowServing` + `ratePerMin` (SSE §3.2) atau `now_serving` + `rate_per_min` (§3.4);
+tidak ada field estimasi di respons mana pun. Rumus ini ditulis di sini supaya web dan mobile
+sama. Rinciannya di ADR-006 §6.
+
+`ratePerMin` = berapa nomor yang dilewati `nowServing` per menit, diukur admission-ctl dalam 60
+detik terakhir selama `state = OPEN` (nilai awal `MAX_CONCURRENT_SLOTS / 5` pada menit pertama).
+
+**Rumus frontend**:
+
+```js
+const position = ticketNo - nowServing;
+
+if (state === 'SOLD_OUT')   show('Tiket sedang habis. Mungkin tersedia lagi, tetap di antrian');
+else if (position <= 0)     show('Giliran Anda sebentar lagi');        // dan panggil §3.3
+else if (ratePerMin <= 0)   show('Menghitung estimasi…');
+else {
+  const raw = Math.ceil(position / ratePerMin);
+  const estimatedWaitMinutes =
+      raw <= 10 ? raw
+    : raw <= 30 ? Math.ceil(raw / 5) * 5
+    : raw <= 60 ? Math.ceil(raw / 10) * 10
+    :             Math.ceil(raw / 30) * 30;
+  show(label(estimatedWaitMinutes));
+}
+```
+
+| `estimatedWaitMinutes` | Teks |
+|---|---|
+| 1–59 | "Estimasi waktu tunggu ± {m} menit" |
+| 60–180 | "Estimasi waktu tunggu ± {m/60} jam" (mis. 90 → "± 1,5 jam") |
+| > 180 | "Estimasi waktu tunggu lebih dari 3 jam" |
+
+> Pembulatan selalu **ke atas**: estimasi condong pesimis, dan angka berubah dalam langkah besar
+> sehingga tidak berkedip tiap 500 ms.
+
+**Contoh** (`ratePerMin` = 200): posisi 150 → "± 1 menit" · 1.000 → "± 5 menit" · 2.400 →
+"± 15 menit" · 6.000 → "± 30 menit" · 145.000 → "lebih dari 3 jam".
+
+**Requirement Coverage**: FR-09, NFR-02 ("Jangan PHP")
 
 ---
 
@@ -1461,8 +1586,8 @@ X-Device-Id: {device_id}               # wajib bila customer TIDAK login
 > **Fail closed.** Baik NIK yang ditolak Dukcapil maupun Dukcapil yang tidak dapat dihubungi
 > sama-sama memblokir pembayaran. `POST /bookings` menolak permintaan kecuali **setiap** NIK
 > di dalamnya sudah terverifikasi. Konsekuensinya Dukcapil adalah single point of failure yang
-> diterima secara sadar: saat ia mati, admission di-pause dan penjualan berhenti (ADR-005
-> Bagian 8).
+> diterima secara sadar: saat ia mati, validasi NIK gagal cepat dengan error yang dapat di-retry,
+> sementara antrian tetap maju (pause dihapus, ADR-006 §4.3).
 
 **Requirement Coverage**: FR-15a (validasi NIK ke Dukcapil)
 
@@ -1698,7 +1823,7 @@ X-Device-Id: {device_id}               # wajib bila customer TIDAK login
         "category": "VIP",
         "price": 1500000,
         "nik_masked": "3171********xx22",
-        "eticket_url": "/tickets/TKT-001/eticket"
+        "eticket_url": "/tickets/TKT-001/eticket?t=et_9f3a2c"
       }
     ],
     "summary": {
@@ -1711,7 +1836,15 @@ X-Device-Id: {device_id}               # wajib bila customer TIDAK login
 }
 ```
 
-**Requirement Coverage**: FR-21, FR-22
+> **`eticket_url` sudah membawa token e-tiket (`?t=`) saat `PAID`.** Token yang sama dengan
+> tautan email (§6.2): HMAC atas satu `ticket_id`, berlaku sampai tanggal event + 1 hari,
+> diterbitkan lewat `pkg/eticket`. Success Page menautkannya langsung, sehingga customer —
+> termasuk tamu — dapat membuka e-tiket **tanpa akun dan tanpa menunggu email**. Inilah jalur
+> NFR-10 ("email adalah kenyamanan"), menggantikan `GET /bookings/{id}/tickets` yang dihapus.
+> Endpoint ini tetap dijaga `X-Grant-Token`; setelah grant kedaluwarsa, tautan yang sudah
+> diterima tetap berlaku.
+
+**Requirement Coverage**: FR-21, FR-22, FR-27, NFR-10
 
 ---
 
@@ -1872,13 +2005,13 @@ Bentuk request berbeda per metode:
 > Tombol "Bayar" yang terklik dua kali menghasilkan satu charge dan dua respons identik;
 > ia tidak boleh terlihat seperti kegagalan.
 
-**Response** (409 - status tidak sesuai): booking belum `HELD` atau sudah terminal.
+**Response** (409 - `BOOKING_STATUS_INVALID`): booking belum `HELD` atau sudah terminal.
 
 > **Setelah penolakan, panggil endpoint ini lagi — bukan `/retry`.** Jalur `deny` menaikkan
 > `payment_attempts` sendiri, sehingga `order_id` yang diturunkan sudah baru dan Midtrans
 > menerimanya. `/retry` hanya untuk membatalkan pembayaran yang masih `pending` (§5.3).
 
-**Response** (503 - `ADMISSION_PAUSED`): breaker payment gateway terbuka.
+**Response** (503 - `PAYMENT_GATEWAY_UNAVAILABLE`): breaker payment gateway terbuka. Booking tetap `HELD`; klien boleh mencoba lagi selama tenggat pembayaran belum lewat.
 
 ### Expiry yang dikirim ke Midtrans
 
@@ -1954,10 +2087,10 @@ Klien kemudian memanggil `POST /payments/{booking_id}` dengan metode baru.
 **Response** (409 - `PAYMENT_ALREADY_SETTLED`): pembayaran lama ternyata sudah lunas saat
 cancel dicoba. Tidak ada perubahan; webhook akan mengonfirmasi booking secara normal.
 
-**Response** (404): `booking_id` tidak ada **atau bukan milik pemegang token**. Keduanya
+**Response** (404 - `NOT_FOUND`): `booking_id` tidak ada **atau bukan milik pemegang token**. Keduanya
 menjawab sama — `403` akan mengonfirmasi bahwa booking itu ada.
 
-**Response** (409 - status tidak sesuai): booking tidak dalam `AWAITING_PAYMENT`. Termasuk
+**Response** (409 - `BOOKING_STATUS_INVALID`): booking tidak dalam `AWAITING_PAYMENT`. Termasuk
 `HELD` setelah penolakan: tidak ada transaksi Midtrans yang hidup, panggil §5.2.
 
 **Response** (409 - `PAYMENT_WINDOW_CLOSED`): TTL sudah lewat, atau sisanya di bawah
@@ -1967,7 +2100,7 @@ memindahkan kegagalan ke tempat yang lebih menyakitkan.
 **Response** (429 - `MAX_ATTEMPTS_EXCEEDED`): melewati `MAX_PAYMENT_ATTEMPTS`. Tiap
 percobaan menerbitkan VA/QR baru di Midtrans.
 
-**Response** (503): Midtrans tidak dapat dihubungi. `payment_attempts` **tidak** dinaikkan;
+**Response** (503 - `PAYMENT_GATEWAY_UNAVAILABLE`): Midtrans tidak dapat dihubungi. `payment_attempts` **tidak** dinaikkan;
 VA lama masih berlaku dan customer dapat membayarnya atau mencoba lagi.
 
 > **TTL tidak di-reset.** `payment_expires_at` tetap dihitung dari `held_at` (BR-05). Customer
@@ -2213,7 +2346,9 @@ memicu unique violation, seluruh transaksi batal, dan endpoint tetap menjawab `2
 
 ---
 
-## 6. User
+## 6. Tickets (Accounts › Tickets)
+
+> Sebelumnya bernama **User**. Di Apidog berada di dalam folder Accounts.
 
 ### 6.1 Get My Tickets
 
@@ -2446,11 +2581,36 @@ grant token antrian.
   "meta": {
     "code": 400,
     "message": "NIK must be exactly 16 digits",
+    "error_code": "VALIDATION_ERROR",
     "server_time": "2026-11-03T09:12:00.412Z"
   },
   "data": {}
 }
 ```
+
+> **`error_code` wajib pada setiap error, `message` tidak untuk di-parse.** `message` boleh
+> berubah kata-katanya; `error_code` adalah kontrak. `data` tetap objek — berisi detail bila ada
+> (mis. `retry_after` pada 429, `queue_state` pada 409/503 join), `{}` bila tidak.
+
+### Error yang berlaku per endpoint (selain yang ditulis di bagiannya)
+
+Bagian per endpoint menulis error yang khas. Error umum berikut juga berlaku dan ada di Apidog:
+
+| Endpoint | Error |
+|---|---|
+| `GET /auth/verify` | 401 `TOKEN_INVALID` (tautan tidak dikenal, dipakai, atau kedaluwarsa) |
+| `POST /auth/refresh` | 400 `VALIDATION_ERROR` (`refresh_token` kosong) |
+| `POST /auth/register` | 400 `VALIDATION_ERROR` (format NIK / email) |
+| `GET /events/{event_id}` | 404 `NOT_FOUND` |
+| `GET /events/{event_id}/queue/me` | 401 `UNAUTHORIZED` (tidak ada kredensial, atau Bearer tanpa `acct` untuk event ini) |
+| `GET /events/{event_id}/tickets` | 401 `GRANT_TOKEN_MISSING` / `GRANT_TOKEN_INVALID` |
+| `POST /nik/validate` | 400 `VALIDATION_ERROR` · 429 `TOO_MANY_REQUESTS` · 503 `DUKCAPIL_UNAVAILABLE` |
+| `GET /bookings/{booking_id}` | 404 `NOT_FOUND` |
+| `GET /tickets/{ticket_id}/eticket` | 401 `ETICKET_TOKEN_INVALID` · 404 `NOT_FOUND` |
+| semua endpoint ber-grant (§4, §5) | 401 `GRANT_TOKEN_MISSING` / `GRANT_TOKEN_INVALID` / `DEVICE_MISMATCH` |
+
+> `GET /bookings/{booking_id}/tickets` **dihapus** (v2.7, ADR-006 §8.8): §4.4 sudah mengembalikan
+> `tickets[]` dengan `eticket_url` bertoken saat `PAID`.
 
 ### HTTP Status Codes
 
@@ -2479,11 +2639,11 @@ grant token antrian.
 | FR-02 | `GET /events` (`status: AVAILABLE`) | ✅ |
 | FR-03 | `GET /events` (`status: SOLD_OUT`) | ✅ |
 | FR-04 | `POST /events/{id}/queue/join` | ✅ |
-| FR-05 | `POST /events/{id}/queue/join` → `granted: true` saat antrian kosong | ✅ |
+| FR-05 | `POST /events/{id}/queue/join` → `granted: true` saat antrian kosong (menunggu tick admission-ctl, ≤ 1 detik) | ✅ |
 | FR-06 | Join response + SSE payload `nowServing` | ✅ |
 | FR-07 | `GET /events/{id}/queue/stream`, fallback `…/queue/serving` | ✅ |
-| FR-08 | SSE `grant` → `GET /events/{id}/queue/me` | ✅ |
-| FR-09 | `ratePerMin` pada payload SSE | ✅ |
+| FR-08 | broadcast `nowServing ≥ ticket_no` → `GET /events/{id}/queue/me` | ✅ |
+| FR-09 | `ratePerMin` pada payload SSE / `rate_per_min` pada §3.4; frontend menghitung estimasi (§3.5) | ✅ |
 | FR-10 | Snapshot awal pada stream + `GET …/queue/me` | ✅ |
 | FR-11 | `GET /events/{id}` | ✅ |
 | FR-12 | `GET /events/{id}/tickets` | ✅ |
@@ -2523,7 +2683,7 @@ grant token antrian.
 | NFR-07 | `X-Grant-Token` wajib pada endpoint booking/payment, `Authorization` opsional di atasnya; tidak ada data kartu | ✅ |
 | NFR-08 | REST/JSON, platform-agnostic | ✅ |
 | NFR-09 | CloudWatch EMF, namespace `RusuhBooking/Queue` | ⚙️ Observability |
-| NFR-10 | Kegagalan email tidak mengubah status booking; `GET /bookings/{id}/tickets` selalu tersedia | ✅ |
+| NFR-10 | Kegagalan email tidak mengubah status booking; `GET /bookings/{id}` (§4.4) mengembalikan `eticket_url` bertoken `?t=` saat `PAID`, jadi e-tiket dapat dibuka tanpa email | ✅ |
 | BR-01 | Maks 3 tiket per `POST /bookings` | ✅ |
 | BR-02 | Satu entri per kursi, satu NIK masing-masing; `UNIQUE (event_id, nik_hmac)` menolak NIK yang sudah dipakai booking lain di event yang sama | ✅ |
 | BR-03/04 | `booking_expires_at` = `granted_at` + 5 menit — tidak ada grace antrian, jam mulai saat slot diberikan | ✅ |
@@ -2542,7 +2702,7 @@ Legenda: ✅ terpenuhi di kontrak · ⚙️ di luar permukaan API (backend atau 
 | Aspect | Implementation |
 |--------|----------------|
 | Access Token (sesi akun) | JWT HS256, **22740 detik** (= `SALE_WINDOW_SECONDS` + 990 + 150 — ADR-005 §7; **bukan** `GRANT_TOKEN_TTL_SECONDS`, yang mengukur interval lain). Dikirim via `Authorization: Bearer`, dan **hanya kredensial inilah** yang pernah menempati slot itu. Diterbitkan `GET /auth/verify` (§1.3) dan `POST /auth/refresh` (§1.4); juga diterima `GET …/queue/me` sebagai alternatif cookie untuk pemulihan lintas perangkat (§3.3). Stateless: setiap service yang memegang signing secret dapat memverifikasinya tanpa memanggil `user`. Karena tidak ada store yang dibaca saat verifikasi, **umur token inilah jendela pencabutannya** — memperpanjangnya memperlebar jendela itu |
-| Grant Token | Opaque acak (`gt_…`), **bukan JWT**, dikirim via header `X-Grant-Token`. Diperoleh dari `GET …/queue/me` setelah event `grant` (§3.3), tersimpan server di `grant:{token} EX GRANT_TOKEN_TTL_SECONDS`. Membuktikan pemegangnya **punya slot**, bukan siapa dirinya — diterbitkan untuk tamu juga. Karena tiap verifikasi membacanya dari Redis, berbeda dari access token ia **dapat dicabut seketika** dengan satu `DEL` |
+| Grant Token | Opaque acak (`gt_…`), **bukan JWT**, dikirim via header `X-Grant-Token`. Diperoleh dari `GET …/queue/me` setelah `nowServing ≥ ticket_no` (§3.3), tersimpan server di `grant:{token} EX GRANT_TOKEN_TTL_SECONDS`. Membuktikan pemegangnya **punya slot**, bukan siapa dirinya — diterbitkan untuk tamu juga. Karena tiap verifikasi membacanya dari Redis, berbeda dari access token ia **dapat dicabut seketika** dengan satu `DEL` |
 | Queue Token (ruang tunggu) | `queue_token` cookie (HttpOnly, Secure) untuk web, header `X-Queue-Token` untuk mobile; set via `Set-Cookie` saat queue join. `Max-Age` diturunkan dari `SALE_WINDOW_SECONDS`, sama dengan TTL `token:{uuid}` yang dirujuknya. Membuktikan **posisi dalam antrian**, bukan slot. `Max-Age` adalah batas atas: keadaan terminal menghapusnya lebih cepat, dan `CONFIRMED` menggantinya dengan nisan `settled:{uuid}` yang tidak memulihkan apa pun (§3.3) |
 | E-ticket Token | HMAC bertanda tangan atas satu `ticket_id` + kedaluwarsa, dikirim sebagai query `?t=` pada tautan email (§6.2). Stateless, tanpa identitas akun, lingkup satu tiket, berlaku sampai tanggal event + 1 hari. Kunci khusus — bukan signing secret JWT, bukan `DEVICE_PEPPER`. Ada karena FR-26 mengirim tiket ke pemegang NIK yang umumnya tidak punya akun; tanpa ini tombol di email mereka menjawab 401 |
 | Refresh Token | **Opaque acak 256-bit, bukan JWT**, 30 hari, disimpan server sebagai hash SHA-256. Sekali pakai dengan **rotasi**; pemutaran ulang mencabut seluruh keluarga (§1.4). Klien menyimpannya aman (Keychain/Keystore/memory) dan menggantinya setiap refresh |
@@ -2564,6 +2724,11 @@ Legenda: ✅ terpenuhi di kontrak · ⚙️ di luar permukaan API (backend atau 
 | Code | Description |
 |------|-------------|
 | `VALIDATION_ERROR` | Input validation failed |
+| `UNAUTHORIZED` | **401** — kredensial tidak ada atau tidak dikenal (queue token pada §3.2, §3.3) |
+| `NOT_FOUND` | **404** — resource tidak ada, atau bukan milik pemanggil (tidak dibedakan) |
+| `SALE_NOT_OPEN` | **409** — `queue:{ev}:state` masih `SCHEDULED` (§3.1, §3.2) |
+| `SALE_CLOSED` | **410** — `queue:{ev}:state` sudah `CLOSED`; stream ditolak (§3.2) |
+| `BOOKING_STATUS_INVALID` | **409** — booking tidak dalam status yang dibutuhkan endpoint (§5.2, §5.3) |
 | `NIK_ALREADY_USED` | NIK sudah digunakan untuk event ini |
 | `NIK_NOT_FOUND` | NIK tidak terdaftar di Dukcapil |
 | `NIK_INACTIVE` | NIK terdaftar tapi status tidak aktif |
@@ -2589,7 +2754,7 @@ Legenda: ✅ terpenuhi di kontrak · ⚙️ di luar permukaan API (backend atau 
 | `NIK_ALREADY_SAVED` | NIK sudah ada di Daftar NIK Teman akun ini |
 | `MAX_SAVED_NIKS_REACHED` | Daftar NIK Teman sudah mencapai 5 entri |
 | `CONSENT_REQUIRED` | Persetujuan pemrosesan data pribadi pihak ketiga belum diberikan |
-| `ADMISSION_PAUSED` | Admission dihentikan sementara (breaker Dukcapil / payment gateway) |
+| `PAYMENT_GATEWAY_UNAVAILABLE` | **503** — breaker payment gateway terbuka; dapat di-retry. Menggantikan `ADMISSION_PAUSED` (v2.7, pause dihapus) |
 | `BOOKING_EXPIRED` | TTL booking habis |
 | `PAYMENT_EXPIRED` | TTL pembayaran habis |
 | `TOO_MANY_REQUESTS` | Rate limited |
@@ -2611,13 +2776,15 @@ Legenda: ✅ terpenuhi di kontrak · ⚙️ di luar permukaan API (backend atau 
 |--------|-------|
 | Transport | SSE (`GET /events/{event_id}/queue/stream`) |
 | Auth | Cookie `queue_token` (web — `EventSource` tidak bisa menyetel header) / header `X-Queue-Token` (mobile) — tidak pernah query string |
-| Broadcast | Saat `nowServing` berubah, saat `paused` berubah, atau tiap 10 detik |
+| Broadcast | Saat `nowServing` berubah, atau tiap 10 detik |
+| Perubahan state | Event `status {state}` tiap transisi `OPEN ↔ SOLD_OUT`, `→ CLOSED` |
+| Data basi | Event `stale {stale, reason}` |
 | Tick admission | 500 ms |
 | Keepalive | Komentar `: keepalive` tiap **15 detik** (bukan event bernama) |
 | Snapshot awal | Ya — dikirim saat koneksi terbuka (FR-10) |
 | Reconnect | Otomatis dengan `Last-Event-ID`; `retry:` berjitter saat shutdown |
-| Sold out sementara | `state: SOLD_OUT` pada payload biasa → klien **tetap tersambung**; stok dapat kembali |
-| Sale ditutup | `state: CLOSED` + event `sold-out` → klien **wajib** `close()`; koneksi baru ditolak `410 Gone` |
+| Sold out sementara | event `status {state: SOLD_OUT}` (dan `state` pada payload) → klien **tetap tersambung**; stok dapat kembali |
+| Sale ditutup | event `status {state: CLOSED}` + event `sold-out` → klien **wajib** `close()`; koneksi baru ditolak `410 Gone` |
 
 ### Payment Status: Polling
 
@@ -2829,6 +2996,22 @@ Penyelarasan dengan ADR-005. Yang memutus kompatibilitas ditandai **BREAKING**.
 > ADR-005 Bagian 17 #11. Alternatif yang lebih aman — mempertahankan 1080 dan me-refresh di
 > **ruang tunggu**, di mana refresh tidak berbahaya — ditolak karena menuntut penjadwalan di
 > klien yang, bila dilewatkan, gagal secara diam-diam.
+
+### v2.6 → v2.7
+
+| # | Perubahan | Alasan |
+|---|---|---|
+| 61 | **BREAKING** Pause admission dihapus: `paused` hilang dari payload SSE dan §3.4; aturan "baca ulang §3.3 saat `paused` berubah" dihapus; `ADMISSION_PAUSED` → `PAYMENT_GATEWAY_UNAVAILABLE` | ADR-006 §4.3: BR-13a dan BR-22 dihapus. Breaker tetap fail closed tetapi tidak menghentikan antrian, dan tenggat tidak pernah digeser |
+| 62 | **BREAKING** Event SSE `status` kini berarti **state sale berubah** (`{state, soldOutAt, serverTime}`), dikirim tiap transisi; indikator basi lama menjadi event `stale` | Klien mendapat sinyal eksplisit saat sold out, tanpa membandingkan payload sendiri |
+| 63 | §3.1: respons join menambah `queue_token` | Klien mobile tidak punya cookie store; tanpa ini mereka tidak dapat mengirim `X-Queue-Token` |
+| 64 | §3.1: `estimated_wait_minutes` dihapus; §3.5 baru: rumus estimasi untuk frontend | Satu sumber laju (`ratePerMin`), satu rumus tertulis untuk web dan mobile (ADR-006 §6.2) |
+| 65 | §3.4: `paused` diganti `state` | Mode polling perlu mendeteksi `SOLD_OUT` / `CLOSED` |
+| 66 | Sesi akun: `journey + pause` 990 → `journey` 930, margin 150 → 210 | `expires_in` tetap 22740; hanya rinciannya berubah |
+| 67 | Envelope: `meta.error_code` pada setiap error; `data` selalu objek (`{}` bila kosong, tidak `null`) | Appendix A mendaftar kode tanpa tempat membawanya; Apidog sudah memakai `error_code` di sebagian respons. Satu aturan untuk semua |
+| 68 | Appendix A: `UNAUTHORIZED`, `NOT_FOUND`, `SALE_NOT_OPEN`, `SALE_CLOSED`, `BOOKING_STATUS_INVALID` | Respons 401/404/409/410 sebelumnya tanpa kode |
+| 69 | §3.1: contoh respons antrian kosong (`granted: true`); §3.2: respons 401 | Sudah ada di perilaku (FR-05, auth stream), belum di dokumen |
+| 70 | OpenAPI YAML diarsipkan; Apidog = sumber kebenaran bentuk respons | Dua artefak mesin yang harus sinkron terlalu mahal dipelihara |
+| 71 | `GET /bookings/{booking_id}/tickets` **dihapus**; §4.4 `tickets[].eticket_url` membawa `?t={eticket_token}` saat `PAID` | Isi endpoint itu sama dengan `tickets[]` di §4.4. Yang tidak dimiliki §4.4 hanyalah akses QR tanpa email bagi tamu, dan itu kini diberikan tautan bertoken (ADR-006 §8.8) |
 
 ---
 

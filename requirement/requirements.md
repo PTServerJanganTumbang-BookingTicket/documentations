@@ -144,7 +144,7 @@ menangani lonjakan trafik ekstrem (flash crowd) saat penjualan tiket dibuka.
 | BR-11 | ➕ NEW     | Akun wajib punya NIK terverifikasi; **1 NIK = 1 akun** secara global              |
 | BR-12 | ➕ NEW     | Maksimal **5 NIK tersimpan** per akun; entri hanya lahir dari validasi Dukcapil yang berhasil |
 | BR-13 | ➕ NEW     | Dukcapil **fail-closed**: NIK belum terverifikasi + Dukcapil tidak dapat dihubungi → booking diblokir |
-| BR-13a | ➕ NEW     | Breaker Dukcapil atau payment gateway OPEN → **admission di-pause**; tidak ada grant baru dan tidak ada posisi antrian yang hilang |
+| BR-13a | ❌ REMOVED | ~~Breaker Dukcapil atau payment gateway OPEN → **admission di-pause**; tidak ada grant baru dan tidak ada posisi antrian yang hilang~~ — ❌ **DIHAPUS** (ADR-006 §4.3): pause admission dihapus; breaker tetap fail closed tetapi antrian tetap maju |
 | BR-14 | ➕ NEW     | Grace **30 detik** setelah TTL Pembayaran; stok tetap di-hold → perjalanan maksimum **15,5 menit** |
 | BR-15 | ➕ NEW     | Grace menutup **latensi callback**, bukan pembayaran terlambat — batas bayar ke gateway tetap 10 menit |
 | BR-16 | ➕ NEW     | Kapasitas antrian **300.000** per event; join di atas itu ditolak `QUEUE_FULL`    |
@@ -153,7 +153,7 @@ menangani lonjakan trafik ekstrem (flash crowd) saat penjualan tiket dibuka.
 | BR-20 | ❌ REMOVED | ~~Grace antrian 120 detik antara GRANT dan klaim~~ — jam booking mulai saat slot diberikan |
 | BR-19 | ➕ NEW     | Refund Disputed **tidak otomatis** di POC — ditandai, dilaporkan, dieksekusi manual |
 | BR-21 | ➕ NEW     | Sold out bersifat **sementara**: kursi dari booking kedaluwarsa dijual kembali pada posisi antrian yang sama. Final setelah 930 detik |
-| BR-22 | ➕ NEW     | Pause admission menambah **60 detik** (`PAUSE_TTL_GRACE_SECONDS`) ke tenggat booking dan pembayaran yang sedang berjalan |
+| BR-22 | ❌ REMOVED | ~~Pause admission menambah **60 detik** (`PAUSE_TTL_GRACE_SECONDS`) ke tenggat booking dan pembayaran yang sedang berjalan~~ — ❌ **DIHAPUS** (ADR-006 §4.3) |
 
 ---
 
@@ -165,15 +165,15 @@ menangani lonjakan trafik ekstrem (flash crowd) saat penjualan tiket dibuka.
 | Position calculation | Di **frontend**: `posisi = ticket_no - now_serving`                                            |
 | Broadcast value      | Server push `now_serving` (global, identik semua user) via SSE                                 |
 | Fallback interval    | Dinamis: 10s (>1000) → 5s (101–1000) → 2s (11–100) → 1s (1–10) — untuk REST fallback `/queue/{ev}/serving` saat SSE tidak tersedia |
-| Admission formula    | `canEnter = (freeSlots > 0) AND (availableTickets > 0)`                                        |
+| Admission formula    | `canEnter = (freeSlots > 0) AND (availableTickets > 0)`. Implementasi: `deficit = min(MAX − open, ceil(stock / 3) − browsing)`, hitungan dari Aurora (ADR-006 §3) |
 | Time authority       | Server-side; `serverTime` di setiap payload SSE dan `server_time` di setiap respons REST — frontend menghitung offset jam sekali, tidak ada endpoint waktu tersendiri |
 | Queue capacity       | **300.000 per event**; `QUEUE_FULL` fail-fast. Halaman utama menampilkan `status` + `queue_state` + `display` — lihat FR-03a..e |
 | Payment grace        | **30 detik** `PENDING_CANCELLATION` setelah TTL Pembayaran; stok tetap di-hold, callback sukses masih diterima |
 | Queue session        | **Tidak ada TTL antrian absolut dan tidak ada grace antrian**; slot yang di-grant tapi tidak diklaim direbut kembali oleh TTL Booking itu sendiri. **Tidak ada re-admit**: `LAPSED` final, slot hilang (ADR-005 Bagian 7) |
 | Anchor TTL           | Booking dari `granted_at`, pembayaran dari `held_at` — berurutan, maksimum **15,5 menit** |
 | NIK verification     | **Fail-closed**; bukti verifikasi tersimpan (akun + Daftar NIK Teman + cache 24 jam) dipakai ulang untuk menekan biaya Dukcapil |
-| Degradasi dependensi | Circuit breaker Dukcapil **atau** payment gateway OPEN (= dependensi sedang tidak dapat dipakai) → **pause admission**: tidak ada grant baru, antrian berhenti maju, tidak ada posisi yang hilang. Berlaku sama untuk kedua dependensi, tanpa pengecualian |
-| TTL saat pause       | Tenggat yang sedang berjalan digeser **+60 detik** (`PAUSE_TTL_GRACE_SECONDS`, dapat dikonfigurasi) **saat pause dimulai** — bukan saat berakhir, karena sweep tetap berjalan dan yang kedaluwarsa di tengah pause sudah terlambat ditolong |
+| Degradasi dependensi | ~~Circuit breaker Dukcapil **atau** payment gateway OPEN (= dependensi sedang tidak dapat dipakai) → **pause admission**: tidak ada grant baru, antrian berhenti maju, tidak ada posisi yang hilang. Berlaku sama untuk kedua dependensi, tanpa pengecualian~~ **Diubah (ADR-006 §4.3):** breaker OPEN → panggilan ke dependensi itu gagal cepat (fail closed) dengan error yang dapat di-retry; antrian **tetap maju** |
+| TTL saat pause       | ~~Tenggat yang sedang berjalan digeser **+60 detik** (`PAUSE_TTL_GRACE_SECONDS`, dapat dikonfigurasi) **saat pause dimulai** — bukan saat berakhir, karena sweep tetap berjalan dan yang kedaluwarsa di tengah pause sudah terlambat ditolong~~ ❌ **DIHAPUS** (ADR-006 §4.3): tenggat tidak pernah digeser |
 | Sold out             | **Reversibel** selama 930 detik: kursi yang dilepas booking kedaluwarsa dijual kembali pada posisi antrian yang sama. Sesudah itu `CLOSED`, stream ditutup `410 Gone` |
 | Payment gateway      | **Midtrans Core API** — Bank Transfer VA (BCA/BNI/BRI/CIMB) dan E-Wallet GoPay. Kartu kredit dan OTC di luar cakupan: keduanya tidak dapat menghormati TTL 10 menit di sisi gateway |
 | Proteksi bot         | Rate limit Redis per IP **lalu** CAPTCHA tak terlihat di join (urutan itu wajib), plus BR-07 untuk user login. Provider CAPTCHA mati → fail-open |
@@ -229,11 +229,12 @@ antrian penuh sebelum mengklik.
     ↓
 [Waiting Room]
     │
-    ├── SSE stream: GET /queue/{event}/stream → server push { now_serving, paused, serverTime }
+    ├── SSE stream: GET /queue/{event}/stream → server push { nowServing, state, ratePerMin, serverTime } (ADR-006 §4.2)
     ├── Frontend hitung: posisi = ticket_no - now_serving
+    ├── Frontend hitung estimasi: ceil(posisi / ratePerMin), dibulatkan ke atas (ADR-006 §6.2)
     ├── Tampilkan posisi & estimasi waktu tunggu
     │
-    ├── Saat menerima event "grant" (server push saat giliran tiba):
+    ├── Saat now_serving ≥ ticket_no (giliran tiba, dideteksi dari broadcast — ADR-006 §4.2):
     │   └── Frontend hit: GET /queue/{event}/me
     │       ├── Sukses → grant_token → redirect ke Detail Tiket
     │       └── Tiket habis → tampilkan "Tiket Habis"
@@ -341,7 +342,7 @@ antrian penuh sebelum mengklik.
 | Status Event        | `status`: `AVAILABLE` / `SELLING_OUT_FAST` / `SOLD_OUT` — sumbu stok, terpisah dari antrian |
 | Sold Out Sementara  | Stok nol tetapi kursi masih dapat kembali dari booking yang kedaluwarsa; stream SSE tetap terbuka dan antrian tidak kehilangan posisinya |
 | Sale Ditutup        | Keadaan terminal setelah 930 detik tanpa kemungkinan kursi kembali; stream ditutup dan koneksi baru ditolak `410 Gone` |
-| Pause TTL Grace     | Tambahan 60 detik pada tenggat booking dan pembayaran yang sedang berjalan, diberikan saat admission di-pause agar gangguan sistem tidak memakan waktu customer |
+| Pause TTL Grace     | ~~Tambahan 60 detik pada tenggat booking dan pembayaran yang sedang berjalan, diberikan saat admission di-pause agar gangguan sistem tidak memakan waktu customer~~ ❌ dihapus (ADR-006 §4.3) |
 | Display Block       | Jawaban siap-render dari server (`enabled`, `action`, `label_key`, `badge_key`); frontend tidak menghitung presedensi |
 | CAS                 | *Compare-And-Swap* — mengubah nilai hanya bila ia **masih** sama dengan yang dibaca, dalam satu operasi atomik; pihak yang kalah balapan mendapat 0 baris dan berhenti sebelum efek sampingnya, sehingga dua proses bersamaan tetap aman tanpa lock |
 
@@ -363,10 +364,10 @@ antrian penuh sebelum mengklik.
 | Transport     | 🔧 DECIDED | **Server-Sent Events (SSE)** via ECS Fargate — REST polling tetap sebagai fallback (jaringan blokir SSE / degraded mode) |
 | Position calc | 🔧 DECIDED | Di frontend (`ticket_no - now_serving`)                   |
 | Fail-closed   | 🔧 DECIDED | Dukcapil gagal/timeout → booking diblokir (BR-13)         |
-| Pause         | 🔧 DECIDED | Breaker Dukcapil / gateway OPEN → pause admission (BR-13a) |
+| Pause         | ❌ REMOVED | ~~Breaker Dukcapil / gateway OPEN → pause admission (BR-13a)~~ dihapus (ADR-006 §4.3) |
 | Grace antrian | ❌ REMOVED | Jam booking mulai saat slot diberikan (BR-03, BR-20)      |
 | Sold out      | 🔧 DECIDED | Reversibel 930 detik, lalu `CLOSED` (BR-21)              |
-| TTL saat pause| 🔧 DECIDED | +60 detik saat pause mulai, dapat dikonfigurasi (BR-22)  |
+| TTL saat pause| ❌ REMOVED | ~~+60 detik saat pause mulai, dapat dikonfigurasi (BR-22)~~ dihapus (ADR-006 §4.3) |
 | Event status  | 🔧 DECIDED | Dua field + `display` server-side (FR-03a..e)             |
 | Multi-kategori| 🔧 DECIDED | Satu transaksi boleh lintas kategori, all-or-nothing (FR-13a..b) |
 | Gateway       | 🔧 DECIDED | Midtrans Core API — dua metode (VA + GoPay)              |
