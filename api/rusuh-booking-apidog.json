@@ -3982,7 +3982,7 @@
                       "name": "X-Device-Id",
                       "required": false,
                       "enable": true,
-                      "description": "Acak 128 bit dari klien, disimpan server sebagai HMAC pada keterlibatan dan dicocokkan pada setiap panggilan ber-grant. WAJIB bila tidak login — grant tanpa pengikatan tidak dapat diikat belakangan, jadi tamu yang tidak mengirimnya ditolak DI SINI dengan 400 DEVICE_ID_REQUIRED, bukan nanti.",
+                      "description": "Acak 128 bit dari klien, disimpan server sebagai HMAC pada keterlibatan dan dicocokkan pada setiap panggilan ber-grant. WAJIB bila tidak login — grant tanpa pengikatan tidak dapat diikat belakangan, jadi tamu yang tidak mengirimnya ditolak DI SINI dengan 400 DEVICE_ID_REQUIRED, bukan nanti. Format tidak divalidasi (v2.9).",
                       "example": "d3f1a9c4b70e42f88a1c5e6072b9d4af",
                       "type": "string",
                       "schema": {
@@ -4077,7 +4077,8 @@
                             },
                             "sse_url": {
                               "type": "string",
-                              "example": "/queue/stream"
+                              "example": "https://events.my-rusuh.my.id/events/evt_konser_a/queue/stream",
+                              "description": "URL absolut stream §3.2 (host events.*, beda dari join di api.*)"
                             },
                             "event": {
                               "type": "object",
@@ -4157,7 +4158,7 @@
                     "headers": [],
                     "contentType": "json",
                     "mediaType": "application/json",
-                    "description": "captcha_token tidak disertakan, tidak valid, sudah dipakai, atau kedaluwarsa",
+                    "description": "captcha_token tidak disertakan (CAPTCHA_REQUIRED), X-Device-Id tidak ada untuk tamu (DEVICE_ID_REQUIRED), atau body / X-Device-Id tidak valid (VALIDATION_ERROR)",
                     "oasExtensions": "",
                     "itemSchema": {},
                     "jsonSchema": {
@@ -4283,11 +4284,11 @@
                   {
                     "id": "409430001",
                     "code": "409",
-                    "name": "SALE_NOT_OPEN",
+                    "name": "SALE_NOT_OPEN / SOLD_OUT",
                     "headers": [],
                     "contentType": "json",
                     "mediaType": "application/json",
-                    "description": "state = SCHEDULED — gerbang belum buka; body memuat sale_starts_at",
+                    "description": "SALE_NOT_OPEN: state = SCHEDULED, body memuat sale_starts_at. SOLD_OUT (v2.8): state = SOLD_OUT, hanya pendatang baru; body memuat sold_out_at",
                     "oasExtensions": "",
                     "itemSchema": {},
                     "jsonSchema": {
@@ -4334,16 +4335,23 @@
                           "properties": {
                             "queue_state": {
                               "type": "string",
-                              "example": "NOT_OPEN"
+                              "example": "NOT_OPEN",
+                              "description": "NOT_OPEN (SALE_NOT_OPEN) atau SOLD_OUT (SOLD_OUT)"
                             },
                             "sale_starts_at": {
                               "type": "string",
                               "format": "date-time"
+                            },
+                            "sold_out_at": {
+                              "type": "string",
+                              "format": "date-time",
+                              "description": "Hanya pada SOLD_OUT"
                             }
                           },
                           "x-apidog-orders": [
                             "queue_state",
-                            "sale_starts_at"
+                            "sale_starts_at",
+                            "sold_out_at"
                           ]
                         }
                       },
@@ -4364,7 +4372,7 @@
                     "headers": [],
                     "contentType": "json",
                     "mediaType": "application/json",
-                    "description": "rl:join:{ip} 20 per 5 menit, ATAU batas kedua 3 join per akun per menit",
+                    "description": "rl:join:{ip} 20 per 5 menit, ATAU batas kedua 3 join per akun per menit. data.retry_after (detik) sama dengan header Retry-After. Limiter tidak tersedia = fail-open.",
                     "oasExtensions": "",
                     "itemSchema": {},
                     "jsonSchema": {
@@ -4501,11 +4509,213 @@
                       ]
                     },
                     "itemSchema": {},
-                    "description": "Queue full",
+                    "description": "QUEUE_FULL: kapasitas tercapai. QUEUE_NOT_READY (v2.8): event belum di-seed. INTERNAL_ERROR (v2.8): Redis tidak dapat dihubungi; coba lagi",
                     "contentType": "json",
                     "mediaType": "application/json",
                     "oasExtensions": "",
-                    "name": "QUEUE_FULL"
+                    "name": "QUEUE_FULL / QUEUE_NOT_READY / INTERNAL_ERROR"
+                  },
+                  {
+                    "id": "401430001",
+                    "code": "401",
+                    "name": "TOKEN_INVALID / TOKEN_EXPIRED / DEVICE_MISMATCH / UNAUTHORIZED",
+                    "headers": [],
+                    "contentType": "json",
+                    "mediaType": "application/json",
+                    "description": "Authorization dikirim tetapi tidak sah (termasuk Bearer kosong). Tidak diperlakukan sebagai tamu.",
+                    "oasExtensions": "",
+                    "itemSchema": {},
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 401
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Sesi tidak valid"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "TOKEN_INVALID",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    }
+                  },
+                  {
+                    "id": "404430001",
+                    "code": "404",
+                    "name": "NOT_FOUND",
+                    "headers": [],
+                    "contentType": "json",
+                    "mediaType": "application/json",
+                    "description": "event_id tidak dapat menjadi hash tag Redis ({, } atau spasi)",
+                    "oasExtensions": "",
+                    "itemSchema": {},
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 404
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Event tidak ditemukan"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "NOT_FOUND",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    }
+                  },
+                  {
+                    "id": "410430001",
+                    "code": "410",
+                    "name": "SALE_CLOSED",
+                    "headers": [],
+                    "contentType": "json",
+                    "mediaType": "application/json",
+                    "description": "state = CLOSED (juga bagi yang rejoin)",
+                    "oasExtensions": "",
+                    "itemSchema": {},
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 410
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Penjualan sudah ditutup"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "SALE_CLOSED",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "queue_state": {
+                              "type": "string",
+                              "example": "CLOSED"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "queue_state"
+                          ]
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    }
                   }
                 ],
                 "responseExamples": [
@@ -4515,7 +4725,7 @@
                     "description": "",
                     "oasKey": "",
                     "oasExtensions": "",
-                    "data": "{\"meta\":{\"code\":200,\"message\":\"Successfully joined queue\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{\"ticket_no\":32748,\"now_serving\":31500,\"position\":1248,\"queue_token\":\"qt_xyz789\",\"sse_url\":\"/queue/stream\",\"event\":{\"id\":\"evt_konser_a\",\"name\":\"Konser A — Jakarta\"}}}"
+                    "data": "{\"meta\": {\"code\": 200, \"message\": \"Successfully joined queue\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {\"ticket_no\": 32748, \"now_serving\": 31500, \"position\": 1248, \"queue_token\": \"qt_xyz789\", \"sse_url\": \"https://events.my-rusuh.my.id/events/evt_konser_a/queue/stream\", \"event\": {\"id\": \"evt_konser_a\", \"name\": \"Konser A — Jakarta\"}}}"
                   },
                   {
                     "name": "Rejoined (BR-07 / BR-09)",
@@ -4523,7 +4733,7 @@
                     "description": "",
                     "oasKey": "",
                     "oasExtensions": "",
-                    "data": "{\"meta\":{\"code\":200,\"message\":\"Rejoined existing queue position\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{\"ticket_no\":32748,\"now_serving\":31520,\"position\":1228,\"queue_token\":\"qt_xyz789\",\"sse_url\":\"/queue/stream\",\"rejoined\":true,\"state\":\"QUEUED\"}}"
+                    "data": "{\"meta\": {\"code\": 200, \"message\": \"Rejoined existing queue position\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {\"ticket_no\": 32748, \"now_serving\": 31520, \"position\": 1228, \"queue_token\": \"qt_xyz789\", \"sse_url\": \"https://events.my-rusuh.my.id/events/evt_konser_a/queue/stream\", \"rejoined\": true, \"state\": \"QUEUED\"}}"
                   },
                   {
                     "name": "Queue empty — granted (FR-05)",
@@ -4531,7 +4741,7 @@
                     "description": "",
                     "oasKey": "",
                     "oasExtensions": "",
-                    "data": "{\"meta\":{\"code\":200,\"message\":\"No queue — access granted\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{\"granted\":true,\"grant_token\":\"gt_abc123\",\"queue_token\":\"qt_xyz789\",\"booking_expires_at\":\"2026-11-10T02:05:00Z\"}}"
+                    "data": "{\"meta\": {\"code\": 200, \"message\": \"No queue — access granted\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {\"granted\": true, \"grant_token\": \"gt_abc123\", \"queue_token\": \"qt_xyz789\", \"booking_expires_at\": \"2026-11-10T02:05:00Z\"}}"
                   },
                   {
                     "name": "CAPTCHA_REQUIRED",
@@ -4580,6 +4790,86 @@
                     "oasKey": "",
                     "oasExtensions": "",
                     "data": "{\"meta\":{\"code\":503,\"message\":\"Antrian sedang penuh, silakan coba beberapa saat lagi\",\"error_code\":\"QUEUE_FULL\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{\"queue_state\":\"FULL\",\"queue_capacity\":300000}}"
+                  },
+                  {
+                    "name": "VALIDATION_ERROR",
+                    "responseId": "400430001",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": "",
+                    "data": "{\"meta\": {\"code\": 400, \"message\": \"Body tidak valid\", \"error_code\": \"VALIDATION_ERROR\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}"
+                  },
+                  {
+                    "name": "TOKEN_INVALID",
+                    "responseId": "401430001",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": "",
+                    "data": "{\"meta\": {\"code\": 401, \"message\": \"Sesi tidak valid\", \"error_code\": \"TOKEN_INVALID\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}"
+                  },
+                  {
+                    "name": "TOKEN_EXPIRED",
+                    "responseId": "401430001",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": "",
+                    "data": "{\"meta\": {\"code\": 401, \"message\": \"Sesi sudah kedaluwarsa\", \"error_code\": \"TOKEN_EXPIRED\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}"
+                  },
+                  {
+                    "name": "NOT_FOUND",
+                    "responseId": "404430001",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": "",
+                    "data": "{\"meta\": {\"code\": 404, \"message\": \"Event tidak ditemukan\", \"error_code\": \"NOT_FOUND\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}"
+                  },
+                  {
+                    "name": "SOLD_OUT",
+                    "responseId": "409430001",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": "",
+                    "data": "{\"meta\": {\"code\": 409, \"message\": \"Tiket sedang habis\", \"error_code\": \"SOLD_OUT\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {\"queue_state\": \"SOLD_OUT\", \"sold_out_at\": \"2026-11-10T02:40:12Z\"}}"
+                  },
+                  {
+                    "name": "SALE_CLOSED",
+                    "responseId": "410430001",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": "",
+                    "data": "{\"meta\": {\"code\": 410, \"message\": \"Penjualan sudah ditutup\", \"error_code\": \"SALE_CLOSED\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {\"queue_state\": \"CLOSED\"}}"
+                  },
+                  {
+                    "name": "QUEUE_NOT_READY",
+                    "responseId": "171958166",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": "",
+                    "data": "{\"meta\": {\"code\": 503, \"message\": \"Antrian belum siap\", \"error_code\": \"QUEUE_NOT_READY\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}"
+                  },
+                  {
+                    "name": "INTERNAL_ERROR",
+                    "responseId": "171958166",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": "",
+                    "data": "{\"meta\": {\"code\": 503, \"message\": \"Antrian sedang tidak tersedia, silakan coba lagi\", \"error_code\": \"INTERNAL_ERROR\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}"
+                  },
+                  {
+                    "name": "DEVICE_MISMATCH",
+                    "responseId": "401430001",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": "",
+                    "data": "{\"meta\": {\"code\": 401, \"message\": \"Token antrian terdaftar di perangkat lain\", \"error_code\": \"DEVICE_MISMATCH\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}"
+                  },
+                  {
+                    "name": "UNAUTHORIZED",
+                    "responseId": "401430001",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": "",
+                    "data": "{\"meta\": {\"code\": 401, \"message\": \"Token antrian milik akun lain\", \"error_code\": \"UNAUTHORIZED\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}"
                   }
                 ],
                 "requestBody": {
@@ -4612,7 +4902,7 @@
                     }
                   ]
                 },
-                "description": "Join queue.\n\nURUTAN PEMERIKSAAN: rate limit DULU, CAPTCHA kemudian. Rate limit adalah panggilan Redis lokal; verifikasi CAPTCHA adalah round trip eksternal. Membaliknya berarti membayar satu panggilan pihak ketiga untuk tiap percobaan yang akhirnya ditolak.\n\nCookie: Max-Age diturunkan dari SALE_WINDOW_SECONDS, bukan dipatok 7200 — ia harus kedaluwarsa bersamaan dengan token:{uuid} yang dirujuknya.\n\nRespons membawa queue_token (untuk mobile, v2.7). Tidak ada estimasi waktu tunggu: frontend menghitungnya dari ratePerMin (api-contracts §3.5).",
+                "description": "Join queue. Dipanggil oleh tombol event dengan action JOIN_QUEUE maupun GO_TO_TICKETS (§2.1).\n\nURUTAN PEMERIKSAAN: bentuk request → identitas (Bearer tidak sah = 401, bukan tamu; tamu wajib X-Device-Id) → rate limit → CAPTCHA → state sale → pemulihan (BR-09 queue_token milik pemanggil, lalu BR-07 akun) → SOLD_OUT → kapasitas → nomor baru. Rate limit DULU, CAPTCHA kemudian: rate limit adalah panggilan Redis lokal; verifikasi CAPTCHA adalah round trip eksternal. Penolakan apa pun tidak memakan ticket_no.\n\nCookie: queue_token=…; Domain=my-rusuh.my.id; Path=/events/{event_id}; HttpOnly; Secure; SameSite=Strict; Max-Age diturunkan dari SALE_WINDOW_SECONDS — ia harus kedaluwarsa bersamaan dengan token:{queue_token}.\n\nRespons membawa queue_token (untuk mobile, v2.7) dan sse_url absolut (host events.*, v2.8). Tidak ada estimasi waktu tunggu: frontend menghitungnya dari ratePerMin (api-contracts §3.5).\n\nqueue_token hanya berlaku bagi pemiliknya (v2.9, ADR-006 §8.9): token tamu dari perangkat lain → 401 DEVICE_MISMATCH; token akun dipakai akun lain / tamu → 401 UNAUTHORIZED. Keduanya menghapus cookie; klien menghapus token antriannya lalu join lagi tanpa token.",
                 "tags": [
                   "Queue"
                 ],
@@ -5222,7 +5512,7 @@
                   "additionalContentTypes": [],
                   "oasExtensions": ""
                 },
-                "description": "SSE stream (ALB events.rusuhtiket.com). Auth: cookie queue_token (web) / X-Queue-Token (mobile).\n\nSemua koneksi event menerima byte yang identik. Frontend menghitung position = ticket_no − nowServing dan estimasi menit dari ratePerMin (api-contracts §3.5). nowServing ≥ ticket_no → GET /queue/me.\n\n| Event | Kapan | data |\n|---|---|---|\n| (default) | snapshot saat connect, tiap nowServing berubah, heartbeat 10 detik | {nowServing, state, ratePerMin, serverTime} + id |\n| status | tiap transisi state: OPEN → SOLD_OUT, SOLD_OUT → OPEN, → CLOSED | {state, soldOutAt, serverTime} |\n| stale | data berhenti segar (Redis putus / tanpa broadcast 30 detik), dan saat pulih | {stale, reason} |\n| sold-out | tepat setelah status CLOSED | {message} — klien WAJIB es.close() |\n| reconnect | task shutdown | retry: berjitter 1–15 detik |\n| : keepalive | tiap 15 detik | komentar SSE |\n\nSOLD_OUT reversibel: klien tetap tersambung. Hanya CLOSED yang menutup stream (410 untuk koneksi baru).",
+                "description": "SSE stream (ALB events.my-rusuh.my.id). Auth: cookie queue_token (web) / X-Queue-Token (mobile).\n\nSemua koneksi event menerima byte yang identik. Frontend menghitung position = ticket_no − nowServing dan estimasi menit dari ratePerMin (api-contracts §3.5). nowServing ≥ ticket_no → GET /queue/me.\n\n| Event | Kapan | data |\n|---|---|---|\n| (default) | snapshot saat connect, tiap nowServing berubah, heartbeat 10 detik | {nowServing, state, ratePerMin, serverTime} + id |\n| status | tiap transisi state: OPEN → SOLD_OUT, SOLD_OUT → OPEN, → CLOSED | {state, soldOutAt, serverTime} |\n| stale | data berhenti segar (Redis putus / tanpa broadcast 30 detik), dan saat pulih | {stale, reason} |\n| sold-out | tepat setelah status CLOSED | {message} — klien WAJIB es.close() |\n| reconnect | task shutdown | retry: berjitter 1–15 detik |\n| : keepalive | tiap 15 detik | komentar SSE |\n\nSOLD_OUT reversibel: klien tetap tersambung. Hanya CLOSED yang menutup stream (410 untuk koneksi baru).",
                 "tags": [
                   "Queue"
                 ],

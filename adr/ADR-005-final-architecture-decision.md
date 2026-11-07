@@ -122,7 +122,7 @@ dikelola lewat Bagian 11.
                ┌─────────────────────────┴────────────────────────────┐
                ▼                                                       ▼
   ┌──────────────────────────────────┐      ┌──────────────────────────────────┐
-  │  ALB — events.rusuhtiket.com     │      │  API Gateway — api.rusuhtiket.com│
+  │  ALB — events.my-rusuh.my.id     │      │  API Gateway — api.my-rusuh.my.id│
   │  HTTP/2 · idle 3600s             │      │ GET  /events                FR-01│
   │  deregistration delay 60s        │      │ GET  /events/{ev}           FR-11│
   │  sticky: OFF · health /health    │      │ GET  /events/{ev}/tickets   FR-12│
@@ -1654,7 +1654,7 @@ SETTLED_TOMBSTONE_SECONDS=3600  -- umur settled:{uuid} setelah CONFIRMED (Bagian
 DEVICE_PEPPER               -- HMAC device_id tamu (Bagian 12). TERPISAH dari pepper NIK
   -- dan BERBEDA sifatnya: boleh dirotasi ANTAR sale, tidak pernah DI TENGAH sale —
   -- rotasi di tengah membatalkan setiap pengikatan yang hidup.
-MAX_DEVICE_REBINDS=1        -- Bagian 17 #12
+MAX_DEVICE_REBINDS=1        -- Bagian 17 #12 — DIHAPUS oleh ADR-006 §8.9 (tanpa rebind)
   -- MAX_READMITS DIHAPUS: LAPSED tidak lagi memberi kesempatan kedua sama sekali,
   -- jadi tidak ada batas untuk disetel. regrant:{ev} hanya terisi oleh kegagalan
   -- INSERT grant, yang sudah dibatasi GRANT_INSERT_MAX_RETRIES (Bagian 6, Bagian 7).
@@ -2497,7 +2497,7 @@ memakai cookie/header — dan mengapa perilaku yang sama dipakai **dengan sengaj
 
 | Platform | Mekanisme | Token di URL? |
 |---|---|---|
-| Web | Cookie `HttpOnly; Secure; SameSite=Lax; Domain=.rusuhtiket.com`; `withCredentials: true` | ❌ |
+| Web | Cookie `HttpOnly; Secure; SameSite=Lax; Domain=.my-rusuh.my.id`; `withCredentials: true` | ❌ |
 | Mobile | `react-native-sse` custom header → `X-Queue-Token` | ❌ |
 
 | Kelas | Pengikatan `grantToken` | Requirement |
@@ -2506,6 +2506,11 @@ memakai cookie/header — dan mengapa perilaku yang sama dipakai **dengan sengaj
 | **Anonim** | `queue_token` + `device_id` (di bawah) | FR-29, FR-30 |
 
 ### Pengikatan device untuk grant anonim
+
+> ⚠️ **Diubah oleh ADR-006 §8.9** — **tanpa rebind.** Baris "Toleransi" dan paragraf "Satu rebind, dan itu sengaja
+> longgar" di bawah tidak berlaku: token tamu hanya berlaku dari perangkat yang menerimanya, tidak cocok → `401
+> DEVICE_MISMATCH`. `MAX_DEVICE_REBINDS`, field `rebinds` dan `DeviceRebindRate` dihapus. Token akun dicocokkan ke
+> `account_id`.
 
 Versi sebelumnya dokumen ini menulis "device fingerprint" tanpa mendefinisikan apa pun: tidak
 ada header, tidak ada algoritma, tidak ada perilaku saat fingerprint berubah. Sebagai kontrol
@@ -3147,7 +3152,7 @@ Working set Redis pada 300.000 ≈ 80 MB terhadap 13 GB per node: sizing didasar
 | 10 | **`SALE_WINDOW_SECONDS`** — belum pernah punya nilai, dan kini memikul TTL `acct`, TTL `token:{uuid}`, **dan** `ACCESS_TOKEN_TTL_SECONDS`. Fallback 21600 dipakai bila env tidak didefinisikan | Tim + **Pemilik tender** (bergantung jam penjualan) |
 | 11 | Apakah `nik_verified` dikeluarkan dari claim access token. Pada 22740 detik claim itu adalah otorisasi ter-cache 6 jam; mengeluarkannya berarti satu pembacaan basis data per permintaan di bawah flash crowd | Tim |
 | 13 | Peringatan pra-gerbang di FE: jaga aplikasi tetap di depan, izinkan notifikasi, jangan andalkan push saat layar terkunci. Ini **satu-satunya** mitigasi yang tersisa bagi customer mobile sejak kesempatan kedua atas `LAPSED` dihapus (Bagian 7), dan ia peringatan — bukan jaminan | Tim FE |
-| 12 | **`MAX_DEVICE_REBINDS`**, dan apakah pengikatan device ditegakkan di web — menghapus storage browser itu lumrah, dan tiap rebind yang ditolak adalah slot yang hilang bagi customer yang sah | Tim + QA |
+| 12 | ⚠️ **Diputuskan oleh ADR-006 §8.9: tanpa rebind.** **`MAX_DEVICE_REBINDS`**, dan apakah pengikatan device ditegakkan di web — menghapus storage browser itu lumrah, dan tiap rebind yang ditolak adalah slot yang hilang bagi customer yang sah | Tim + QA |
 
 **Diputuskan dan ditutup**: pengawasan kesegaran antrian — **sse-server** mendeteksi
 keheningan `sse-broadcast` > `SSE_STALE_AFTER_SECONDS` (30 detik, = 3 heartbeat) selama
