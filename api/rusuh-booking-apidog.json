@@ -4284,11 +4284,11 @@
                   {
                     "id": "409430001",
                     "code": "409",
-                    "name": "SALE_NOT_OPEN / SOLD_OUT",
+                    "name": "SALE_NOT_OPEN / FULL_BOOKED",
                     "headers": [],
                     "contentType": "json",
                     "mediaType": "application/json",
-                    "description": "SALE_NOT_OPEN: state = SCHEDULED, body memuat sale_starts_at. SOLD_OUT (v2.8): state = SOLD_OUT, hanya pendatang baru; body memuat sold_out_at",
+                    "description": "SALE_NOT_OPEN: state = SCHEDULED, body memuat sale_starts_at. FULL_BOOKED (v2.8): state = FULL_BOOKED, hanya pendatang baru; body memuat full_booked_at",
                     "oasExtensions": "",
                     "itemSchema": {},
                     "jsonSchema": {
@@ -4336,22 +4336,22 @@
                             "queue_state": {
                               "type": "string",
                               "example": "NOT_OPEN",
-                              "description": "NOT_OPEN (SALE_NOT_OPEN) atau SOLD_OUT (SOLD_OUT)"
+                              "description": "NOT_OPEN (SALE_NOT_OPEN) atau FULL_BOOKED (FULL_BOOKED)"
                             },
                             "sale_starts_at": {
                               "type": "string",
                               "format": "date-time"
                             },
-                            "sold_out_at": {
+                            "full_booked_at": {
                               "type": "string",
                               "format": "date-time",
-                              "description": "Hanya pada SOLD_OUT"
+                              "description": "Hanya pada FULL_BOOKED"
                             }
                           },
                           "x-apidog-orders": [
                             "queue_state",
                             "sale_starts_at",
-                            "sold_out_at"
+                            "full_booked_at"
                           ]
                         }
                       },
@@ -4824,12 +4824,12 @@
                     "data": "{\"meta\": {\"code\": 404, \"message\": \"Event tidak ditemukan\", \"error_code\": \"NOT_FOUND\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}"
                   },
                   {
-                    "name": "SOLD_OUT",
+                    "name": "FULL_BOOKED",
                     "responseId": "409430001",
                     "description": "",
                     "oasKey": "",
                     "oasExtensions": "",
-                    "data": "{\"meta\": {\"code\": 409, \"message\": \"Tiket sedang habis\", \"error_code\": \"SOLD_OUT\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {\"queue_state\": \"SOLD_OUT\", \"sold_out_at\": \"2026-11-10T02:40:12Z\"}}"
+                    "data": "{\"meta\": {\"code\": 409, \"message\": \"Tiket sedang habis\", \"error_code\": \"FULL_BOOKED\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {\"queue_state\": \"FULL_BOOKED\", \"full_booked_at\": \"2026-11-10T02:40:12Z\"}}"
                   },
                   {
                     "name": "SALE_CLOSED",
@@ -4902,7 +4902,7 @@
                     }
                   ]
                 },
-                "description": "Join queue. Dipanggil oleh tombol event dengan action JOIN_QUEUE maupun GO_TO_TICKETS (§2.1).\n\nURUTAN PEMERIKSAAN: bentuk request → identitas (Bearer tidak sah = 401, bukan tamu; tamu wajib X-Device-Id) → rate limit → CAPTCHA → state sale → pemulihan (BR-09 queue_token milik pemanggil, lalu BR-07 akun) → SOLD_OUT → kapasitas → nomor baru. Rate limit DULU, CAPTCHA kemudian: rate limit adalah panggilan Redis lokal; verifikasi CAPTCHA adalah round trip eksternal. Penolakan apa pun tidak memakan ticket_no.\n\nCookie: queue_token=…; Domain=my-rusuh.my.id; Path=/events/{event_id}; HttpOnly; Secure; SameSite=Strict; Max-Age diturunkan dari SALE_WINDOW_SECONDS — ia harus kedaluwarsa bersamaan dengan token:{queue_token}.\n\nRespons membawa queue_token (untuk mobile, v2.7) dan sse_url absolut (host events.*, v2.8). Tidak ada estimasi waktu tunggu: frontend menghitungnya dari ratePerMin (api-contracts §3.5).\n\nqueue_token hanya berlaku bagi pemiliknya (v2.9, ADR-006 §8.9): token tamu dari perangkat lain → 401 DEVICE_MISMATCH; token akun dipakai akun lain / tamu → 401 UNAUTHORIZED. Keduanya menghapus cookie; klien menghapus token antriannya lalu join lagi tanpa token.",
+                "description": "Join queue. Dipanggil oleh tombol event dengan action JOIN_QUEUE maupun GO_TO_TICKETS (§2.1).\n\nURUTAN PEMERIKSAAN: bentuk request → identitas (Bearer tidak sah = 401, bukan tamu; tamu wajib X-Device-Id) → rate limit → CAPTCHA → state sale → pemulihan (BR-09 queue_token milik pemanggil, lalu BR-07 akun) → FULL_BOOKED → kapasitas → nomor baru. Rate limit DULU, CAPTCHA kemudian: rate limit adalah panggilan Redis lokal; verifikasi CAPTCHA adalah round trip eksternal. Penolakan apa pun tidak memakan ticket_no.\n\nCookie: queue_token=…; Domain=my-rusuh.my.id; Path=/events/{event_id}; HttpOnly; Secure; SameSite=Strict; Max-Age diturunkan dari SALE_WINDOW_SECONDS — ia harus kedaluwarsa bersamaan dengan token:{queue_token}.\n\nRespons membawa queue_token (untuk mobile, v2.7) dan sse_url absolut (host events.*, v2.8). Tidak ada estimasi waktu tunggu: frontend menghitungnya dari ratePerMin (api-contracts §3.5).\n\nqueue_token hanya berlaku bagi pemiliknya (v2.9, ADR-006 §8.9): token tamu dari perangkat lain → 401 DEVICE_MISMATCH; token akun dipakai akun lain / tamu → 401 UNAUTHORIZED. Keduanya menghapus cookie; klien menghapus token antriannya lalu join lagi tanpa token.",
                 "tags": [
                   "Queue"
                 ],
@@ -5018,7 +5018,7 @@
                                   "enum": [
                                     "SCHEDULED",
                                     "OPEN",
-                                    "SOLD_OUT",
+                                    "FULL_BOOKED",
                                     "CLOSED"
                                   ],
                                   "example": "OPEN"
@@ -5057,18 +5057,18 @@
                                   "enum": [
                                     "SCHEDULED",
                                     "OPEN",
-                                    "SOLD_OUT",
+                                    "FULL_BOOKED",
                                     "CLOSED"
                                   ],
-                                  "example": "SOLD_OUT"
+                                  "example": "FULL_BOOKED"
                                 },
-                                "soldOutAt": {
+                                "fullBookedAt": {
                                   "type": [
                                     "string",
                                     "null"
                                   ],
                                   "format": "date-time",
-                                  "description": "Hanya pada SOLD_OUT"
+                                  "description": "Hanya pada FULL_BOOKED"
                                 },
                                 "serverTime": {
                                   "type": "string",
@@ -5081,7 +5081,7 @@
                               ],
                               "x-apidog-orders": [
                                 "state",
-                                "soldOutAt",
+                                "fullBookedAt",
                                 "serverTime"
                               ],
                               "additionalProperties": false
@@ -5205,7 +5205,7 @@
                       ]
                     },
                     "itemSchema": {},
-                    "description": "state = CLOSED saja. SOLD_OUT TIDAK menutup stream: stok dapat kembali dari booking yang kedaluwarsa, dan admission lanjut. EventSource berhenti permanen pada status non-200 — itu disengaja, dan hanya benar untuk CLOSED.",
+                    "description": "state = CLOSED saja. FULL_BOOKED TIDAK menutup stream: stok dapat kembali dari booking yang kedaluwarsa, dan admission lanjut. EventSource berhenti permanen pada status non-200 — itu disengaja, dan hanya benar untuk CLOSED.",
                     "contentType": "json",
                     "oasExtensions": "",
                     "name": "SALE_CLOSED",
@@ -5433,8 +5433,8 @@
                     "oasExtensions": ""
                   },
                   {
-                    "name": "Status SOLD_OUT (tetap tersambung)",
-                    "data": "event: status\ndata: {\"state\":\"SOLD_OUT\",\"soldOutAt\":\"2026-10-24T13:40:12.000Z\",\"serverTime\":\"2026-10-24T13:40:12.120Z\"}\n",
+                    "name": "Status FULL_BOOKED (tetap tersambung)",
+                    "data": "event: status\ndata: {\"state\":\"FULL_BOOKED\",\"fullBookedAt\":\"2026-10-24T13:40:12.000Z\",\"serverTime\":\"2026-10-24T13:40:12.120Z\"}\n",
                     "responseId": "117070702",
                     "description": "",
                     "oasKey": "status_sold_out",
@@ -5442,7 +5442,7 @@
                   },
                   {
                     "name": "Status OPEN (stok kembali)",
-                    "data": "event: status\ndata: {\"state\":\"OPEN\",\"soldOutAt\":null,\"serverTime\":\"2026-10-24T13:44:02.501Z\"}\n",
+                    "data": "event: status\ndata: {\"state\":\"OPEN\",\"fullBookedAt\":null,\"serverTime\":\"2026-10-24T13:44:02.501Z\"}\n",
                     "responseId": "117070702",
                     "description": "",
                     "oasKey": "status_reopened",
@@ -5450,7 +5450,7 @@
                   },
                   {
                     "name": "Closed — es.close()",
-                    "data": "event: status\ndata: {\"state\":\"CLOSED\",\"soldOutAt\":null,\"serverTime\":\"2026-10-24T13:55:42.000Z\"}\n\nevent: sold-out\ndata: {\"message\":\"Tiket sudah habis\"}\n",
+                    "data": "event: status\ndata: {\"state\":\"CLOSED\",\"fullBookedAt\":null,\"serverTime\":\"2026-10-24T13:55:42.000Z\"}\n\nevent: sold-out\ndata: {\"message\":\"Tiket sudah habis\"}\n",
                     "responseId": "117070702",
                     "description": "",
                     "oasKey": "closed",
@@ -5512,7 +5512,7 @@
                   "additionalContentTypes": [],
                   "oasExtensions": ""
                 },
-                "description": "SSE stream (ALB events.my-rusuh.my.id). Auth: cookie queue_token (web) / X-Queue-Token (mobile).\n\nSemua koneksi event menerima byte yang identik. Frontend menghitung position = ticket_no − nowServing dan estimasi menit dari ratePerMin (api-contracts §3.5). nowServing ≥ ticket_no → GET /queue/me.\n\n| Event | Kapan | data |\n|---|---|---|\n| (default) | snapshot saat connect, tiap nowServing berubah, heartbeat 10 detik | {nowServing, state, ratePerMin, serverTime} + id |\n| status | tiap transisi state: OPEN → SOLD_OUT, SOLD_OUT → OPEN, → CLOSED | {state, soldOutAt, serverTime} |\n| stale | data berhenti segar (Redis putus / tanpa broadcast 30 detik), dan saat pulih | {stale, reason} |\n| sold-out | tepat setelah status CLOSED | {message} — klien WAJIB es.close() |\n| reconnect | task shutdown | retry: berjitter 1–15 detik |\n| : keepalive | tiap 15 detik | komentar SSE |\n\nSOLD_OUT reversibel: klien tetap tersambung. Hanya CLOSED yang menutup stream (410 untuk koneksi baru).",
+                "description": "SSE stream (ALB events.my-rusuh.my.id). Auth: cookie queue_token (web) / X-Queue-Token (mobile).\n\nSemua koneksi event menerima byte yang identik. Frontend menghitung position = ticket_no − nowServing dan estimasi menit dari ratePerMin (api-contracts §3.5). nowServing ≥ ticket_no → GET /queue/me.\n\n| Event | Kapan | data |\n|---|---|---|\n| (default) | snapshot saat connect, tiap nowServing berubah, heartbeat 10 detik | {nowServing, state, ratePerMin, serverTime} + id |\n| status | tiap transisi state: OPEN → FULL_BOOKED, FULL_BOOKED → OPEN, → CLOSED | {state, fullBookedAt, serverTime} |\n| stale | data berhenti segar (Redis putus / tanpa broadcast 30 detik), dan saat pulih | {stale, reason} |\n| sold-out | tepat setelah status CLOSED | {message} — klien WAJIB es.close() |\n| reconnect | task shutdown | retry: berjitter 1–15 detik |\n| : keepalive | tiap 15 detik | komentar SSE |\n\nFULL_BOOKED reversibel: klien tetap tersambung. Hanya CLOSED yang menutup stream (410 untuk koneksi baru).",
                 "tags": [
                   "Queue"
                 ],
@@ -5990,7 +5990,7 @@
                               "enum": [
                                 "SCHEDULED",
                                 "OPEN",
-                                "SOLD_OUT",
+                                "FULL_BOOKED",
                                 "CLOSED"
                               ]
                             }
@@ -6046,7 +6046,7 @@
                   "additionalContentTypes": [],
                   "oasExtensions": ""
                 },
-                "description": "Polling fallback.\n\nMode polling: frontend menghitung posisi dan estimasi dari now_serving + rate_per_min (api-contracts §3.5), dan membaca state untuk SOLD_OUT / CLOSED.",
+                "description": "Polling fallback.\n\nMode polling: frontend menghitung posisi dan estimasi dari now_serving + rate_per_min (api-contracts §3.5), dan membaca state untuk FULL_BOOKED / CLOSED.",
                 "tags": [
                   "Queue"
                 ],

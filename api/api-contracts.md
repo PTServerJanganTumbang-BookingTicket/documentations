@@ -1,12 +1,19 @@
 # Rusuh Booking Tiket — API Contracts
 
-**Versi**: 2.9.0  
+**Versi**: 2.10.0  
 **Tanggal**: 7 November 2026  
 **Status**: Draft  
 **Base URL**: `https://api.my-rusuh.my.id` (tanpa versi di path untuk saat ini; v2.9). Stream: `https://events.my-rusuh.my.id`  
 **Selaras dengan**: ADR-005 (Keputusan Arsitektur Final — SSE + ECS Fargate), diamandemen ADR-006 (antrian)  
 **Pasangan mesin**: `rusuh-booking-apidog.json` (Apidog) — **sumber kebenaran bentuk respons**. Dokumen ini menjelaskan perilaku dan alasannya; keduanya wajib sinkron. `rusuh-booking-openapi.yaml` diarsipkan (`archive/`) dan tidak dipelihara lagi
 
+> **v2.10** (ADR-006 §8.10, **breaking**): status antrian **`SOLD_OUT` diganti `FULL_BOOKED`** (semua kursi sedang di-hold,
+> **reversibel**). Berlaku untuk `queue:{ev}:state`, payload dan event SSE `status`, `/queue/serving`, error join
+> 409 (`error_code` dan `data.queue_state`), `sold_out_at` → `full_booked_at`, `soldOutAt` → `fullBookedAt`,
+> `SOLD_OUT_HOLD_SECONDS` → `FULL_BOOKED_HOLD_SECONDS`. **`CLOSED`, event `sold-out` dan `SALE_CLOSED` (410) tidak
+> berubah**: `sold-out` tetap berarti sale selesai dan klien wajib `close()`. `status: SOLD_OUT` pada halaman utama
+> (§2.1, sumbu stok) **tidak berubah** — lihat catatan di §2.1. Lihat Appendix C, v2.9 → v2.10.
+>
 > **v2.9** (ADR-006 §8.9): **`queue_token` hanya berlaku bagi pemiliknya, tanpa rebind.** Token tamu dari
 > perangkat lain → `401 DEVICE_MISMATCH`; token akun dipakai akun lain atau tamu → `401 UNAUTHORIZED`. Klien
 > **menghapus token antriannya** pada kedua error itu lalu join lagi (tempat baru). Cookie `queue_token` kini
@@ -661,6 +668,8 @@ Menampilkan daftar event. UI: Home Page "Daftar Event".
 | `SELLING_OUT_FAST` | `0 < available <= threshold` |
 | `SOLD_OUT` | `available == 0` — **reversibel**: kursi dari booking yang kedaluwarsa dapat membuatnya `AVAILABLE` lagi |
 
+> **Catatan v2.10:** nilai ini adalah sumbu stok halaman utama dan **belum** diganti nama, padahal artinya sama dengan state antrian `FULL_BOOKED` (reversibel). Rekomendasi: ganti menjadi `FULL_BOOKED` bersama FR-03c; sementara itu klien menganggap `status: SOLD_OUT` pada daftar event sama dengan `FULL_BOOKED` pada antrian.
+
 `threshold = capacity × SELLING_FAST_THRESHOLD_PCT / 100` (bawaan 20).
 
 **`queue_state`** — sumbu izin masuk saja:
@@ -961,7 +970,7 @@ X-Queue-Token: {queue_token}           # opsional (mobile): rejoin BR-09; web me
 > `acct:{ev}:{account_id}` dan membuka jalan ke dua tempat untuk satu akun (BR-07). Token dari event
 > lain, atau yang sudah tidak ada, diabaikan: join berjalan sebagai join baru.
 >
-> **Urutan pemeriksaan:** pemulihan (BR-09, lalu BR-07) dijalankan **sebelum** gerbang `SOLD_OUT` dan
+> **Urutan pemeriksaan:** pemulihan (BR-09, lalu BR-07) dijalankan **sebelum** gerbang `FULL_BOOKED` dan
 > `QUEUE_FULL`, jadi customer yang sudah punya tempat tidak pernah ditolak oleh keduanya.
 
 **Response** (200 - antrian kosong, FR-05): join menunggu ≤ 1 detik untuk tick admission-ctl
@@ -1012,19 +1021,19 @@ melewati batas 3 join per akun per menit.
 > ada. Halaman utama sudah menampilkan `queue_state: NOT_OPEN` + `sale_starts_at` (§2.1);
 > penolakan di sini adalah penegaknya.
 
-**Response** (409 - `SOLD_OUT`): `queue:{ev}:state` = `SOLD_OUT`, untuk **pendatang baru** saja.
+**Response** (409 - `FULL_BOOKED`): `queue:{ev}:state` = `FULL_BOOKED`, untuk **pendatang baru** saja.
 ```json
 {
-  "meta": { "code": 409, "message": "Tiket sedang habis", "error_code": "SOLD_OUT" },
-  "data": { "queue_state": "SOLD_OUT", "sold_out_at": "2026-11-10T02:40:12Z" }
+  "meta": { "code": 409, "message": "Tiket sedang habis", "error_code": "FULL_BOOKED" },
+  "data": { "queue_state": "FULL_BOOKED", "full_booked_at": "2026-11-10T02:40:12Z" }
 }
 ```
 
 > **Mengapa ditolak, padahal stok bisa kembali.** Kursi yang kembali dari booking kedaluwarsa jatuh ke
-> orang yang **sudah** di antrian lebih dulu; pendatang baru saat `SOLD_OUT` hampir tidak mungkin
+> orang yang **sudah** di antrian lebih dulu; pendatang baru saat `FULL_BOOKED` hampir tidak mungkin
 > terlayani, dan halaman utama sudah menonaktifkan tombolnya (`sold_out_may_return`, §2.1). Sama dengan
 > alasan `QUEUE_FULL`: tidak menerbitkan nomor yang tidak akan terlayani. Yang sudah mengantri tetap
-> tersambung dan dipulihkan (§3.2 tidak menjawab 410 untuk `SOLD_OUT`). Saat state kembali `OPEN`, join
+> tersambung dan dipulihkan (§3.2 tidak menjawab 410 untuk `FULL_BOOKED`). Saat state kembali `OPEN`, join
 > diterima lagi.
 
 **Response** (410 - `SALE_CLOSED`): `queue:{ev}:state` = `CLOSED`; `data`: `{ "queue_state": "CLOSED" }`.
@@ -1076,7 +1085,7 @@ Limiter yang tidak tersedia **fail-open** (alasan sama dengan CAPTCHA di bawah).
 > dialarmkan agar jendela tanpa proteksi terlihat.
 
 **Requirement Coverage**: FR-04, FR-05 (antrian kosong → grant ≤ 1 detik), FR-10 (posisi konsisten saat
-refresh), FR-18 (`SOLD_OUT`), NFR-05 (FCFS fairness), BR-07 (satu keterlibatan aktif per event untuk user
+refresh), FR-18 (`FULL_BOOKED`), NFR-05 (FCFS fairness), BR-07 (satu keterlibatan aktif per event untuk user
 login), BR-09 (pemulihan dengan `queue_token`)
 
 ---
@@ -1118,13 +1127,13 @@ data: {"nowServing":31604,"state":"OPEN","ratePerMin":318,"serverTime":"2026-10-
 | Field | Tipe | Arti |
 |---|---|---|
 | `nowServing` | int | Nomor antrian global yang sedang dilayani |
-| `state` | string | `SCHEDULED` \| `OPEN` \| `SOLD_OUT` \| `CLOSED` |
+| `state` | string | `SCHEDULED` \| `OPEN` \| `FULL_BOOKED` \| `CLOSED` |
 | `ratePerMin` | int | Laju antrian: nomor yang dilewati `nowServing` per menit. Dipakai frontend untuk estimasi (§3.5) |
 | `serverTime` | string | Waktu server ISO-8601 — klien menyinkronkan jamnya (BR-10) |
 
 > Frontend menghitung `position = ticket_no − nowServing` dan estimasi menit (§3.5).
 
-> **Heartbeat 10 detik TIDAK bersyarat** — ia terbit juga saat `state: SOLD_OUT`, ketika
+> **Heartbeat 10 detik TIDAK bersyarat** — ia terbit juga saat `state: FULL_BOOKED`, ketika
 > `nowServing` tidak bergerak. Keheningan karena itu berarti satu hal saja: sisi server berhenti
 > bekerja. Itulah yang membuat `stale {stale:true, reason:"no_admission_updates"}` di bawah
 > dapat dipercaya.
@@ -1143,19 +1152,19 @@ payload (termasuk snapshot awal setelah reconnect), bila `nowServing ≥ ticket_
 
 ```
 event: status
-data: {"state":"SOLD_OUT","soldOutAt":"2026-10-24T13:40:12.000Z","serverTime":"2026-10-24T13:40:12.120Z"}
+data: {"state":"FULL_BOOKED","fullBookedAt":"2026-10-24T13:40:12.000Z","serverTime":"2026-10-24T13:40:12.120Z"}
 ```
 
 | Field | Tipe | Arti |
 |---|---|---|
-| `state` | string | State baru: `OPEN` \| `SOLD_OUT` \| `CLOSED` |
-| `soldOutAt` | string \| null | Hanya pada `SOLD_OUT`: kapan stok mencapai nol. `CLOSED` menyusul paling lambat `SOLD_OUT_HOLD_SECONDS` (930 detik) setelahnya |
+| `state` | string | State baru: `OPEN` \| `FULL_BOOKED` \| `CLOSED` |
+| `fullBookedAt` | string \| null | Hanya pada `FULL_BOOKED`: kapan stok mencapai nol. `CLOSED` menyusul paling lambat `FULL_BOOKED_HOLD_SECONDS` (930 detik) setelahnya |
 | `serverTime` | string | Waktu server (BR-10) |
 
 | Transisi | Klien |
 |---|---|
-| `OPEN → SOLD_OUT` | tampilkan "Tiket sedang habis — kursi dapat kembali dari booking yang dibatalkan", sembunyikan estimasi, **tetap tersambung** |
-| `SOLD_OUT → OPEN` | stok kembali; lanjutkan posisi dan estimasi seperti biasa |
+| `OPEN → FULL_BOOKED` | tampilkan "Tiket sedang habis — kursi dapat kembali dari booking yang dibatalkan", sembunyikan estimasi, **tetap tersambung** |
+| `FULL_BOOKED → OPEN` | stok kembali; lanjutkan posisi dan estimasi seperti biasa |
 | `→ CLOSED` | diikuti event `sold-out`; klien menutup stream |
 
 > `state` tetap ada di setiap payload default, jadi klien yang baru reconnect tahu state dari
@@ -1180,7 +1189,7 @@ Kedua pemicunya:
 | `reason` | Pemicu |
 |---|---|
 | `redis_disconnected` | sse-server kehilangan Redis |
-| `no_admission_updates` | tidak ada broadcast > 30 detik padahal `state ∈ {OPEN, SOLD_OUT}` — `admission-ctl` diam, atau Pub/Sub ke task ini putus |
+| `no_admission_updates` | tidak ada broadcast > 30 detik padahal `state ∈ {OPEN, FULL_BOOKED}` — `admission-ctl` diam, atau Pub/Sub ke task ini putus |
 
 > **Yang basi adalah DATA, bukan koneksinya.** Pada `no_admission_updates` koneksinya justru
 > sehat — `: keepalive` tetap datang tiap 15 detik — tetapi `nowServing` berhenti maju. Itu
@@ -1195,7 +1204,7 @@ Kedua pemicunya:
 > menyusul saat data mengalir lagi, dan posisinya berlanjut tanpa kode transisi khusus.
 
 **Event: `sold-out`** — sale ditutup permanen. Dikirim tepat setelah `status {state: CLOSED}`,
-bukan saat stok pertama kali mencapai nol (itu `status {state: SOLD_OUT}`).
+bukan saat stok pertama kali mencapai nol (itu `status {state: FULL_BOOKED}`).
 
 ```
 event: sold-out
@@ -1206,14 +1215,14 @@ data: {"message":"Tiket sudah habis"}
 > reconnect otomatis dan seluruh crowd membanjiri ALB setelah sold out. Server menolak
 > koneksi baru dengan `410 Gone` sebagai jaring pengaman.
 
-> **`state: SOLD_OUT` BUKAN event ini, dan klien tidak boleh menutup stream karenanya.**
-> `SOLD_OUT` berarti "tidak ada stok saat ini" dan **reversibel**: booking yang kedaluwarsa
+> **`state: FULL_BOOKED` BUKAN event ini, dan klien tidak boleh menutup stream karenanya.**
+> `FULL_BOOKED` berarti "tidak ada stok saat ini" dan **reversibel**: booking yang kedaluwarsa
 > melepaskan kursinya kembali, dan admission melanjutkan dari posisi antrian yang sama. Klien
 > menampilkan "Tiket sedang habis — kursi dapat kembali dari booking yang dibatalkan" dan
 > **tetap tersambung**; bila `state` kembali ke `OPEN`, hitung mundur dan posisinya berlanjut
 > tanpa kode transisi khusus.
 >
-> `SOLD_OUT` berumur paling lama `SOLD_OUT_HOLD_SECONDS` (930 detik — satu perjalanan penuh,
+> `FULL_BOOKED` berumur paling lama `FULL_BOOKED_HOLD_SECONDS` (930 detik — satu perjalanan penuh,
 > setelah itu tidak ada hold yang mungkin kedaluwarsa lagi), lalu server menyetel `CLOSED`
 > dan mengirim `sold-out`. Jadi satu-satunya pemutusan terjadi sekali, di akhir.
 
@@ -1241,9 +1250,9 @@ data: {"message":"Tiket sudah habis"}
 **Response** (410 - `SALE_CLOSED`): `queue:{ev}:state` sudah `CLOSED`. `EventSource` berhenti
 permanen pada status non-200 — ini disengaja.
 
-> **`SOLD_OUT` TIDAK menjawab 410.** Stream tetap dibuka seperti biasa: stok dapat kembali
+> **`FULL_BOOKED` TIDAK menjawab 410.** Stream tetap dibuka seperti biasa: stok dapat kembali
 > dari booking yang kedaluwarsa, dan klien sengaja dipertahankan. Hanya `CLOSED` — yang
-> disetel `SOLD_OUT_HOLD_SECONDS` (930 detik) setelah `sold_out_at` — yang memutus.
+> disetel `FULL_BOOKED_HOLD_SECONDS` (930 detik) setelah `full_booked_at` — yang memutus.
 
 **Requirement Coverage**: FR-07, FR-08, FR-09, FR-10, BR-10, NFR-06
 
@@ -1390,7 +1399,7 @@ detik terakhir selama `state = OPEN` (nilai awal `MAX_CONCURRENT_SLOTS / 5` pada
 ```js
 const position = ticketNo - nowServing;
 
-if (state === 'SOLD_OUT')   show('Tiket sedang habis. Mungkin tersedia lagi, tetap di antrian');
+if (state === 'FULL_BOOKED')   show('Tiket sedang habis. Mungkin tersedia lagi, tetap di antrian');
 else if (position <= 0)     show('Giliran Anda sebentar lagi');        // dan panggil §3.3
 else if (ratePerMin <= 0)   show('Menghitung estimasi…');
 else {
@@ -2823,7 +2832,7 @@ Legenda: ✅ terpenuhi di kontrak · ⚙️ di luar permukaan API (backend atau 
 | `NOT_FOUND` | **404** — resource tidak ada, atau bukan milik pemanggil (tidak dibedakan) |
 | `SALE_NOT_OPEN` | **409** — `queue:{ev}:state` masih `SCHEDULED` (§3.1, §3.2) |
 | `SALE_CLOSED` | **410** — `queue:{ev}:state` sudah `CLOSED`; join (§3.1) dan stream (§3.2) ditolak |
-| `SOLD_OUT` | **409** — `queue:{ev}:state` = `SOLD_OUT`; join pendatang baru ditolak, yang sudah mengantri tetap dipulihkan (§3.1) |
+| `FULL_BOOKED` | **409** — `queue:{ev}:state` = `FULL_BOOKED`; join pendatang baru ditolak, yang sudah mengantri tetap dipulihkan (§3.1) |
 | `QUEUE_NOT_READY` | **503** — `queue:{ev}:state` tidak ada atau tak dikenal: event belum di-seed (§3.1) |
 | `BOOKING_STATUS_INVALID` | **409** — booking tidak dalam status yang dibutuhkan endpoint (§5.2, §5.3) |
 | `NIK_ALREADY_USED` | NIK sudah digunakan untuk event ini |
@@ -2875,13 +2884,13 @@ Legenda: ✅ terpenuhi di kontrak · ⚙️ di luar permukaan API (backend atau 
 | Transport | SSE (`GET /events/{event_id}/queue/stream`) |
 | Auth | Cookie `queue_token` (web — `EventSource` tidak bisa menyetel header) / header `X-Queue-Token` (mobile) — tidak pernah query string |
 | Broadcast | Saat `nowServing` berubah, atau tiap 10 detik |
-| Perubahan state | Event `status {state}` tiap transisi `OPEN ↔ SOLD_OUT`, `→ CLOSED` |
+| Perubahan state | Event `status {state}` tiap transisi `OPEN ↔ FULL_BOOKED`, `→ CLOSED` |
 | Data basi | Event `stale {stale, reason}` |
 | Tick admission | 500 ms |
 | Keepalive | Komentar `: keepalive` tiap **15 detik** (bukan event bernama) |
 | Snapshot awal | Ya — dikirim saat koneksi terbuka (FR-10) |
 | Reconnect | Otomatis dengan `Last-Event-ID`; `retry:` berjitter saat shutdown |
-| Sold out sementara | event `status {state: SOLD_OUT}` (dan `state` pada payload) → klien **tetap tersambung**; stok dapat kembali |
+| Sold out sementara | event `status {state: FULL_BOOKED}` (dan `state` pada payload) → klien **tetap tersambung**; stok dapat kembali |
 | Sale ditutup | event `status {state: CLOSED}` + event `sold-out` → klien **wajib** `close()`; koneksi baru ditolak `410 Gone` |
 
 ### Payment Status: Polling
@@ -3140,3 +3149,11 @@ Penyelarasan dengan ADR-005. Yang memutus kompatibilitas ditandai **BREAKING**.
 | 78 | §3.1: format `X-Device-Id` tidak lagi divalidasi (16–128 `[A-Za-z0-9_-]` dihapus); hanya wajib ada untuk tamu | Server hanya meng-HMAC nilainya; aturan format tidak menambah keamanan |
 | 79 | Base URL tanpa `/v1` | Belum ada versi API. Cookie `Path=/events/{event_id}` hanya cocok bila join dilayani di `/events/...` tanpa prefiks |
 | 80 | Domain: `my-rusuh.my.id` (API `api.*`, stream `events.*`, cookie `Domain=my-rusuh.my.id`) menggantikan `rusuhtiket.com` / `rusuh.id` pada jalur antrian | Domain yang dimiliki tim; cookie hanya terkirim bila API dan stream berada di bawah domain cookie yang sama |
+
+### v2.9 → v2.10
+
+| # | Perubahan | Alasan |
+|---|---|---|
+| 81 | **BREAKING** §3.1, §3.2, §3.4, Appendix A, Apidog: state antrian `SOLD_OUT` → `FULL_BOOKED`; error join 409 `SOLD_OUT` → `FULL_BOOKED` (`data.queue_state`, `data.full_booked_at`); SSE `status {state, fullBookedAt}`; `SOLD_OUT_HOLD_SECONDS` → `FULL_BOOKED_HOLD_SECONDS` | "Sold out" terdengar final, padahal state ini reversibel (kursi dari booking yang kedaluwarsa kembali). Event `sold-out` (final) dan state ini bertabrakan nama: klien membaca `SOLD_OUT` dan menutup stream |
+| 82 | `CLOSED`, event SSE `sold-out` dan `SALE_CLOSED` (410) **dipertahankan** | `CLOSED` satu-satunya keadaan terminal; `sold-out` sekarang konsisten: hanya muncul saat sale benar-benar selesai |
+| 83 | `status: SOLD_OUT` di §2.1 (halaman utama, FR-03c) **tidak diubah** | Sumbu stok yang terpisah dan dimiliki requirements; selaraskan dengan pemilik requirements (lihat catatan §2.1) |

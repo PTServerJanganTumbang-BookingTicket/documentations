@@ -20,7 +20,7 @@ disagrees with a source below, the source wins and this document gets fixed.
 admission-ctl runs as 1 task in the POC (leader + standby deferred, ADR-006 §9). Lua scripts are removed from this document (the v1.0
 copies were outdated; see §8). Key names follow `pkg/rediskeys`. NFR table renumbered to
 requirements v1.1. Payment methods are VA + GoPay (card and OTC out of scope). `LAPSED` is final.
-`SOLD_OUT` is reversible. ASCII diagrams replaced with Mermaid. **v2.1 (ADR-006 §4.3): admission pause and its +60 s grace are removed.**
+`FULL_BOOKED` is reversible. ASCII diagrams replaced with Mermaid. **v2.1 (ADR-006 §4.3): admission pause and its +60 s grace are removed.**
 
 ---
 
@@ -95,7 +95,7 @@ flowchart TB
 |---|---|---|---|
 | `queue` | Lambda, provisioned concurrency from T-30 min | join (empty queue: waits ≤ 1 s for the grant, read only), `/me` entry and recovery, `/serving` fallback | not started |
 | `rusuh-sse-server` | ECS Fargate, 2 vCPU / 4 GB, pre-scaled to N, max 60 | 300k SSE connections, pub/sub fan-out, stale detector | not started |
-| `rusuh-admission-ctl` | ECS Fargate, **1 task** (deploy min 0 % / max 100 %), 500 ms tick. Leader + standby deferred | the only grant writer: advance, sweep, broadcast, stock reconciliation, SOLD_OUT → CLOSED (publishes the `status` event on each state change) | not started |
+| `rusuh-admission-ctl` | ECS Fargate, **1 task** (deploy min 0 % / max 100 %), 500 ms tick. Leader + standby deferred | the only grant writer: advance, sweep, broadcast, stock reconciliation, FULL_BOOKED → CLOSED (publishes the `status` event on each state change) | not started |
 | `events` | Lambda + CloudFront 30 s | event list and detail with `status` / `queue_state` / `display` | not started |
 | `booking` | Lambda | claim (`GET …/tickets`), hold (`POST /bookings`), booking detail, abandon | in-memory scaffold |
 | `nik-verify` | Lambda | Dukcapil call, rate limit, breaker, 24 h cache, reuse of stored proof | built (branch) |
@@ -179,9 +179,9 @@ counting relies on one invariant: **no transition goes back into GRANTED or SELE
 stateDiagram-v2
     [*] --> SCHEDULED: sale-ops seed
     SCHEDULED --> OPEN: sale-ops open at sale_starts_at
-    OPEN --> SOLD_OUT: total stock 0
-    SOLD_OUT --> OPEN: stock returns from expiry (same queue order)
-    SOLD_OUT --> CLOSED: 930 s after sold_out_at
+    OPEN --> FULL_BOOKED: total stock 0
+    FULL_BOOKED --> OPEN: stock returns from expiry (same queue order)
+    FULL_BOOKED --> CLOSED: 930 s after full_booked_at
     CLOSED --> [*]
 ```
 
@@ -325,7 +325,7 @@ The **frontend computes the estimate** with one written rule (api-contracts §3.
 
 ```
 position = ticket_no − nowServing
-SOLD_OUT → sold-out message · position ≤ 0 → "sebentar lagi" + GET /me · ratePerMin ≤ 0 → "Menghitung estimasi…"
+FULL_BOOKED → fully-booked message · position ≤ 0 → "sebentar lagi" + GET /me · ratePerMin ≤ 0 → "Menghitung estimasi…"
 else minutes = ceil(position / ratePerMin) rounded UP (1–10 as is, 11–30 → ×5, 31–60 → ×10, > 60 → ×30) → "± N menit"
 ```
 
@@ -351,7 +351,7 @@ share the `{ev}` hash tag, so **all hot state of one event lives on one cluster 
 
 | Group | Keys |
 |---|---|
-| Queue | `queue:{ev}:state`, `queue:{ev}:issued`, `queue:{ev}` (hash: `now_serving`, `rate_per_min`), `queue:{ev}:by_ticket` (zset; score ≤ `now_serving` = pending grant), `queue:{ev}:capacity`, `queue:{ev}:sold_out_at`. No slot counters (ADR-006 §3); `qpersist:{ev}` deferred to production |
+| Queue | `queue:{ev}:state`, `queue:{ev}:issued`, `queue:{ev}` (hash: `now_serving`, `rate_per_min`), `queue:{ev}:by_ticket` (zset; score ≤ `now_serving` = pending grant), `queue:{ev}:capacity`, `queue:{ev}:full_booked_at`. No slot counters (ADR-006 §3); `qpersist:{ev}` deferred to production |
 | Credentials | `token:{uuid}`, `grant:{token}` (EX 1080), `acct:{ev}:{account_id}` (BR-07), `settled:{uuid}` (tombstone) |
 | Booking | `stock:{ev}:{cat}`, `nik:used:{ev}:{hmac}`, `nik:valid:{hmac}` (EX 86400), `expiries:{ev}` (zset, scheduler only) |
 | Control | Production only (deferred): `ctl:leader` (NX EX 5), `ctl:epoch` (fencing). `pause:{ev}`, `pause:{ev}:grace_applied` removed (ADR-006 §4.3) |
@@ -388,7 +388,7 @@ never stored and never returned (NFR-11, FR-32c).
 
 | Script | Called by | Guarantees | Source |
 |---|---|---|---|
-| `advance_now_serving.lua` | admission-ctl only | CAS fence on `now_serving` (guards against two tasks), SOLD_OUT ↔ OPEN, stock read inside, `deficit = min(MAX − open, ceil(stock / 3) − browsing)` with `open` / `browsing` passed in from the Aurora COUNT. **Does not ZREM**: tokens stay in `by_ticket` as pending grants until their row exists | ADR-006 §2–§3 |
+| `advance_now_serving.lua` | admission-ctl only | CAS fence on `now_serving` (guards against two tasks), FULL_BOOKED ↔ OPEN, stock read inside, `deficit = min(MAX − open, ceil(stock / 3) − browsing)` with `open` / `browsing` passed in from the Aurora COUNT. **Does not ZREM**: tokens stay in `by_ticket` as pending grants until their row exists | ADR-006 §2–§3 |
 | `hold_booking.lua` | booking | quota across categories, check **all** stock before decrementing any, NIK `SET NX` with rollback, missing key ≠ zero (`STOCK_UNINITIALIZED`) | ADR-005 §8 · impl-plan §14.2 |
 | `adjust_if_unchanged.lua` | admission-ctl stock reconciliation | compare-and-adjust so a double run never corrects twice | ADR-005 §6 · impl-plan §14.3 |
 | lease renew / release | admission-ctl, **production only** | owner-checked `PEXPIRE` / `DEL` | ADR-005 §11, deferred (ADR-006 §9) |

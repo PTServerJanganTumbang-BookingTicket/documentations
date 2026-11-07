@@ -7,6 +7,11 @@
 **Modul Go**: `github.com/PTServerJanganTumbang-BookingTicket/be-rusuh-war-ticketing`
 **Menggantikan**: implementation-plan v1.0
 
+> ⚠️ **Diubah oleh ADR-006 §8.10** — status antrian `SOLD_OUT` dibaca **`FULL_BOOKED`** di seluruh dokumen ini
+> (`sold_out_at` → `full_booked_at`, `SOLD_OUT_HOLD_SECONDS` → `FULL_BOOKED_HOLD_SECONDS`, `rediskeys.SoldOutAt` →
+> `FullBookedAt`, kolom `event_queue_state.sold_out_at` → `full_booked_at`). `CLOSED` dan `sold-out` tidak berubah. `StatusSoldOut`
+> pada halaman utama (sumbu stok, FR-03c) belum berubah.
+>
 > ⚠️ **Diamandemen oleh ADR-006 (5 November 2026, antrian), kontrak v2.7.** Bagian berikut
 > **belum** ditulis ulang dan harus dibaca bersama ADR-006 serta
 > `be-rusuh-war-ticketing/docs/04-queue/` sampai rewrite per bagian dilakukan saat implementasi:

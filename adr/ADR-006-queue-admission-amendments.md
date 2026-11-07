@@ -227,7 +227,7 @@ Mengikuti `pkg/rediskeys`: `now_serving` adalah field pada hash `queue:{ev}`.
 ```lua
 -- KEYS[1]=queue:{ev} (hash: now_serving)  KEYS[2]=queue:{ev}:state
 -- KEYS[3]=queue:{ev}:by_ticket            KEYS[4]=queue:{ev}:issued
--- KEYS[5]=queue:{ev}:sold_out_at          KEYS[6]=queue:{ev}:resume
+-- KEYS[5]=queue:{ev}:full_booked_at          KEYS[6]=queue:{ev}:resume
 -- KEYS[7..n]=stock:{ev}:{cat}
 -- ARGV[1]=MAX_CONCURRENT_SLOTS  ARGV[2]=open+pending  ARGV[3]=browsing+pending
 -- ARGV[4]=now_serving yang dibaca ctl (pagar CAS)    ARGV[5]=now (epoch detik)
@@ -239,7 +239,7 @@ local ns = tonumber(redis.call('HGET', KEYS[1], 'now_serving') or 0)
 if ns ~= tonumber(ARGV[4]) then return {ns, ns, 'STALE', {}} end   -- task lain sudah maju
 
 local state = redis.call('GET', KEYS[2])
-if state ~= 'OPEN' and state ~= 'SOLD_OUT' then
+if state ~= 'OPEN' and state ~= 'FULL_BOOKED' then
   return {ns, ns, state or 'MISSING', {}}                           -- SCHEDULED / CLOSED / belum di-seed
 end
 
@@ -252,12 +252,12 @@ end
 
 if stock <= 0 then
   if state == 'OPEN' then                                           -- SEMENTARA, bukan terminal
-    redis.call('SET', KEYS[2], 'SOLD_OUT')
+    redis.call('SET', KEYS[2], 'FULL_BOOKED')
     redis.call('SET', KEYS[5], ARGV[5])
   end
-  return {ns, ns, 'SOLD_OUT', {}}
+  return {ns, ns, 'FULL_BOOKED', {}}
 end
-if state == 'SOLD_OUT' then                                         -- stok kembali: lanjutkan FCFS
+if state == 'FULL_BOOKED' then                                         -- stok kembali: lanjutkan FCFS
   redis.call('SET', KEYS[2], 'OPEN')
   redis.call('DEL', KEYS[5])
   redis.call('SET', KEYS[6], 1)
@@ -359,7 +359,7 @@ menit    = dari position dan ratePerMin (§6.2)
 | Event | Kapan | `data` |
 |---|---|---|
 | *(default)* | snapshot saat connect, tiap `nowServing` berubah, heartbeat 10 detik | `{nowServing, state, ratePerMin, serverTime}` + `id` |
-| `status` | tiap transisi `state` (`OPEN → SOLD_OUT`, `SOLD_OUT → OPEN`, `→ CLOSED`) | `{state, soldOutAt?}` |
+| `status` | tiap transisi `state` (`OPEN → FULL_BOOKED`, `FULL_BOOKED → OPEN`, `→ CLOSED`) | `{state, fullBookedAt?}` |
 | `stale` | data berhenti segar (Redis putus / tanpa broadcast 30 detik), dan saat pulih | `{stale, reason}` (dulu event `status`) |
 | `sold-out` | tepat setelah `status {state: CLOSED}` | `{message}`; klien **wajib** `es.close()` |
 | `reconnect` | task shutdown | `retry:` berjitter |
@@ -431,12 +431,12 @@ tiap tick (BROADCAST):
   bila state == OPEN: simpan (now, now_serving) ke ring buffer 60 detik
   bila buffer < 60 detik (baru buka / task baru restart): rate = MAX / ETA_SEED_SLOT_MINUTES (5)
   selain itu: rate = Δnow_serving / Δt × 60
-  saat SOLD_OUT: pertahankan nilai terakhir
+  saat FULL_BOOKED: pertahankan nilai terakhir
 ```
 
 - Lonjakan T0 (tick pertama memberi hingga MAX sekaligus) jatuh di 60 detik pertama yang memakai
   seed, jadi tidak membuat estimasi awal terlalu optimis.
-- Waktu `SOLD_OUT` tidak masuk buffer, sehingga laju setelah stok kembali tidak terseret ke 0.
+- Waktu `FULL_BOOKED` tidak masuk buffer, sehingga laju setelah stok kembali tidak terseret ke 0.
 
 ### 6.2 Estimasi per customer: dihitung frontend
 
@@ -446,7 +446,7 @@ field estimasi atau status estimasi di respons API mana pun. Rumusnya ditulis se
 
 ```
 position = ticket_no − nowServing
-state == SOLD_OUT   → tampilkan pesan sold out, tanpa estimasi
+state == FULL_BOOKED   → tampilkan pesan "semua tiket sedang di-hold", tanpa estimasi
 position ≤ 0        → "Giliran Anda sebentar lagi" (dan panggil /me)
 ratePerMin ≤ 0      → "Menghitung estimasi…"
 selain itu          → estimatedWaitMinutes = bulatkan_ke_atas(ceil(position / ratePerMin))
@@ -540,6 +540,7 @@ tetap boleh menunggu. Tiket yang tidak dibayar dapat tersedia kembali."* Di bali
 | `api/rusuh-booking-apidog.json` | seluruh respons | **sumber kebenaran**: envelope standar (`error_code` pada error), skema event SSE (`itemSchema`), semua contoh tervalidasi terhadap skemanya | ✅ dalam PR ini |
 | migrasi | `bookings` | `UNIQUE (event_id, queue_token)` + indeks parsial status aktif | ⏳ build step 2 |
 | `be-rusuh-war-ticketing/docs/04-queue/` | semua | rencana per endpoint | ✅ |
+| ADR-005 (semua penyebutan `SOLD_OUT`, `sold_out_at`, `SOLD_OUT_HOLD_SECONDS` untuk state antrian), implementation-plan, api-contracts, Apidog | status `FULL_BOOKED` | §8.10 | ✅ (api-contracts v2.10.0) |
 | ADR-005 §12, §17 #12, konfigurasi; api-contracts §3.1, §4, §9, Appendix A; implementation-plan `pkg/grantauth` | pengikatan device | §8.9: tanpa rebind | ✅ (api-contracts v2.9.0) |
 
 ---
@@ -555,6 +556,7 @@ tetap boleh menunggu. Tiket yang tidak dibayar dapat tersedia kembali."* Di bali
 | 8.6 | **`/queue/me` lag replika:** cek ulang sekali di writer bila tanpa baris dan `ticket_no ≤ now_serving` | §2.4 |
 | 8.7 | **Koneksi SSE per task:** keluaran load test, bukan keputusan sekarang | Hasil dicatat di ADR-005 §17 #4 |
 | 8.9 | **Token antrian hanya berlaku bagi pemiliknya, tanpa rebind** (menggantikan "Toleransi" di ADR-005 §12). Token **tamu** hanya berlaku dari perangkat yang menerimanya: `HMAC(DEVICE_PEPPER, X-Device-Id)` harus sama dengan `device_hash`. Token **akun** hanya berlaku bagi akun yang sama (`account_id` = akun Bearer), dari perangkat mana pun. Tidak cocok → `401 DEVICE_MISMATCH` (tamu) / `401 UNAUTHORIZED` (akun lain); di join cookie `queue_token` dihapus. Berlaku untuk join, `/queue/me` dan semua endpoint ber-grant. `MAX_DEVICE_REBINDS`, field `rebinds` dan metrik `DeviceRebindRate` **dihapus**; gantinya metrik `DeviceMismatch` | Rebind satu kali menambah penghitung, CAS dan aturan "percobaan ketiga" yang harus dijaga di tiga service, untuk kasus yang jarang (tamu menghapus data situs). **Konsekuensi diterima:** tamu yang menghapus data situs, ganti browser atau install ulang aplikasi kehilangan tempatnya dan mulai lagi dari belakang. Customer login tidak terkena: akunnya yang mengikat. Server tidak memvalidasi format `X-Device-Id`; kekuatan pengikatan bergantung pada klien membuat nilai acak 128 bit |
+| 8.10 | **Status antrian `SOLD_OUT` diganti `FULL_BOOKED`.** `queue:{ev}:state` ∈ `SCHEDULED \| OPEN \| FULL_BOOKED \| CLOSED`; `sold_out_at` → `full_booked_at`, `soldOutAt` → `fullBookedAt`, `SOLD_OUT_HOLD_SECONDS` → `FULL_BOOKED_HOLD_SECONDS`, error join 409 `SOLD_OUT` → `FULL_BOOKED`, `rediskeys.SoldOutAt` → `FullBookedAt`. **Tetap:** `CLOSED` (satu-satunya keadaan terminal), event SSE `sold-out` (sale selesai, klien wajib `close()`), `SALE_CLOSED` (410) | "Sold out" terdengar final padahal state ini reversibel (kursi dari booking kedaluwarsa kembali); event `sold-out` yang final memakai kata yang sama, sehingga klien menutup stream pada state yang salah. `FULL_BOOKED` = semua kursi sedang di-hold. **Ditolak:** mengganti `CLOSED` menjadi `SOLD_OUT` — memindahkan makna string lama ke keadaan terminal (klien lama diam-diam salah), dan `CLOSED` mungkin kelak berarti sale berakhir bukan karena habis. `status: SOLD_OUT` pada halaman utama (FR-03c, sumbu stok) belum diubah; usulan: ganti bersama FR-03c |
 | 8.8 | **`GET /bookings/{id}/tickets` dihapus** (menggantikan ADR-005 §9 langkah 5). `GET /bookings/{id}` saat `PAID` mengembalikan `tickets[].eticket_url` yang sudah membawa `?t={eticket_token}` (`pkg/eticket.Mint`, token yang sama dengan email) | Isi endpoint itu sama dengan `tickets[]` di `GET /bookings/{id}`. Satu-satunya nilai tambahnya, akses QR bagi tamu bila email gagal (NFR-10), kini diberikan tautan bertoken di Success Page. Satu endpoint, satu usecase dan satu handler lebih sedikit. booking-service menjadi penerbit ketiga token e-tiket (bersama notification); verifikasi tetap di user-service |
 
 ---
