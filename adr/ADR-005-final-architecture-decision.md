@@ -5,6 +5,10 @@
 **Decider**: SJT Team
 **Supersedes**: ADR-003, ADR-004
 **Amended by**: ADR-006 (antrian: pending grant, formula admission, hitungan dari Aurora, satu penulis grant, broadcast saja, **pause admission dihapus**, estimasi waktu tunggu di frontend). Semua penyebutan `paused`, "pause admission", BR-13a, BR-22 dan `PAUSE_TTL_GRACE_SECONDS` di dokumen ini **tidak berlaku lagi** (ADR-006 §4.3)
+> ⚠️ **Diubah oleh ADR-006 §8.10** — di seluruh dokumen ini, status antrian `SOLD_OUT` dibaca **`FULL_BOOKED`**
+> (`sold_out_at` → `full_booked_at`, `SOLD_OUT_HOLD_SECONDS` → `FULL_BOOKED_HOLD_SECONDS`, error join `SOLD_OUT` → `FULL_BOOKED`).
+> `CLOSED`, event SSE `sold-out` dan `SALE_CLOSED` tidak berubah. Teks asli di bawah dibiarkan apa adanya.
+
 **Dokumen Referensi**: `requirement/requirements.md` v1.0 (Finalized), Tender Rusuh Booking Ticket.pdf, ADR-001, ADR-002
 
 ---
