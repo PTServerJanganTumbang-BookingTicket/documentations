@@ -351,7 +351,7 @@ share the `{ev}` hash tag, so **all hot state of one event lives on one cluster 
 
 | Group | Keys |
 |---|---|
-| Queue | `queue:{ev}:state`, `queue:{ev}:issued`, `queue:{ev}` (hash: `now_serving`, `rate_per_min`), `queue:{ev}:by_ticket` (zset; score ≤ `now_serving` = pending grant), `queue:{ev}:capacity`, `queue:{ev}:sold_out_at`, `queue:{ev}:resume`. No slot counters (ADR-006 §3); `qpersist:{ev}` deferred to production |
+| Queue | `queue:{ev}:state`, `queue:{ev}:issued`, `queue:{ev}` (hash: `now_serving`, `rate_per_min`), `queue:{ev}:by_ticket` (zset; score ≤ `now_serving` = pending grant), `queue:{ev}:capacity`, `queue:{ev}:sold_out_at`. No slot counters (ADR-006 §3); `qpersist:{ev}` deferred to production |
 | Credentials | `token:{uuid}`, `grant:{token}` (EX 1080), `acct:{ev}:{account_id}` (BR-07), `settled:{uuid}` (tombstone) |
 | Booking | `stock:{ev}:{cat}`, `nik:used:{ev}:{hmac}`, `nik:valid:{hmac}` (EX 86400), `expiries:{ev}` (zset, scheduler only) |
 | Control | Production only (deferred): `ctl:leader` (NX EX 5), `ctl:epoch` (fencing). `pause:{ev}`, `pause:{ev}:grace_applied` removed (ADR-006 §4.3) |
@@ -457,8 +457,8 @@ Anonymous grants are additionally bound to `X-Device-Id` (stored as HMAC).
 flowchart TB
     subgraph Edge["Edge (public)"]
         CF[CloudFront<br/>/events 30 s · /queue/serving]
-        APIGW[API Gateway HTTP<br/>api.rusuhtiket.com<br/>webhook: IP allowlist]
-        ALB[ALB<br/>events.rusuhtiket.com<br/>HTTP/2 · idle 3600 s]
+        APIGW[API Gateway HTTP<br/>api.my-rusuh.my.id<br/>webhook: IP allowlist]
+        ALB[ALB<br/>events.my-rusuh.my.id<br/>HTTP/2 · idle 3600 s]
     end
 
     subgraph Private["VPC private subnets"]

@@ -1,12 +1,23 @@
 # Rusuh Booking Tiket — API Contracts
 
-**Versi**: 2.7.0  
-**Tanggal**: 5 November 2026  
+**Versi**: 2.9.0  
+**Tanggal**: 7 November 2026  
 **Status**: Draft  
-**Base URL**: `https://api.rusuh.id/v1`  
+**Base URL**: `https://api.my-rusuh.my.id` (tanpa versi di path untuk saat ini; v2.9). Stream: `https://events.my-rusuh.my.id`  
 **Selaras dengan**: ADR-005 (Keputusan Arsitektur Final — SSE + ECS Fargate), diamandemen ADR-006 (antrian)  
 **Pasangan mesin**: `rusuh-booking-apidog.json` (Apidog) — **sumber kebenaran bentuk respons**. Dokumen ini menjelaskan perilaku dan alasannya; keduanya wajib sinkron. `rusuh-booking-openapi.yaml` diarsipkan (`archive/`) dan tidak dipelihara lagi
 
+> **v2.9** (ADR-006 §8.9): **`queue_token` hanya berlaku bagi pemiliknya, tanpa rebind.** Token tamu dari
+> perangkat lain → `401 DEVICE_MISMATCH`; token akun dipakai akun lain atau tamu → `401 UNAUTHORIZED`. Klien
+> **menghapus token antriannya** pada kedua error itu lalu join lagi (tempat baru). Cookie `queue_token` kini
+> `Path=/events/{event_id}` (satu cookie per event). Format `X-Device-Id` tidak lagi divalidasi. Lihat Appendix C,
+> v2.8 → v2.9.
+>
+> **v2.8** (join diselaraskan dengan implementasi `services/queue`): kode baru **`SOLD_OUT`** (409,
+> pendatang baru saat stok habis), **`QUEUE_NOT_READY`** (503) dan **`INTERNAL_ERROR`** (5xx tanpa kode
+> sendiri); cookie `queue_token` kini `Domain=rusuhtiket.com; Path=/`; `sse_url` menjadi **URL absolut**
+> host stream; §3.1 mendaftar semua respons join. Lihat Appendix C, v2.7 → v2.8.
+>
 > **v2.7** (ADR-006 §4.2, §4.3, §6.2): **pause admission dihapus** — field `paused` hilang dari
 > payload SSE dan `/queue/serving`, error `ADMISSION_PAUSED` diganti `PAYMENT_GATEWAY_UNAVAILABLE`.
 > Event SSE **`status` kini membawa `state`** dan dikirim tiap transisi (`OPEN ↔ SOLD_OUT`,
@@ -690,7 +701,14 @@ queue_state == NOT_OPEN    → enabled=false  action=NONE           label=coming
 queue_state == FULL        → enabled=false  action=NONE           label=queue_full
 queue_state == DIRECT      → enabled=true   action=GO_TO_TICKETS  label=buy_now
 queue_state == OPEN        → enabled=true   action=JOIN_QUEUE     label=join_queue
+```
 
+> **`GO_TO_TICKETS` tetap memanggil `POST …/queue/join` (§3.1).** Grant hanya lahir dari join: tanpa
+> join tidak ada `X-Grant-Token`, tidak ada pengikatan device dan tidak ada penegakan BR-07. Pada
+> antrian kosong join menjawab `granted: true` dalam ≤ 1 detik (FR-05), jadi customer tetap langsung
+> ke Detail Ticket; bedanya dengan `JOIN_QUEUE` hanya layar yang ditampilkan selama menunggu.
+
+```
 badge_key = selling_out_fast  bila status == SELLING_OUT_FAST DAN display.enabled
           = null              selainnya
 ```
@@ -797,14 +815,17 @@ Detail event untuk sidebar info dan breadcrumb.
 
 ### 3.1 Join Queue
 
-User bergabung ke antrian. Dipanggil saat klik "Beli Tiket" pada event dengan antrian aktif.
+User bergabung ke antrian. Dipanggil saat klik tombol event dengan `action` `JOIN_QUEUE` ("Masuk
+Antrian") **atau** `GO_TO_TICKETS` ("Beli Tiket", antrian kosong) — §2.1. Kembali setelah refresh atau
+dari aplikasi bank memakai §3.3, bukan join.
 
 **Endpoint**: `POST /events/{event_id}/queue/join`
 
 **Headers**:
 ```
-X-Device-Id: {device_id}               # wajib bila customer TIDAK login
+X-Device-Id: {device_id}               # wajib bila customer TIDAK login; acak 128 bit, format tidak divalidasi
 Authorization: Bearer {access_token}   # bila login — mengaktifkan BR-07 dan atribusi
+X-Queue-Token: {queue_token}           # opsional (mobile): rejoin BR-09; web memakai cookie
 ```
 
 **Request**:
@@ -817,7 +838,9 @@ Authorization: Bearer {access_token}   # bila login — mengaktifkan BR-07 dan a
 | `captcha_token` | ✅ | Token CAPTCHA **tak terlihat**, diperoleh klien sebelum gerbang buka — lihat di bawah. Berlaku untuk tamu **dan** user login |
 
 > **`X-Device-Id` adalah tempat pengikatan grant dimulai.** Nilai acak 128 bit yang dibuat
-> klien sekali dan disimpan di `localStorage` / secure store. Server menyimpan
+> klien sekali (UUID, hex 32 karakter atau base64url) dan disimpan di `localStorage` / secure store. Server
+> **tidak** memvalidasi formatnya (v2.9) — hanya wajib ada untuk tamu — jadi kekuatan pengikatan bergantung pada
+> klien membuat nilai acak 128 bit dan memakainya terus. Server menyimpan
 > `HMAC(DEVICE_PEPPER, device_id)` pada keterlibatan, lalu mencocokkannya pada setiap
 > panggilan ber-grant (§4, §5). Tamu yang tidak mengirimnya ditolak di sini, bukan nanti —
 > grant tanpa pengikatan tidak dapat diikat belakangan.
@@ -856,7 +879,7 @@ Authorization: Bearer {access_token}   # bila login — mengaktifkan BR-07 dan a
     "now_serving": 31500,
     "position": 1248,
     "queue_token": "qt_xyz789",
-    "sse_url": "/queue/stream",
+    "sse_url": "https://events.my-rusuh.my.id/events/evt_konser_a/queue/stream",
     "event": {
       "id": "evt_konser_a",
       "name": "Konser A — Jakarta"
@@ -871,16 +894,25 @@ Authorization: Bearer {access_token}   # bila login — mengaktifkan BR-07 dan a
 | `now_serving` | int | Nomor global yang sedang dilayani saat respons dibuat |
 | `position` | int | `ticket_no − now_serving`. `≤ 0` berarti giliran sudah tiba: panggil §3.3 |
 | `queue_token` | string | Token ruang tunggu (`qt_…`). **Mobile** menyimpannya di secure store dan mengirimnya sebagai `X-Queue-Token` ke §3.2–§3.3. **Web mengabaikannya** dan memakai cookie HttpOnly (jangan simpan di `localStorage`) |
-| `sse_url` | string | Path stream §3.2 |
+| `sse_url` | string | **URL absolut** stream §3.2 (`https://events.my-rusuh.my.id/events/{event_id}/queue/stream`). Absolut karena stream berada di host lain (`events.*`) dari join (`api.*`) |
 
 > Estimasi waktu tunggu **tidak** dikirim di sini: frontend menghitungnya dari `ratePerMin` pada
 > snapshot SSE pertama (§3.5).
 
 > Server sets cookie on join:
 > ```
-> Set-Cookie: queue_token=qt_xyz789; HttpOnly; Secure; SameSite=Strict;
->             Max-Age={SALE_WINDOW_SECONDS}
+> Set-Cookie: queue_token=qt_xyz789; Domain=my-rusuh.my.id; Path=/events/{event_id}; HttpOnly; Secure;
+>             SameSite=Strict; Max-Age={SALE_WINDOW_SECONDS}
 > ```
+>
+> **`Path=/events/{event_id}`** (v2.9): satu cookie per event. Dengan `Path=/`, join event lain menimpa token
+> event ini, sehingga tamu yang kembali mendapat tempat kedua. Path ini mencakup join, `/queue/me` dan stream
+> (`/events/{event_id}/queue/...` di kedua host), dan tidak cocok untuk event lain (`/events/E10` bukan
+> `/events/E1`).
+>
+> **`Domain=my-rusuh.my.id`**: join dilayani `api.my-rusuh.my.id`, stream `events.my-rusuh.my.id`; cookie
+> host-only dari `api.*` tidak terkirim ke `events.*`. Keduanya satu *site*, jadi `SameSite=Strict` tetap
+> berlaku. Token yang sama juga ada di body (`queue_token`) untuk mobile.
 >
 > `Max-Age` adalah **batas atas, bukan umur yang diharapkan.** Sejak v2.4 keterlibatan yang
 > mencapai keadaan terminal menghapus kredensialnya lebih cepat daripada TTL — lihat §3.3.
@@ -897,7 +929,7 @@ Authorization: Bearer {access_token}   # bila login — mengaktifkan BR-07 dan a
     "now_serving": 31520,
     "position": 1228,
     "queue_token": "qt_xyz789",
-    "sse_url": "/queue/stream",
+    "sse_url": "https://events.my-rusuh.my.id/events/evt_konser_a/queue/stream",
     "rejoined": true,
     "state": "QUEUED"
   }
@@ -919,6 +951,18 @@ Authorization: Bearer {access_token}   # bila login — mengaktifkan BR-07 dan a
 >
 > **Customer tamu tidak terkena BR-07.** Tanpa identitas stabil tidak ada yang dapat
 > ditegakkan; batas bagi tamu adalah CAPTCHA + rate limit per IP.
+>
+> **`queue_token` hanya berlaku bagi pemiliknya** (v2.9, ADR-006 §8.9). Token **tamu** hanya dari perangkat yang
+> menerimanya (`HMAC(DEVICE_PEPPER, X-Device-Id)` = `device_hash`), **tanpa rebind**: perangkat lain →
+> `401 DEVICE_MISMATCH`. Token **akun** hanya untuk akun yang sama, dari perangkat mana pun: akun lain atau
+> tamu → `401 UNAUTHORIZED`. Pada keduanya tidak ada nomor yang terpakai, tempat pemilik tidak berubah, dan
+> respons **menghapus cookie** `queue_token`. Pemanggil yang **login** dengan token **tamu** mendapat tempatnya
+> sendiri (tempat tamu tidak diambil alih), karena mengambil alih tempat tamu melewati klaim
+> `acct:{ev}:{account_id}` dan membuka jalan ke dua tempat untuk satu akun (BR-07). Token dari event
+> lain, atau yang sudah tidak ada, diabaikan: join berjalan sebagai join baru.
+>
+> **Urutan pemeriksaan:** pemulihan (BR-09, lalu BR-07) dijalankan **sebelum** gerbang `SOLD_OUT` dan
+> `QUEUE_FULL`, jadi customer yang sudah punya tempat tidak pernah ditolak oleh keduanya.
 
 **Response** (200 - antrian kosong, FR-05): join menunggu ≤ 1 detik untuk tick admission-ctl
 berikutnya; bila grant terbit dalam jendela itu, customer langsung ke Detail Ticket.
@@ -968,6 +1012,56 @@ melewati batas 3 join per akun per menit.
 > ada. Halaman utama sudah menampilkan `queue_state: NOT_OPEN` + `sale_starts_at` (§2.1);
 > penolakan di sini adalah penegaknya.
 
+**Response** (409 - `SOLD_OUT`): `queue:{ev}:state` = `SOLD_OUT`, untuk **pendatang baru** saja.
+```json
+{
+  "meta": { "code": 409, "message": "Tiket sedang habis", "error_code": "SOLD_OUT" },
+  "data": { "queue_state": "SOLD_OUT", "sold_out_at": "2026-11-10T02:40:12Z" }
+}
+```
+
+> **Mengapa ditolak, padahal stok bisa kembali.** Kursi yang kembali dari booking kedaluwarsa jatuh ke
+> orang yang **sudah** di antrian lebih dulu; pendatang baru saat `SOLD_OUT` hampir tidak mungkin
+> terlayani, dan halaman utama sudah menonaktifkan tombolnya (`sold_out_may_return`, §2.1). Sama dengan
+> alasan `QUEUE_FULL`: tidak menerbitkan nomor yang tidak akan terlayani. Yang sudah mengantri tetap
+> tersambung dan dipulihkan (§3.2 tidak menjawab 410 untuk `SOLD_OUT`). Saat state kembali `OPEN`, join
+> diterima lagi.
+
+**Response** (410 - `SALE_CLOSED`): `queue:{ev}:state` = `CLOSED`; `data`: `{ "queue_state": "CLOSED" }`.
+Berlaku juga bagi yang rejoin.
+
+**Response** (503 - `QUEUE_NOT_READY`): `queue:{ev}:state` tidak ada atau bernilai tak dikenal (event
+belum di-seed). Bukan "belum dibuka": tidak ada yang diketahui tentang sale ini.
+
+**Response** (503 - `INTERNAL_ERROR`): Redis tidak dapat dihubungi atau penulisan gagal. Gagal tertutup;
+klien mencoba lagi. Tidak ada `ticket_no` yang terpakai tanpa tempat.
+
+**Response** (401 - `DEVICE_MISMATCH`): `queue_token` tamu event ini dikirim dari perangkat lain (atau token
+tidak punya `device_hash`). Respons membawa `Set-Cookie: queue_token=; Path=/events/{event_id}; Max-Age=0`.
+
+**Response** (401 - `UNAUTHORIZED`): `queue_token` milik sebuah akun dikirim oleh akun lain atau oleh tamu. Cookie
+dihapus dengan cara yang sama.
+
+> **Langkah klien pada `DEVICE_MISMATCH` / `UNAUTHORIZED` dari join** (v2.9):
+> 1. Hapus token antrian yang tersimpan. **Web:** server sudah menghapus cookie `queue_token`; jangan kirim ulang
+>    nilai lama. **Mobile:** hapus `queue_token` dari secure store, berhenti mengirim `X-Queue-Token`.
+> 2. Tampilkan "Sesi antrian ini terdaftar di perangkat/akun lain".
+> 3. Bila customer ingin mengantri, panggil join lagi **tanpa** token (CAPTCHA baru) → tempat baru di belakang.
+>
+> Tanpa langkah 1, setiap join berikutnya mengirim token yang sama dan selalu dijawab 401.
+
+**Response** (401 - `TOKEN_EXPIRED` / `TOKEN_INVALID`): `Authorization` dikirim tetapi tidak sah
+(termasuk `Bearer` tanpa token). **Tidak** diperlakukan sebagai tamu: itu akan membiarkan pemanggil
+menghindari BR-07 dengan mengirim token rusak.
+
+**Response** (400 - `VALIDATION_ERROR`): body bukan JSON, lebih dari 8 KB, atau `captcha_token` bukan string.
+
+**Response** (404 - `NOT_FOUND`): `event_id` tidak dapat menjadi hash tag Redis (memuat `{`, `}` atau
+spasi).
+
+**Response** (429): `data`: `{ "retry_after": 42 }` (detik) dan header `Retry-After` bernilai sama.
+Limiter yang tidak tersedia **fail-open** (alasan sama dengan CAPTCHA di bawah).
+
 **Response** (400 - `DEVICE_ID_REQUIRED`): pemanggil anonim tidak mengirim `X-Device-Id`.
 
 > Ditolak **di sini**, bukan nanti: grant tanpa pengikatan tidak dapat diikat belakangan
@@ -981,8 +1075,9 @@ melewati batas 3 join per akun per menit.
 > saat provider terganggu, mematikan sale sebelum dimulai. `CaptchaFailOpenSeconds`
 > dialarmkan agar jendela tanpa proteksi terlihat.
 
-**Requirement Coverage**: FR-04, FR-10 (posisi konsisten saat refresh), NFR-05 (FCFS fairness),
-BR-07 (satu keterlibatan aktif per event untuk user login)
+**Requirement Coverage**: FR-04, FR-05 (antrian kosong → grant ≤ 1 detik), FR-10 (posisi konsisten saat
+refresh), FR-18 (`SOLD_OUT`), NFR-05 (FCFS fairness), BR-07 (satu keterlibatan aktif per event untuk user
+login), BR-09 (pemulihan dengan `queue_token`)
 
 ---
 
@@ -1349,8 +1444,8 @@ dikirim ke endpoint mana pun di sini.
 > **`X-Device-Id` mengikat grant ke perangkat yang menerimanya** — satu-satunya hal yang
 > berdiri antara customer dan menjual slot antriannya, dan di antrian 300.000 untuk 10.000
 > tiket slot punya harga pasar. Nilai acak 128 bit yang dibuat klien, bukan fingerprint pasif;
-> server menyimpan HMAC-nya saja. Satu rebind yang tercatat diizinkan, karena menghapus data
-> situs itu lumrah dan tidak boleh berarti kehilangan slot. Rinciannya di ADR-005 Bagian 12.
+> server menyimpan HMAC-nya saja. **Tanpa rebind** (ADR-006 §8.9): perangkat lain → `401 DEVICE_MISMATCH`;
+> tamu yang menghapus data situs kehilangan slotnya. Rinciannya di ADR-005 Bagian 12.
 > Customer login tidak mengirimnya: `account_id` sudah mengikat lebih kuat.
 >
 > Tamu yang kelak mendaftar dengan NIK yang sama tetap mewarisi tiketnya — klausa kepemilikan
@@ -2714,7 +2809,7 @@ Legenda: ✅ terpenuhi di kontrak · ⚙️ di luar permukaan API (backend atau 
 | **Object ownership** | Setiap endpoint yang menerima `booking_id` atau `ticket_id` dari path mengikatnya ke pemegang grant: `WHERE id = $1 AND grant_token = $grantToken`. Grant yang sah membuktikan pemegangnya punya slot, bukan bahwa slot itu miliknya. Tidak cocok → **404**, bukan 403. `account_id` baris itu **sudah** terisi sejak INSERT saat GRANT, diambil dari keterlibatannya, jadi tidak ada kredensial klien yang perlu membuktikan kepemilikan akun di sini (§4) |
 | **Satu slot, satu kredensial** | Tidak ada endpoint yang menerima dua kredensial berbeda di slot yang sama. Middleware memutuskan per rute, bukan per token: ia tidak mencoba memverifikasi tanda tangan lalu jatuh ke pencarian Redis. Tanpa aturan ini, grant tamu dapat lolos di `GET /me/tickets`, atau JWT akun lolos pada `booking_id` yang bukan miliknya — tepat yang dicegah baris di atas |
 | **Atribusi akun** | `bookings.account_id` ditulis pada INSERT saat GRANT dari `token:{uuid}`, **tidak** dari kredensial yang dibawa klien saat checkout. Keterlibatan mengetahui identitasnya sejak join, ketika sesi masih pasti segar; bergantung pada token saat checkout berarti sesi yang kedaluwarsa menurunkan pembelian customer login menjadi pembelian tamu tanpa satu pun error |
-| **Pengikatan device (grant anonim)** | `X-Device-Id` — acak 128 bit yang dibuat klien, disimpan server sebagai `HMAC(DEVICE_PEPPER, device_id)`, dicocokkan pada setiap panggilan ber-grant. Tidak cocok → **401** `DEVICE_MISMATCH`. Satu rebind dicatat dan diizinkan. **Bukan** fingerprint pasif: canvas/WebGL rapuh dan memanen karakteristik perangkat tanpa dasar persetujuan (NFR-11). **Non-goal**: ia menghentikan jual-beli slot, bukan penyerang yang menyalin `localStorage` korban |
+| **Pengikatan device (grant anonim)** | `X-Device-Id` — acak 128 bit yang dibuat klien (format tidak divalidasi), disimpan server sebagai `HMAC(DEVICE_PEPPER, device_id)`, dicocokkan pada join (rejoin), `/queue/me` dan setiap panggilan ber-grant. Tidak cocok → **401** `DEVICE_MISMATCH`, **tanpa rebind** (ADR-006 §8.9). Token akun dicocokkan ke `account_id`. **Bukan** fingerprint pasif: canvas/WebGL rapuh dan memanen karakteristik perangkat tanpa dasar persetujuan (NFR-11). **Non-goal**: ia menghentikan jual-beli slot, bukan penyerang yang menyalin `localStorage` korban |
 | SSE Auth | `queue_token` cookie (web) atau `X-Queue-Token` (mobile) divalidasi saat koneksi stream. `Authorization` tidak dipakai di sini |
 
 ---
@@ -2724,10 +2819,12 @@ Legenda: ✅ terpenuhi di kontrak · ⚙️ di luar permukaan API (backend atau 
 | Code | Description |
 |------|-------------|
 | `VALIDATION_ERROR` | Input validation failed |
-| `UNAUTHORIZED` | **401** — kredensial tidak ada atau tidak dikenal (queue token pada §3.2, §3.3) |
+| `UNAUTHORIZED` | **401** — kredensial tidak ada atau tidak dikenal (queue token pada §3.2, §3.3), atau `queue_token` milik sebuah akun dipakai akun lain / tamu pada join (§3.1, v2.9; cookie dihapus) |
 | `NOT_FOUND` | **404** — resource tidak ada, atau bukan milik pemanggil (tidak dibedakan) |
 | `SALE_NOT_OPEN` | **409** — `queue:{ev}:state` masih `SCHEDULED` (§3.1, §3.2) |
-| `SALE_CLOSED` | **410** — `queue:{ev}:state` sudah `CLOSED`; stream ditolak (§3.2) |
+| `SALE_CLOSED` | **410** — `queue:{ev}:state` sudah `CLOSED`; join (§3.1) dan stream (§3.2) ditolak |
+| `SOLD_OUT` | **409** — `queue:{ev}:state` = `SOLD_OUT`; join pendatang baru ditolak, yang sudah mengantri tetap dipulihkan (§3.1) |
+| `QUEUE_NOT_READY` | **503** — `queue:{ev}:state` tidak ada atau tak dikenal: event belum di-seed (§3.1) |
 | `BOOKING_STATUS_INVALID` | **409** — booking tidak dalam status yang dibutuhkan endpoint (§5.2, §5.3) |
 | `NIK_ALREADY_USED` | NIK sudah digunakan untuk event ini |
 | `NIK_NOT_FOUND` | NIK tidak terdaftar di Dukcapil |
@@ -2747,7 +2844,8 @@ Legenda: ✅ terpenuhi di kontrak · ⚙️ di luar permukaan API (backend atau 
 | `MAX_ATTEMPTS_EXCEEDED` | Melewati batas percobaan pembayaran per booking |
 | `PAYMENT_ALREADY_SETTLED` | Pembayaran lama sudah lunas; pembatalan tidak dilakukan |
 | `PAYMENT_WINDOW_CLOSED` | TTL pembayaran habis atau sisanya terlalu pendek untuk ganti metode |
-| `QUEUE_FULL` | Antrian mencapai kapasitas maksimum |
+| `QUEUE_FULL` | **503** — antrian mencapai kapasitas maksimum (§3.1) |
+| `INTERNAL_ERROR` | **5xx** — kegagalan server tanpa kode yang lebih spesifik (mis. Redis tidak dapat dihubungi). Pesan tidak pernah membawa detail internal |
 | `CAPTCHA_REQUIRED` | `captcha_token` tidak disertakan pada `POST …/queue/join` |
 | `CAPTCHA_FAILED` | Token CAPTCHA tidak valid, sudah dipakai, atau kedaluwarsa |
 | `NIK_ALREADY_REGISTERED` | NIK sudah terikat ke akun lain (satu NIK = satu akun, global) |
@@ -2763,7 +2861,7 @@ Legenda: ✅ terpenuhi di kontrak · ⚙️ di luar permukaan API (backend atau 
 | `GRANT_TOKEN_MISSING` | **401** — `X-Grant-Token` tidak disertakan pada endpoint §4/§5. Kode terpisah karena penyebabnya biasanya klien yang masih mengirim grant di `Authorization`, dan `TOKEN_INVALID` tidak mengarahkan siapa pun ke sana |
 | `GRANT_TOKEN_INVALID` | **401** — grant tidak dikenal, kedaluwarsa, atau sudah dicabut. Beda dari `BOOKING_EXPIRED`: yang ini soal kredensial, bukan soal TTL booking. Keduanya dapat terjadi berurutan dan frontend merutekannya berbeda |
 | `DEVICE_ID_REQUIRED` | **400** — `X-Device-Id` tidak disertakan oleh pemanggil anonim pada `POST …/queue/join` atau endpoint ber-grant. Ditolak di join, bukan nanti: grant tanpa pengikatan tidak dapat diikat belakangan |
-| `DEVICE_MISMATCH` | **401** — grant dipakai dari perangkat yang bukan penerimanya, dan kuota rebind (`MAX_DEVICE_REBINDS`) sudah habis. Satu rebind diizinkan dan dicatat, sehingga kode ini menandai percobaan ketiga — bukan sekadar "ganti browser" |
+| `DEVICE_MISMATCH` | **401** — `queue_token` tamu atau grant dipakai dari perangkat yang bukan penerimanya (v2.9: **tanpa rebind**, ADR-006 §8.9). Di join respons juga menghapus cookie `queue_token`; klien menghapus token antriannya (§3.1) |
 | `ETICKET_TOKEN_INVALID` | **401** — token `?t=` pada tautan e-tiket tidak sah, kedaluwarsa, atau tidak cocok dengan `ticket_id` di path. Satu kode untuk ketiganya: membedakannya memberi tahu penebak mana bagian yang hampir benar |
 
 ---
@@ -3019,3 +3117,26 @@ Penyelarasan dengan ADR-005. Yang memutus kompatibilitas ditandai **BREAKING**.
 > `account.verify` tetapi tidak `auth.magic_link`. Login tanpa kata sandi (§1.1)
 > memakai kanal yang sama dan karenanya menerbitkan tipe itu. Layak ditambahkan ke
 > tabel ADR agar pembaca berikutnya tidak membacanya sebagai improvisasi.
+
+### v2.7 → v2.8
+
+| # | Perubahan | Alasan |
+|---|---|---|
+| 68 | §3.1 + Appendix A: kode **`SOLD_OUT`** (409) untuk join pendatang baru saat `SOLD_OUT`; yang sudah mengantri tetap dipulihkan | Kursi yang kembali jatuh ke antrian yang sudah ada; nomor baru hampir tidak mungkin terlayani. Sama dengan perilaku "reject" ruang tunggu (Cloudflare Waiting Room) |
+| 69 | Appendix A: **`QUEUE_NOT_READY`** (503) dan **`INTERNAL_ERROR`** (5xx) | Event yang belum di-seed bukan "belum dibuka"; envelope mewajibkan `error_code` pada setiap error, termasuk 5xx |
+| 70 | §3.1: cookie `queue_token` menambah `Domain=rusuhtiket.com; Path=/` | Join di `api.*`, stream di `events.*`: cookie host-only tidak akan terkirim ke stream |
+| 71 | §3.1: `sse_url` menjadi URL absolut `https://events.rusuhtiket.com/events/{event_id}/queue/stream` | Contoh lama `/queue/stream` bukan path §3.2 dan relatif terhadap host yang salah |
+| 72 | §3.1: semua respons join didaftar (400 `VALIDATION_ERROR`, 401, 404, 410, 503 `QUEUE_NOT_READY` / `INTERNAL_ERROR`, `retry_after` + `Retry-After`) dan format `X-Device-Id` | Implementasi sudah menjawabnya; frontend perlu merutekan semuanya |
+| 73 | §3.1: pemulihan berjalan **sebelum** `SOLD_OUT`/`QUEUE_FULL`; `queue_token` hanya memulihkan tempat milik pemanggil (login + token tamu → tempat sendiri) | Customer yang pindah perangkat tidak boleh ditolak karena antrian penuh; mengambil alih tempat tamu melewati BR-07 |
+| 74 | §2.1: `GO_TO_TICKETS` dinyatakan tetap memanggil join | Grant, pengikatan device dan BR-07 hanya lahir dari join |
+
+### v2.8 → v2.9
+
+| # | Perubahan | Alasan |
+|---|---|---|
+| 75 | §3.1, §4, §9, Appendix A: `queue_token` hanya berlaku bagi pemiliknya, **tanpa rebind** (ADR-006 §8.9). Token tamu dari perangkat lain → `401 DEVICE_MISMATCH`; token akun dipakai akun lain / tamu → `401 UNAUTHORIZED`; `MAX_DEVICE_REBINDS` dihapus | Rebind menambah penghitung dan CAS di tiga service untuk kasus jarang. Konsekuensi diterima: tamu yang menghapus data situs mulai lagi dari belakang |
+| 76 | §3.1: langkah klien pada kedua 401 itu — hapus token antrian (web: cookie dihapus server; mobile: hapus dari secure store), lalu join lagi tanpa token | Tanpa itu klien mengirim token yang sama selamanya dan selalu ditolak |
+| 77 | §3.1: cookie `queue_token` `Path=/events/{event_id}` (dari `Path=/`) | Satu cookie per event; join event lain tidak lagi menimpa token event ini |
+| 78 | §3.1: format `X-Device-Id` tidak lagi divalidasi (16–128 `[A-Za-z0-9_-]` dihapus); hanya wajib ada untuk tamu | Server hanya meng-HMAC nilainya; aturan format tidak menambah keamanan |
+| 79 | Base URL tanpa `/v1` | Belum ada versi API. Cookie `Path=/events/{event_id}` hanya cocok bila join dilayani di `/events/...` tanpa prefiks |
+| 80 | Domain: `my-rusuh.my.id` (API `api.*`, stream `events.*`, cookie `Domain=my-rusuh.my.id`) menggantikan `rusuhtiket.com` / `rusuh.id` pada jalur antrian | Domain yang dimiliki tim; cookie hanya terkirim bila API dan stream berada di bawah domain cookie yang sama |

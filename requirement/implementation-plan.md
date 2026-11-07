@@ -55,7 +55,7 @@ menuliskannya ulang. Yang berubah secara material:
 | 9 | `outbox-publisher` ditandai selesai | §13.2 menambah efek samping per tipe; `pkg/events` menambah `payment.confirmed` |
 | 10 | 2 paket bersama (`ratelimit`, `breaker`) | §3: 8 paket baru + 2 perluasan. `grantauth`, `outbox`, `rediskeys`, `redisscript`, `bookingstate`, `sseevent` |
 | 11 | 5 service baru | 7 service baru: ditambah `sale-ops` (§11) dan `metrics-scraper` (§12) |
-| 12 | §12 CI/CD mengacu matrix `test-services` yang tidak ada | §17 ditulis terhadap `ci.yml` yang sebenarnya: paths-filter, 5+2 job deploy, jalur ECS, coverage gate 80% |
+| 12 | §12 CI/CD mengacu matrix `test-services` yang tidak ada | §17 ditulis terhadap `cicd.yml` yang sebenarnya: paths-filter, 5+2 job deploy, jalur ECS, coverage gate 80% |
 | 13 | Kapasitas kategori didefinisikan di dua tabel | §2.2 satu tabel: `ticket_categories` |
 | 14 | `tickets` tidak punya `booking_item_id`; guard QR ganda ADR §16 tidak dapat dibuat | `0006` menambahnya + `UNIQUE` |
 | 15 | Daftar direktori service baru tanpa scaffold | §15 mendaftar 10 file wajib per service |
@@ -509,6 +509,9 @@ type Config struct {
 }
 ```
 
+> ⚠️ **Diubah oleh ADR-006 §8.9** — tanpa rebind: `MaxDeviceRebinds`, `HINCRBY rebinds` dan `DeviceRebindRate`
+> di atas dihapus; perangkat lain → langsung `401 DEVICE_MISMATCH`. Paragraf berikut historis.
+>
 > **Satu rebind, dan itu sengaja longgar** (ADR §12). Menghapus data situs, incognito, atau
 > ganti browser menghapus `device_id` yang sah; pengikatan keras berarti customer itu
 > kehilangan slotnya. `DEVICE_MISMATCH` karena itu menandai percobaan **ketiga**, bukan
@@ -1808,7 +1811,7 @@ Urutan ADR §6 apa adanya. Yang v1.0 lewatkan dan di sini ditambahkan: penolakan
       -- bukan dipatok, supaya cookie dan kunci yang dirujuknya tidak pernah
       -- kedaluwarsa pada waktu yang berbeda (ADR-005 §12).
       -- SameSite=Strict per kontrak §9; stream memakai cookie dari origin
-      -- yang sama (events.rusuhtiket.com), jadi Strict cukup.
+      -- yang sama (events.my-rusuh.my.id), jadi Strict cukup.
 
 12. Respons 200: ticket_no, now_serving, position (ticket_no − now_serving),
     estimated_wait_minutes (position / rate_per_min), sse_url, event{id,name}
@@ -3909,7 +3912,7 @@ mendaftarkan satu pun, yang menyembunyikan ~70 file dari estimasi.
 | `Makefile` | `template.yaml` (`BuildMethod: makefile`) | Target `build-lambda` / `run`; untuk ECS: `docker-build` |
 | `Dockerfile` | job `hadolint` | **Juga untuk Lambda**: booking/user/nik-verify/outbox-publisher punya satu. `notification` belum — bila `hadolint` di-set `fail-on-missing`, itu akan terlihat saat matrix diperluas |
 | `.dockerignore` | build image | |
-| `.golangci.yml` | job `golangci-lint` | Salin dari service terdekat; jangan tulis ulang aturan |
+| `.golangcicd.yml` | job `golangci-lint` | Salin dari service terdekat; jangan tulis ulang aturan |
 | `sonar-project.properties` | job `sonarqube` | `sonar.projectKey` unik per service |
 | `example.env` | onboarding + `cmd/server` lokal | Daftar seluruh env var dari `internal/config` |
 | `README.md` | — | Satu halaman: apa yang dimiliki service ini, kunci Redis dan tabel yang disentuhnya |
@@ -4024,7 +4027,7 @@ Service ECS (sse-server, admission-ctl):
 ## 17. CI/CD
 
 Bagian ini menggantikan §12 v1.0 seluruhnya. v1.0 memerintahkan penambahan 5 service ke
-"matrix `test-services`" pada `.github/workflows/ci.yml` — tidak ada job bernama itu dan
+"matrix `test-services`" pada `.github/workflows/cicd.yml` — tidak ada job bernama itu dan
 tidak ada matrix berbentuk itu. Yang berikut ditulis terhadap pipeline yang sebenarnya ada.
 
 ### 17.1 Bentuk pipeline yang sebenarnya
@@ -4196,7 +4199,7 @@ ia tidak melayani trafik.
 | Kebutuhan | Pemilik |
 |---|---|
 | Repository ECR `rusuh-sse-server`, `rusuh-admission-ctl` | infra |
-| Cluster ECS, ALB + target group + listener (`events.rusuhtiket.com`, HTTP/2, idle 3600s, deregistration delay 60s, slow start 30s, sticky OFF, health `/health`) | infra |
+| Cluster ECS, ALB + target group + listener (`events.my-rusuh.my.id`, HTTP/2, idle 3600s, deregistration delay 60s, slow start 30s, sticky OFF, health `/health`) | infra |
 | IAM: role deploy diperluas untuk `ecr:*` dan `ecs:UpdateService`, `iam:PassRole` task role | infra |
 
 > **`wait-for-service-stability: true` pada `sse-server` bisa memakan belasan menit** saat
@@ -4207,7 +4210,7 @@ ia tidak melayani trafik.
 
 ### 17.4 Coverage gate 80% — per modul, dan ini mengikat
 
-`ci.yml` job `test`:
+`cicd.yml` job `test`:
 
 ```bash
 grep -vE '/(cmd|_mock)/' coverage.out > coverage.gate.out || cp coverage.out coverage.gate.out
@@ -4477,7 +4480,7 @@ pembayaran habis → `PENDING_CANCELLATION` lalu EXPIRED + Midtrans expire.
 > tanpanya.
 
 > **F5 terakhir, tetapi `detect-changes` (§17.2) harus diperbarui di setiap fase.** Service
-> yang modulnya ada di `go.work` tetapi tidak ada di `ci.yml` tidak pernah di-lint, di-test,
+> yang modulnya ada di `go.work` tetapi tidak ada di `cicd.yml` tidak pernah di-lint, di-test,
 > atau di-scan — dan karena fallback "run all" hanya menyala bila **tidak ada** filter yang
 > cocok, PR yang menyentuh service lain akan tetap hijau sambil melewatkannya sepenuhnya.
 
@@ -4591,7 +4594,7 @@ semuanya masih berlaku.
 - `documentations/requirement/requirements.md` v1.0 — FR-01..35, NFR-01..11, BR-01..13
 - `documentations/payment-method/` — dua metode Midtrans Core API
 - `be-rusuh-war-ticketing/migrations/README.md` — konvensi migration
-- `be-rusuh-war-ticketing/.github/workflows/ci.yml` — pipeline yang §17 ditulis terhadapnya
+- `be-rusuh-war-ticketing/.github/workflows/cicd.yml` — pipeline yang §17 ditulis terhadapnya
 - ADR-001 (model counter antrian), ADR-002 (`INCR` + `now_serving`) — keputusan berlaku;
   skema key dan ilustrasi polling di dalamnya digantikan ADR-005
 - ADR-003, ADR-004 — superseded by ADR-005

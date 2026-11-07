@@ -540,6 +540,7 @@ tetap boleh menunggu. Tiket yang tidak dibayar dapat tersedia kembali."* Di bali
 | `api/rusuh-booking-apidog.json` | seluruh respons | **sumber kebenaran**: envelope standar (`error_code` pada error), skema event SSE (`itemSchema`), semua contoh tervalidasi terhadap skemanya | ✅ dalam PR ini |
 | migrasi | `bookings` | `UNIQUE (event_id, queue_token)` + indeks parsial status aktif | ⏳ build step 2 |
 | `be-rusuh-war-ticketing/docs/04-queue/` | semua | rencana per endpoint | ✅ |
+| ADR-005 §12, §17 #12, konfigurasi; api-contracts §3.1, §4, §9, Appendix A; implementation-plan `pkg/grantauth` | pengikatan device | §8.9: tanpa rebind | ✅ (api-contracts v2.9.0) |
 
 ---
 
@@ -553,6 +554,7 @@ tetap boleh menunggu. Tiket yang tidak dibayar dapat tersedia kembali."* Di bali
 | 8.5 | **`/queue/serving`:** tanpa query string (satu entri CDN), TTL CloudFront 1 detik, respons menambah `poll_tiers` | Server tetap pemilik tabel interval; klien memilih barisnya. Menyelesaikan konflik kontrak di Konteks #6 |
 | 8.6 | **`/queue/me` lag replika:** cek ulang sekali di writer bila tanpa baris dan `ticket_no ≤ now_serving` | §2.4 |
 | 8.7 | **Koneksi SSE per task:** keluaran load test, bukan keputusan sekarang | Hasil dicatat di ADR-005 §17 #4 |
+| 8.9 | **Token antrian hanya berlaku bagi pemiliknya, tanpa rebind** (menggantikan "Toleransi" di ADR-005 §12). Token **tamu** hanya berlaku dari perangkat yang menerimanya: `HMAC(DEVICE_PEPPER, X-Device-Id)` harus sama dengan `device_hash`. Token **akun** hanya berlaku bagi akun yang sama (`account_id` = akun Bearer), dari perangkat mana pun. Tidak cocok → `401 DEVICE_MISMATCH` (tamu) / `401 UNAUTHORIZED` (akun lain); di join cookie `queue_token` dihapus. Berlaku untuk join, `/queue/me` dan semua endpoint ber-grant. `MAX_DEVICE_REBINDS`, field `rebinds` dan metrik `DeviceRebindRate` **dihapus**; gantinya metrik `DeviceMismatch` | Rebind satu kali menambah penghitung, CAS dan aturan "percobaan ketiga" yang harus dijaga di tiga service, untuk kasus yang jarang (tamu menghapus data situs). **Konsekuensi diterima:** tamu yang menghapus data situs, ganti browser atau install ulang aplikasi kehilangan tempatnya dan mulai lagi dari belakang. Customer login tidak terkena: akunnya yang mengikat. Server tidak memvalidasi format `X-Device-Id`; kekuatan pengikatan bergantung pada klien membuat nilai acak 128 bit |
 | 8.8 | **`GET /bookings/{id}/tickets` dihapus** (menggantikan ADR-005 §9 langkah 5). `GET /bookings/{id}` saat `PAID` mengembalikan `tickets[].eticket_url` yang sudah membawa `?t={eticket_token}` (`pkg/eticket.Mint`, token yang sama dengan email) | Isi endpoint itu sama dengan `tickets[]` di `GET /bookings/{id}`. Satu-satunya nilai tambahnya, akses QR bagi tamu bila email gagal (NFR-10), kini diberikan tautan bertoken di Success Page. Satu endpoint, satu usecase dan satu handler lebih sedikit. booking-service menjadi penerbit ketiga token e-tiket (bersama notification); verifikasi tetap di user-service |
 
 ---
