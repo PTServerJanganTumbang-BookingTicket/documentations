@@ -93,7 +93,7 @@ flowchart TB
 
 | Service | Runtime | Responsibility | Build status (2026-11-04) |
 |---|---|---|---|
-| `queue` | Lambda, provisioned concurrency from T-30 min | join (empty queue: waits ≤ 1 s for the grant, read only), `/me` entry and recovery, `/serving` fallback | not started |
+| `queue` | Lambda, provisioned concurrency from T-30 min | join (number fits in `free_slots`, incl. the first batch at sale start: waits ≤ 1 s for the grant in Redis, read only; ADR-006 §8.11), `/me` entry and recovery, `/serving` fallback | not started |
 | `rusuh-sse-server` | ECS Fargate, 2 vCPU / 4 GB, pre-scaled to N, max 60 | 300k SSE connections, pub/sub fan-out, stale detector | not started |
 | `rusuh-admission-ctl` | ECS Fargate, **1 task** (deploy min 0 % / max 100 %), 500 ms tick. Leader + standby deferred | the only grant writer: advance, sweep, broadcast, stock reconciliation, FULL_BOOKED → CLOSED (publishes the `status` event on each state change) | not started |
 | `events` | Lambda + CloudFront 30 s | event list and detail with `status` / `queue_state` / `display` | not started |
@@ -215,9 +215,9 @@ sequenceDiagram
     loop every 500 ms (single task)
         CTL->>R: RECOVER pending grants · snapshot now_serving
         CTL->>DB: COUNT open, browsing (writer)
-        CTL->>R: EVALSHA advance_now_serving.lua (CAS on now_serving)
+        CTL->>R: EVALSHA advance_now_serving.lua (CAS on now_serving; writes free_slots)
         CTL->>DB: INSERT bookings GRANTED, idempotent
-        CTL->>R: HSET grant · ZADD expiries · ZREM by_ticket (last)
+        CTL->>R: HSET grant · HSET token grant_token · ZADD expiries · ZREM by_ticket (last)
         CTL->>R: PUBLISH sse-broadcast (after the INSERTs)
         R-->>SSE: fan-out
         SSE-->>C: nowServing, state, ratePerMin, serverTime (same for everyone)
@@ -228,7 +228,9 @@ sequenceDiagram
     Q-->>C: GRANTED, grant_token, booking_expires_at
 ```
 
-Join never touches Aurora on the hot path. Durable positions (`qpersist` → `queue_entries`,
+If the joiner's number fits in `free_slots` (e.g. the first batch at sale start), join instead waits ≤ 1 s,
+polling `token:{qt}` in Redis for the `grant_token` admission-ctl writes, and answers `granted: true`, so that
+customer skips the waiting room (ADR-006 §8.11). Join never touches Aurora on the hot path. Durable positions (`qpersist` → `queue_entries`,
 ADR-005 §12) are **deferred to production** (ADR-006 §9); the POC relies on Redis Multi-AZ.
 
 ### 5.2 Claim and hold

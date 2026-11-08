@@ -4108,7 +4108,7 @@
                             },
                             "granted": {
                               "type": "boolean",
-                              "description": "true bila antrian kosong dan admission-ctl memberi grant ≤ 1 detik (FR-05)"
+                              "description": "true bila nomor customer muat di tempat kosong (free_slots, termasuk batch pertama saat penjualan dibuka) dan admission-ctl memberi grant ≤ 1 detik (FR-05, ADR-006 §8.11). Bisa muncul untuk JOIN_QUEUE maupun GO_TO_TICKETS"
                             },
                             "grant_token": {
                               "type": "string",
@@ -4667,7 +4667,7 @@
                             },
                             "message": {
                               "type": "string",
-                              "example": "Penjualan sudah ditutup"
+                              "example": "Tiket sudah habis"
                             },
                             "error_code": {
                               "type": "string",
@@ -4736,7 +4736,7 @@
                     "data": "{\"meta\": {\"code\": 200, \"message\": \"Rejoined existing queue position\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {\"ticket_no\": 32748, \"now_serving\": 31520, \"position\": 1228, \"queue_token\": \"qt_xyz789\", \"sse_url\": \"https://events.my-rusuh.my.id/events/evt_konser_a/queue/stream\", \"rejoined\": true, \"state\": \"QUEUED\"}}"
                   },
                   {
-                    "name": "Queue empty — granted (FR-05)",
+                    "name": "Straight in — granted (FR-05)",
                     "responseId": "186209177",
                     "description": "",
                     "oasKey": "",
@@ -4837,7 +4837,7 @@
                     "description": "",
                     "oasKey": "",
                     "oasExtensions": "",
-                    "data": "{\"meta\": {\"code\": 410, \"message\": \"Penjualan sudah ditutup\", \"error_code\": \"SALE_CLOSED\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {\"queue_state\": \"CLOSED\"}}"
+                    "data": "{\"meta\": {\"code\": 410, \"message\": \"Tiket sudah habis\", \"error_code\": \"SALE_CLOSED\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {\"queue_state\": \"CLOSED\"}}"
                   },
                   {
                     "name": "QUEUE_NOT_READY",
@@ -4902,7 +4902,7 @@
                     }
                   ]
                 },
-                "description": "Join queue. Dipanggil oleh tombol event dengan action JOIN_QUEUE maupun GO_TO_TICKETS (§2.1).\n\nURUTAN PEMERIKSAAN: bentuk request → identitas (Bearer tidak sah = 401, bukan tamu; tamu wajib X-Device-Id) → rate limit → CAPTCHA → state sale → pemulihan (BR-09 queue_token milik pemanggil, lalu BR-07 akun) → FULL_BOOKED → kapasitas → nomor baru. Rate limit DULU, CAPTCHA kemudian: rate limit adalah panggilan Redis lokal; verifikasi CAPTCHA adalah round trip eksternal. Penolakan apa pun tidak memakan ticket_no.\n\nCookie: queue_token=…; Domain=my-rusuh.my.id; Path=/events/{event_id}; HttpOnly; Secure; SameSite=Strict; Max-Age diturunkan dari SALE_WINDOW_SECONDS — ia harus kedaluwarsa bersamaan dengan token:{queue_token}.\n\nRespons membawa queue_token (untuk mobile, v2.7) dan sse_url absolut (host events.*, v2.8). Tidak ada estimasi waktu tunggu: frontend menghitungnya dari ratePerMin (api-contracts §3.5).\n\nqueue_token hanya berlaku bagi pemiliknya (v2.9, ADR-006 §8.9): token tamu dari perangkat lain → 401 DEVICE_MISMATCH; token akun dipakai akun lain / tamu → 401 UNAUTHORIZED. Keduanya menghapus cookie; klien menghapus token antriannya lalu join lagi tanpa token.",
+                "description": "Join queue. Dipanggil oleh tombol event dengan action JOIN_QUEUE maupun GO_TO_TICKETS (§2.1).\n\nURUTAN PEMERIKSAAN: bentuk request → identitas (Bearer tidak sah = 401, bukan tamu; tamu wajib X-Device-Id) → rate limit → CAPTCHA → state sale → pemulihan (BR-09 queue_token milik pemanggil, lalu BR-07 akun) → FULL_BOOKED → kapasitas → nomor baru. Rate limit DULU, CAPTCHA kemudian: rate limit adalah panggilan Redis lokal; verifikasi CAPTCHA adalah round trip eksternal. Penolakan apa pun tidak memakan ticket_no.\n\nCookie: queue_token=…; Domain=my-rusuh.my.id; Path=/events/{event_id}; HttpOnly; Secure; SameSite=Strict; Max-Age diturunkan dari SALE_WINDOW_SECONDS — ia harus kedaluwarsa bersamaan dengan token:{queue_token}.\n\nRespons membawa queue_token (untuk mobile, v2.7) dan sse_url absolut (host events.*, v2.8). Tidak ada estimasi waktu tunggu: frontend menghitungnya dari ratePerMin (api-contracts §3.5).\n\nqueue_token hanya berlaku bagi pemiliknya (v2.9, ADR-006 §8.9): token tamu dari perangkat lain → 401 DEVICE_MISMATCH; token akun dipakai akun lain / tamu → 401 UNAUTHORIZED. Keduanya menghapus cookie; klien menghapus token antriannya lalu join lagi tanpa token.\n\nLANGSUNG MASUK (FR-05, v2.11, ADR-006 §8.11): bila ticket_no ≤ now_serving + min(free_slots, JOIN_DIRECT_MAX) dan free_slots (ditulis admission-ctl tiap tick) tidak lebih tua dari 2 detik, join menunggu ≤ 1 detik untuk grant dari admission-ctl lalu menjawab granted: true. Saat penjualan dibuka ini mencakup batch pertama (hingga MAX_CONCURRENT_SLOTS orang). granted: true bisa datang dari JOIN_QUEUE maupun GO_TO_TICKETS: klien merutekan berdasarkan respons. Join tidak pernah memberi grant sendiri.",
                 "tags": [
                   "Queue"
                 ],
@@ -5127,6 +5127,13 @@
                                 "message"
                               ],
                               "additionalProperties": false
+                            },
+                            {
+                              "title": "QueueStreamReconnect (event: reconnect)",
+                              "type": "object",
+                              "properties": {},
+                              "x-apidog-orders": [],
+                              "additionalProperties": false
                             }
                           ]
                         }
@@ -5162,7 +5169,7 @@
                             },
                             "message": {
                               "type": "string",
-                              "example": "Penjualan sudah ditutup"
+                              "example": "Tiket sudah habis"
                             },
                             "error_code": {
                               "type": "string",
@@ -5413,6 +5420,136 @@
                         "data"
                       ]
                     }
+                  },
+                  {
+                    "id": "404stream001",
+                    "code": "404",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 404
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Event tidak ditemukan"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "NOT_FOUND",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "state = CLOSED saja. FULL_BOOKED TIDAK menutup stream: stok dapat kembali dari booking yang kedaluwarsa, dan admission lanjut. EventSource berhenti permanen pada status non-200 — itu disengaja, dan hanya benar untuk CLOSED.",
+                    "contentType": "json",
+                    "oasExtensions": "",
+                    "name": "NOT_FOUND",
+                    "mediaType": "application/json"
+                  },
+                  {
+                    "id": "503stream001",
+                    "code": "503",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 503
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Layanan sedang tidak tersedia, coba lagi"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "SERVICE_UNAVAILABLE",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "state = CLOSED saja. FULL_BOOKED TIDAK menutup stream: stok dapat kembali dari booking yang kedaluwarsa, dan admission lanjut. EventSource berhenti permanen pada status non-200 — itu disengaja, dan hanya benar untuk CLOSED.",
+                    "contentType": "json",
+                    "oasExtensions": "",
+                    "name": "SERVICE_UNAVAILABLE / QUEUE_NOT_READY",
+                    "mediaType": "application/json"
                   }
                 ],
                 "responseExamples": [
@@ -5478,7 +5615,7 @@
                     "description": "",
                     "oasKey": "",
                     "oasExtensions": "",
-                    "data": "{\"meta\":{\"code\":410,\"message\":\"Penjualan sudah ditutup\",\"error_code\":\"SALE_CLOSED\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{}}"
+                    "data": "{\"meta\":{\"code\":410,\"message\":\"Tiket sudah habis\",\"error_code\":\"SALE_CLOSED\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{}}"
                   },
                   {
                     "name": "TOO_MANY_REQUESTS",
@@ -5503,6 +5640,30 @@
                     "oasKey": "",
                     "oasExtensions": "",
                     "data": "{\"meta\":{\"code\":409,\"message\":\"Penjualan belum dibuka\",\"error_code\":\"SALE_NOT_OPEN\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{}}"
+                  },
+                  {
+                    "name": "Reconnect (server shutting down)",
+                    "data": "event: reconnect\nretry: 7300\ndata: {}\n\n",
+                    "responseId": "117070702",
+                    "description": "",
+                    "oasKey": "stale",
+                    "oasExtensions": ""
+                  },
+                  {
+                    "name": "NOT_FOUND",
+                    "responseId": "404stream001",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": "",
+                    "data": "{\"meta\": {\"code\": 404, \"message\": \"Event tidak ditemukan\", \"error_code\": \"NOT_FOUND\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}"
+                  },
+                  {
+                    "name": "SERVICE_UNAVAILABLE",
+                    "responseId": "503stream001",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": "",
+                    "data": "{\"meta\": {\"code\": 503, \"message\": \"Layanan sedang tidak tersedia, coba lagi\", \"error_code\": \"SERVICE_UNAVAILABLE\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}"
                   }
                 ],
                 "requestBody": {
