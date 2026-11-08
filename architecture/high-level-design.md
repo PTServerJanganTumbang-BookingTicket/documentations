@@ -347,7 +347,7 @@ share the `{ev}` hash tag, so **all hot state of one event lives on one cluster 
 | Group | Keys |
 |---|---|
 | Queue | `queue:{ev}` (hash: `state`, `issued`, `now_serving`, `full_booked_at`, `free_slots`, `free_slots_at`, `rate_per_min`, …; ADR-006 §8.12), `queue:{ev}:by_ticket` (zset; score ≤ `now_serving` = pending grant), `queue:{ev}:capacity`, `queue:{ev}:full_booked_at`. No slot counters (ADR-006 §3); `qpersist:{ev}` deferred to production |
-| Credentials | `token:{uuid}`, `grant:{token}` (EX 1080), `acct:{ev}:{account_id}` (BR-07), `settled:{uuid}` (tombstone) |
+| Credentials | `token:{uuid}`, `grant:{token}` (EX 1080 from `granted_at`; fields `event_id`, `booking_id`, `queue_token`, plus `account_id` for logged-in or `device_hash` for guests, ADR-006 §8.13), `acct:{ev}:{account_id}` (BR-07), `settled:{uuid}` (tombstone) |
 | Booking | `stock:{ev}:{cat}`, `nik:used:{ev}:{hmac}`, `nik:valid:{hmac}` (EX 86400) |
 | Control | Production only (deferred): `ctl:leader` (NX EX 5), `ctl:epoch` (fencing). `pause:{ev}`, `pause:{ev}:grace_applied` removed (ADR-006 §4.3) |
 | Dependencies | `breaker:{dukcapil\|payment-gateway}:state/failures`, `rl:{service}` |
