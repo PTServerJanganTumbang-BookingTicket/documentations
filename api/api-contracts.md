@@ -1326,6 +1326,15 @@ skenario kembali:
 
 > Grant pending atau lag replika menjawab `QUEUED` dengan `ticket_no ≤ now_serving` ("sebentar
 > lagi"); klien mengulang setelah 1 detik.
+>
+> **Tamu wajib mengirim `X-Device-Id`** (ADR-006 §8.9): token tamu hanya berlaku dari perangkat yang menerimanya, jadi perangkat lain
+> mendapat `401 DEVICE_MISMATCH` dan cookie `queue_token` dihapus; tanpa header itu `400 DEVICE_ID_REQUIRED`. Token akun hanya untuk akun
+> yang sama (`401 UNAUTHORIZED`). Pemanggil yang membawa `Authorization: Bearer` selalu dijawab dengan tempat **akunnya sendiri**; cookie
+> tamu diabaikan, tidak diambil alih.
+>
+> **`EXPIRED` tidak menghapus cookie.** `LAPSED` bersifat final, tetapi `token:{uuid}` dan `acct` dipertahankan sampai jendela penjualan habis
+> supaya `POST …/queue/join` menjawab `rejoined: true` dengan `state: LAPSED`, bukan memberi tempat kedua. Hanya nisan (`CONFIRMED`) dan token
+> milik orang lain yang menghapus cookie. `booking_id` berbentuk `RB-<ULID>`.
 
 #### Kapan kredensial antrian berhenti ada
 
