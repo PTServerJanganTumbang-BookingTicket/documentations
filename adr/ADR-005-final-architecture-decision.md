@@ -95,6 +95,8 @@ dikelola lewat Bagian 11.
 
 ## 4. Arsitektur Final
 
+> ⚠️ **Diubah oleh ADR-006 §8.12** — `queue:{ev}:state`, `:issued`, `:full_booked_at` kini field hash `queue:{ev}`; `queue:{ev}:resume` dan `expiries:{ev}` dihapus (sweep tenggat membaca Aurora). Berlaku untuk seluruh dokumen ini.
+>
 > ⚠️ **Diubah oleh ADR-006** — diagram di bagian ini masih menampilkan `regrant`, `slots:open` dan `sse-grant`; ketiganya dihapus (ADR-006 §2, §3, §4).
 
 ```

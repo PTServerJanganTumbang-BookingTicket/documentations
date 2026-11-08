@@ -112,7 +112,7 @@ Detail per service: implementation-plan §5–§13.
 
 | Store | Spec | Holds | Authority |
 |---|---|---|---|
-| **Redis** (ElastiCache, cluster mode, Multi-AZ, `r6g.large` × 3) | about 80 MB working set. Sized for ops/s, not memory | queue counters and tokens, stock, `nik:used`, grants, expiries ZSET, rate limits, breakers, leader lease, pub/sub | stock and queue fast path |
+| **Redis** (ElastiCache, cluster mode, Multi-AZ, `r6g.large` × 3) | about 80 MB working set. Sized for ops/s, not memory | queue counters and tokens, stock, `nik:used`, grants, rate limits, breakers, leader lease, pub/sub | stock and queue fast path |
 | **Aurora PostgreSQL** (Serverless v2, writer + readers, RDS Proxy, PITR) | | bookings, items, NIK claims, payments, tickets, outbox, accounts, consent, queue_entries | **deadlines, states, money** |
 
 ### 3.3 External integrations
@@ -173,7 +173,7 @@ stateDiagram-v2
 counting relies on one invariant: **no transition goes back into GRANTED or SELECTING**. A success callback after
 `EXPIRED` marks the booking **Disputed** (`payment_disputed`) for manual refund (FR-23c, BR-19).
 
-### 4.3 Sale state per event (`queue:{ev}:state`)
+### 4.3 Sale state per event (field `state` of `queue:{ev}`)
 
 ```mermaid
 stateDiagram-v2
@@ -217,7 +217,7 @@ sequenceDiagram
         CTL->>DB: COUNT open, browsing (writer)
         CTL->>R: EVALSHA advance_now_serving.lua (CAS on now_serving; writes free_slots)
         CTL->>DB: INSERT bookings GRANTED, idempotent
-        CTL->>R: HSET grant · HSET token grant_token · ZADD expiries · ZREM by_ticket (last)
+        CTL->>R: HSET grant · HSET token grant_token · ZREM by_ticket (last)
         CTL->>R: PUBLISH sse-broadcast (after the INSERTs)
         R-->>SSE: fan-out
         SSE-->>C: nowServing, state, ratePerMin, serverTime (same for everyone)
@@ -258,7 +258,6 @@ sequenceDiagram
         B-->>C: 409 specific reason, stays SELECTING
     else HELD
         B->>DB: UPDATE HELD, held_at, payment_expires_at · INSERT items, nik_claims · COMMIT
-        B->>R: ZADD expiries payment deadline
         B-->>C: 201 booking HELD
     end
     Note over B,R: Aurora rollback after Lua → explicit compensation<br/>plus 60 s stock reconciliation as safety net
@@ -302,17 +301,11 @@ sequenceDiagram
     participant R as Redis
     participant DB as Aurora
 
-    CTL->>R: ZRANGEBYSCORE expiries:{ev} 0 now
-    loop each due booking
-        CTL->>DB: read authoritative deadline + status
-        alt deadline later than the score (stale entry)
-            CTL->>R: ZADD rescore
-        else due
-            CTL->>DB: CAS UPDATE status → LAPSED / EXPIRED / PENDING_CANCELLATION
-            opt exactly 1 row and terminal
-                CTL->>R: release stock · DEL nik:used · DEL grant/acct/token
-                CTL->>DB: DELETE nik_claims · INSERT outbox (expiry email)
-            end
+    CTL->>DB: CAS UPDATE status → LAPSED / EXPIRED / PENDING_CANCELLATION<br/>WHERE status is active AND deadline <= now RETURNING (partial index, ADR-006 §8.12)
+    loop each row returned (this task won the CAS)
+        opt terminal
+            CTL->>R: release stock · DEL nik:used · DEL grant/acct/token
+            CTL->>DB: DELETE nik_claims · INSERT outbox (expiry email)
         end
     end
 ```
@@ -353,9 +346,9 @@ share the `{ev}` hash tag, so **all hot state of one event lives on one cluster 
 
 | Group | Keys |
 |---|---|
-| Queue | `queue:{ev}:state`, `queue:{ev}:issued`, `queue:{ev}` (hash: `now_serving`, `rate_per_min`), `queue:{ev}:by_ticket` (zset; score ≤ `now_serving` = pending grant), `queue:{ev}:capacity`, `queue:{ev}:full_booked_at`. No slot counters (ADR-006 §3); `qpersist:{ev}` deferred to production |
+| Queue | `queue:{ev}` (hash: `state`, `issued`, `now_serving`, `full_booked_at`, `free_slots`, `free_slots_at`, `rate_per_min`, …; ADR-006 §8.12), `queue:{ev}:by_ticket` (zset; score ≤ `now_serving` = pending grant), `queue:{ev}:capacity`, `queue:{ev}:full_booked_at`. No slot counters (ADR-006 §3); `qpersist:{ev}` deferred to production |
 | Credentials | `token:{uuid}`, `grant:{token}` (EX 1080), `acct:{ev}:{account_id}` (BR-07), `settled:{uuid}` (tombstone) |
-| Booking | `stock:{ev}:{cat}`, `nik:used:{ev}:{hmac}`, `nik:valid:{hmac}` (EX 86400), `expiries:{ev}` (zset, scheduler only) |
+| Booking | `stock:{ev}:{cat}`, `nik:used:{ev}:{hmac}`, `nik:valid:{hmac}` (EX 86400) |
 | Control | Production only (deferred): `ctl:leader` (NX EX 5), `ctl:epoch` (fencing). `pause:{ev}`, `pause:{ev}:grace_applied` removed (ADR-006 §4.3) |
 | Dependencies | `breaker:{dukcapil\|payment-gateway}:state/failures`, `rl:{service}` |
 | Ingress | `rl:join:{ip}`, `rl:sse:{ip}`, `rl:pay:{booking_id}` |

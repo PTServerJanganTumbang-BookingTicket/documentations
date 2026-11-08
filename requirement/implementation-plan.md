@@ -33,6 +33,7 @@
 > | **Semua bagian yang menyebut pause** (`paused`, gerbang ADVANCE, `PAUSE_TTL_GRACE_SECONDS`, `pause:{ev}:grace_applied`, BR-13a, BR-22, metrik `PauseTransitions` / `PauseTtlGrantedSeconds`) | **dihapus** (ADR-006 §4.3). Breaker tetap fail closed, antrian tetap maju |
 > | §8 payload SSE | `{nowServing, state, ratePerMin, serverTime}`; event `status {state}` tiap transisi; indikator basi = event `stale` (ADR-006 §4.2) |
 > | §5 booking-service: `GET /bookings/{id}/tickets`, `get_booking_tickets.go`, `booking_tickets.go`, `GetBookingTickets`, §5.5 usecase kedua | **dihapus** (ADR-006 §8.8). `GetBooking` saat `CONFIRMED` menerbitkan `eticket_url` bertoken lewat `pkg/eticket.Mint`; §3.5 pemakai `pkg/grantauth` menjadi delapan |
+> | §3.1 `pkg/rediskeys`, semua bagian yang menyebut `expiries:{ev}`, `queue:{ev}:state`, `:issued`, `:full_booked_at`, `:resume` | **ADR-006 §8.12 (8 Nov 2026):** `state`, `issued`, `full_booked_at` (epoch detik) menjadi field hash `queue:{ev}`; `queue:{ev}:resume` dan `expiries:{ev}` dihapus. Sweep tenggat membaca Aurora (indeks parsial pada `booking_expires_at`); `ZADD expiries` setelah `HELD` / `AWAITING_PAYMENT` tidak ada lagi |
 > | §7.2 Join | respons membawa `queue_token` (untuk mobile); tanpa `estimated_wait_minutes` — estimasi dihitung frontend (ADR-006 §6.2) |
 
 > **Rev 2.1** — v2.0 ditulis terhadap kontrak v2.4, yang naik ke v2.5 pada sesi yang sama.

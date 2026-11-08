@@ -15,7 +15,7 @@
 > tombol. Lihat Appendix C, v2.10 → v2.11.
 >
 > **v2.10** (ADR-006 §8.10, **breaking**): status antrian **`SOLD_OUT` diganti `FULL_BOOKED`** (semua kursi sedang di-hold,
-> **reversibel**). Berlaku untuk `queue:{ev}:state`, payload dan event SSE `status`, `/queue/serving`, error join
+> **reversibel**). Berlaku untuk `queue:{ev}.state`, payload dan event SSE `status`, `/queue/serving`, error join
 > 409 (`error_code` dan `data.queue_state`), `sold_out_at` → `full_booked_at`, `soldOutAt` → `fullBookedAt`,
 > `SOLD_OUT_HOLD_SECONDS` → `FULL_BOOKED_HOLD_SECONDS`. **`CLOSED`, event `sold-out` dan `SALE_CLOSED` (410) tidak
 > berubah**: `sold-out` tetap berarti sale selesai dan klien wajib `close()`. `status: SOLD_OUT` pada halaman utama
@@ -1024,11 +1024,11 @@ percobaan yang gagal tidak memakan posisi antrian.
 **Response** (429): melewati `rl:join:{ip}` (20 / 5 menit), atau — bila pemanggil login —
 melewati batas 3 join per akun per menit.
 
-**Response** (404 - `NOT_FOUND`): `event_id` tidak dikenal (tidak ada `queue:{ev}:state`) atau tidak dapat menjadi hash tag Redis.
+**Response** (404 - `NOT_FOUND`): `event_id` tidak dikenal (tidak ada `queue:{ev}.state`) atau tidak dapat menjadi hash tag Redis.
 
 **Response** (503 - `SERVICE_UNAVAILABLE`): Redis tidak dapat dihubungi, atau server sedang shutdown (drain, SIGTERM). Disertai `Retry-After`; `EventSource` mencoba lagi. Gagal tertutup: stream tidak pernah dibuka tanpa snapshot. Bila state bukan salah satu dari empat nilai yang dikenal: `503 QUEUE_NOT_READY`.
 
-**Response** (409 - `SALE_NOT_OPEN`): `queue:{ev}:state` masih `SCHEDULED`.
+**Response** (409 - `SALE_NOT_OPEN`): `queue:{ev}.state` masih `SCHEDULED`.
 ```json
 {
   "meta": { "code": 409, "message": "Penjualan belum dibuka" },
@@ -1041,7 +1041,7 @@ melewati batas 3 join per akun per menit.
 > ada. Halaman utama sudah menampilkan `queue_state: NOT_OPEN` + `sale_starts_at` (§2.1);
 > penolakan di sini adalah penegaknya.
 
-**Response** (409 - `FULL_BOOKED`): `queue:{ev}:state` = `FULL_BOOKED`, untuk **pendatang baru** saja.
+**Response** (409 - `FULL_BOOKED`): `queue:{ev}.state` = `FULL_BOOKED`, untuk **pendatang baru** saja.
 ```json
 {
   "meta": { "code": 409, "message": "Tiket sedang habis", "error_code": "FULL_BOOKED" },
@@ -1056,10 +1056,10 @@ melewati batas 3 join per akun per menit.
 > tersambung dan dipulihkan (§3.2 tidak menjawab 410 untuk `FULL_BOOKED`). Saat state kembali `OPEN`, join
 > diterima lagi.
 
-**Response** (410 - `SALE_CLOSED`): `queue:{ev}:state` = `CLOSED`; `data`: `{ "queue_state": "CLOSED" }`.
+**Response** (410 - `SALE_CLOSED`): `queue:{ev}.state` = `CLOSED`; `data`: `{ "queue_state": "CLOSED" }`.
 Berlaku juga bagi yang rejoin.
 
-**Response** (503 - `QUEUE_NOT_READY`): `queue:{ev}:state` tidak ada atau bernilai tak dikenal (event
+**Response** (503 - `QUEUE_NOT_READY`): `queue:{ev}.state` tidak ada atau bernilai tak dikenal (event
 belum di-seed). Bukan "belum dibuka": tidak ada yang diketahui tentang sale ini.
 
 **Response** (503 - `INTERNAL_ERROR`): Redis tidak dapat dihubungi atau penulisan gagal. Gagal tertutup;
@@ -1168,7 +1168,7 @@ payload (termasuk snapshot awal setelah reconnect), bila `nowServing ≥ ticket_
 > tidak pernah menolak customer yang gilirannya sudah tiba (NFR-02).
 
 **Event: `status`** — **state sale berubah** (v2.7). Dikirim sekali pada setiap transisi
-`queue:{ev}:state`, ke semua koneksi event.
+`queue:{ev}.state`, ke semua koneksi event.
 
 ```
 event: status
@@ -1273,9 +1273,9 @@ data: {}
 > Rate limit ini duduk di **sse-server**, bukan di API Gateway — endpoint ini satu-satunya
 > yang dilayani ALB. Ia pengganti WAF di gerbang itu (ADR-005 Bagian 4).
 
-**Response** (409 - `SALE_NOT_OPEN`): `queue:{ev}:state` masih `SCHEDULED`.
+**Response** (409 - `SALE_NOT_OPEN`): `queue:{ev}.state` masih `SCHEDULED`.
 
-**Response** (410 - `SALE_CLOSED`): `queue:{ev}:state` sudah `CLOSED`. `meta.message` selalu **"Tiket sudah habis"** (juga pada join, §3.1), karena `CLOSED` berarti sale benar-benar selesai. `EventSource` berhenti
+**Response** (410 - `SALE_CLOSED`): `queue:{ev}.state` sudah `CLOSED`. `meta.message` selalu **"Tiket sudah habis"** (juga pada join, §3.1), karena `CLOSED` berarti sale benar-benar selesai. `EventSource` berhenti
 permanen pada status non-200 — ini disengaja.
 
 > **`FULL_BOOKED` TIDAK menjawab 410.** Stream tetap dibuka seperti biasa: stok dapat kembali
@@ -2858,10 +2858,10 @@ Legenda: ✅ terpenuhi di kontrak · ⚙️ di luar permukaan API (backend atau 
 | `VALIDATION_ERROR` | Input validation failed |
 | `UNAUTHORIZED` | **401** — kredensial tidak ada atau tidak dikenal (queue token pada §3.2, §3.3), atau `queue_token` milik sebuah akun dipakai akun lain / tamu pada join (§3.1, v2.9; cookie dihapus) |
 | `NOT_FOUND` | **404** — resource tidak ada, atau bukan milik pemanggil (tidak dibedakan) |
-| `SALE_NOT_OPEN` | **409** — `queue:{ev}:state` masih `SCHEDULED` (§3.1, §3.2) |
-| `SALE_CLOSED` | **410** — `queue:{ev}:state` sudah `CLOSED`; join (§3.1) dan stream (§3.2) ditolak |
-| `FULL_BOOKED` | **409** — `queue:{ev}:state` = `FULL_BOOKED`; join pendatang baru ditolak, yang sudah mengantri tetap dipulihkan (§3.1) |
-| `QUEUE_NOT_READY` | **503** — `queue:{ev}:state` tidak ada atau tak dikenal: event belum di-seed (§3.1) |
+| `SALE_NOT_OPEN` | **409** — `queue:{ev}.state` masih `SCHEDULED` (§3.1, §3.2) |
+| `SALE_CLOSED` | **410** — `queue:{ev}.state` sudah `CLOSED`; join (§3.1) dan stream (§3.2) ditolak |
+| `FULL_BOOKED` | **409** — `queue:{ev}.state` = `FULL_BOOKED`; join pendatang baru ditolak, yang sudah mengantri tetap dipulihkan (§3.1) |
+| `QUEUE_NOT_READY` | **503** — `queue:{ev}.state` tidak ada atau tak dikenal: event belum di-seed (§3.1) |
 | `BOOKING_STATUS_INVALID` | **409** — booking tidak dalam status yang dibutuhkan endpoint (§5.2, §5.3) |
 | `NIK_ALREADY_USED` | NIK sudah digunakan untuk event ini |
 | `NIK_NOT_FOUND` | NIK tidak terdaftar di Dukcapil |
