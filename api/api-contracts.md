@@ -1,13 +1,21 @@
 # Rusuh Booking Tiket — API Contracts
 
-**Versi**: 2.11.0  
-**Tanggal**: 8 November 2026  
+**Versi**: 2.12.0  
+**Tanggal**: 9 November 2026  
 **Status**: Draft  
 **Base URL**: `https://api.my-rusuh.my.id` (tanpa versi di path untuk saat ini; v2.9). Stream: `https://events.my-rusuh.my.id`  
 **Selaras dengan**: ADR-005 (Keputusan Arsitektur Final — SSE + ECS Fargate), diamandemen ADR-006 (antrian)  
 **Pasangan mesin**: `rusuh-booking-apidog.json` (Apidog) — **sumber kebenaran bentuk respons**. Dokumen ini menjelaskan perilaku dan alasannya; keduanya wajib sinkron. `rusuh-booking-openapi.yaml` diarsipkan (`archive/`) dan tidak dipelihara lagi
 
-> **v2.11** (ADR-006 §8.11, **tidak breaking**): **semua yang muat langsung masuk.** Join kini menunggu grant
+> **v2.12 (bentuk event stream seragam, ADR-006 §4.2):** setiap event bernama membawa `state` dan `serverTime`; `stale.reason` diganti `message` (teks siap tampil; **breaking** bagi klien yang membaca `reason`, field itu hanya diagnostik); `sold-out` dan `reconnect` menambah `state`, `message`, `serverTime` (`reconnect` tidak lagi `data: {}`). Lihat Appendix C butir 92.
+>
+> **v2.12** (ADR-006 §8.14, **tidak breaking** bagi klien yang merutekan berdasarkan respons): **tanpa langsung-masuk
+> (straight-in).** Join **tidak lagi menunggu grant** dan tidak pernah menjawab `granted: true`; jawabannya selalu
+> `queued` atau `rejoined`, seketika. Bila ada tempat kosong, tick admission-ctl berikutnya (≤ 500 ms) memasukkan
+> customer dan klien tahu lewat stream + `GET /queue/me`. Status `DIRECT` ("Beli Tiket") tetap sebagai label
+> tombol dan tetap memanggil join. v2.11 di bawah **dicabut**. Lihat Appendix C, v2.11 → v2.12.
+>
+> ~~**v2.11** (ADR-006 §8.11)~~ *(dicabut oleh v2.12)*: **semua yang muat langsung masuk.** Join kini menunggu grant
 > (≤ 1 detik) bagi **setiap** pendatang yang nomornya muat di tempat kosong, bukan hanya nomor pertama di antrian
 > kosong. Saat penjualan dibuka, batch pertama (hingga `MAX_CONCURRENT_SLOTS` orang) menerima `granted: true`
 > langsung dari join dan tidak melihat ruang tunggu. Bentuk respons tidak berubah, tetapi **`granted: true` kini
@@ -43,8 +51,8 @@
 
 > **v2.6** (ADR-006): event SSE `grant` dihapus — klien memanggil `/queue/me` saat
 > `nowServing ≥ ticket_no`. Join tidak lagi memberi grant sendiri: pada antrian kosong ia
-> menunggu ≤ 1 detik untuk tick admission-ctl berikutnya, sehingga `granted: true` tetap mungkin
-> (bentuk respons join tidak berubah). Diperluas di v2.11: semua yang muat di tempat kosong.
+> menunggu ≤ 1 detik untuk tick admission-ctl berikutnya, sehingga `granted: true` tetap mungkin.
+> **Dicabut di v2.12:** join tidak menunggu sama sekali dan tidak pernah menjawab `granted`.
 > `/queue/serving` menambah `poll_tiers` dan tidak menerima query string.
 
 > **v2.5** memperbaiki kontrak terhadap API Midtrans yang sebenarnya, dan menurunkan
@@ -685,7 +693,7 @@ Menampilkan daftar event. UI: Home Page "Daftar Event".
 |---|---|---|
 | `NOT_OPEN` | sale belum dibuka (`sale_starts_at` di depan) | Nonaktif |
 | `FULL` | `queue_depth >= queue_capacity` | Nonaktif, "Antrian penuh" |
-| `DIRECT` | `queue_depth == 0` dan masih ada slot bebas | "Beli Tiket" — FR-05 |
+| `DIRECT` | `queue_depth == 0` dan masih ada slot bebas | "Beli Tiket" — FR-05 (label saja, lihat catatan di bawah) |
 | `OPEN` | sisanya | "Masuk Antrian" |
 
 > **`COMING_SOON` dihapus dari `status`**, dan `CLOSED` dihapus dari `queue_state`.
@@ -720,12 +728,11 @@ queue_state == OPEN        → enabled=true   action=JOIN_QUEUE     label=join_q
 ```
 
 > **`GO_TO_TICKETS` tetap memanggil `POST …/queue/join` (§3.1).** Grant hanya lahir dari join: tanpa
-> join tidak ada `X-Grant-Token`, tidak ada pengikatan device dan tidak ada penegakan BR-07. Bila nomor
-> customer muat di tempat kosong, join menjawab `granted: true` dalam ≤ 1 detik (FR-05), jadi customer langsung
-> ke Detail Ticket; bedanya dengan `JOIN_QUEUE` hanya layar yang ditampilkan selama menunggu.
-> **Sejak v2.11 `JOIN_QUEUE` juga bisa menerima `granted: true`** (misalnya batch pertama saat penjualan dibuka,
-> ketika halaman utama masih menampilkan `OPEN`). Klien selalu merutekan berdasarkan respons join:
-> `granted: true` → Detail Ticket, selain itu → ruang tunggu.
+> join tidak ada `X-Grant-Token`, tidak ada pengikatan device dan tidak ada penegakan BR-07. Sejak v2.12 join
+> **tidak pernah** menjawab `granted: true`: untuk `GO_TO_TICKETS` maupun `JOIN_QUEUE` jawabannya `queued` atau
+> `rejoined`. Bedanya hanya layar yang ditampilkan: untuk `GO_TO_TICKETS` klien membuka stream dan menampilkan
+> "Memproses…" (bukan layar antrian); giliran tiba dalam satu tick (≤ 500 ms) bila ada tempat kosong, lalu klien
+> memanggil `/queue/me` dan pindah ke Detail Ticket.
 
 ```
 badge_key = selling_out_fast  bila status == SELLING_OUT_FAST DAN display.enabled
@@ -983,25 +990,10 @@ X-Queue-Token: {queue_token}           # opsional (mobile): rejoin BR-09; web me
 > **Urutan pemeriksaan:** pemulihan (BR-09, lalu BR-07) dijalankan **sebelum** gerbang `FULL_BOOKED` dan
 > `QUEUE_FULL`, jadi customer yang sudah punya tempat tidak pernah ditolak oleh keduanya.
 
-**Response** (200 - langsung masuk, FR-05): bila nomor customer **muat di tempat kosong**, join menunggu
-≤ 1 detik untuk tick admission-ctl berikutnya; bila grant terbit dalam jendela itu, customer langsung ke Detail
-Ticket tanpa ruang tunggu. Saat penjualan dibuka ini berlaku untuk batch pertama (hingga
-`MAX_CONCURRENT_SLOTS` orang), di tengah penjualan untuk siapa pun yang datang saat ada tempat kosong dan tidak
-ada yang menunggu. "Muat" = `ticket_no ≤ now_serving + min(free_slots, JOIN_DIRECT_MAX)`, dengan `free_slots`
-ditulis admission-ctl tiap tick dan tidak lebih tua dari 2 detik (ADR-006 §8.11). Bila admission-ctl berhenti,
-join tidak menunggu dan langsung menjawab antre. Grant yang belum terbit dalam 1 detik → respons antre biasa;
-giliran datang lewat stream + `/queue/me`.
-```json
-{
-  "meta": { "code": 200, "message": "No queue — access granted" },
-  "data": {
-    "granted": true,
-    "grant_token": "gt_abc123",
-    "queue_token": "qt_xyz789",
-    "booking_expires_at": "2026-11-10T02:05:00Z"
-  }
-}
-```
+**Tidak ada respons "langsung masuk"** (dicabut di v2.12, ADR-006 §8.14). Join tidak menunggu dan tidak
+menjawab `granted`; bahkan bila tempat masih kosong, jawabannya respons antre di atas dan tick admission-ctl
+berikutnya (≤ 500 ms) memasukkan customer. Klien merutekan berdasarkan `state` / `rejoined`, lalu mengikuti stream
+(§3.2) dan `GET /queue/me` (§3.3).
 
 **Response** (503 - `QUEUE_FULL`): antrian sudah mencapai `QUEUE_CAPACITY` (300.000).
 ```json
@@ -1104,7 +1096,7 @@ Limiter yang tidak tersedia **fail-open** (alasan sama dengan CAPTCHA di bawah).
 > saat provider terganggu, mematikan sale sebelum dimulai. `CaptchaFailOpenSeconds`
 > dialarmkan agar jendela tanpa proteksi terlihat.
 
-**Requirement Coverage**: FR-04, FR-05 (muat di tempat kosong → grant ≤ 1 detik, termasuk batch pertama), FR-10 (posisi konsisten saat
+**Requirement Coverage**: FR-04, FR-05 (antrian kosong = ruang tunggu sekitar satu tick, ADR-006 §8.14), FR-10 (posisi konsisten saat
 refresh), FR-18 (`FULL_BOOKED`), NFR-05 (FCFS fairness), BR-07 (satu keterlibatan aktif per event untuk user
 login), BR-09 (pemulihan dengan `queue_token`)
 
@@ -1155,7 +1147,7 @@ data: {"nowServing":31604,"state":"OPEN","ratePerMin":318,"serverTime":"2026-10-
 
 > **Heartbeat 10 detik TIDAK bersyarat** — ia terbit juga saat `state: FULL_BOOKED`, ketika
 > `nowServing` tidak bergerak. Keheningan karena itu berarti satu hal saja: sisi server berhenti
-> bekerja. Itulah yang membuat `stale {stale:true, reason:"no_admission_updates"}` di bawah
+> bekerja. Itulah yang membuat `stale {stale:true, message:"Data antrian belum diperbarui"}` di bawah
 > dapat dipercaya.
 
 **Giliran tiba — tanpa event khusus (v2.6, ADR-006 §4.2).** Event `grant` dihapus. Pada setiap
@@ -1196,31 +1188,33 @@ koneksi. Dua pemicu, satu payload, satu indikator. (Sampai v2.6 bernama `status`
 
 ```
 event: stale
-data: {"stale": true, "reason": "no_admission_updates"}
+data: {"stale":true,"state":"OPEN","message":"Data antrian belum diperbarui","serverTime":"2026-10-24T13:10:31.000Z"}
 ```
 
 | Field | Tipe | Arti |
 |---|---|---|
 | `stale` | bool | Data antrian tidak lagi segar |
-| `reason` | string | Diagnostik saja. `redis_disconnected` \| `no_admission_updates` |
+| `state` | string | Keadaan sale saat ini (sama seperti event lain) |
+| `message` | string | Teks siap tampil. **Hanya ada saat `stale: true`**; tidak ada saat pulih. Bukan kode: klien tidak bercabang pada isinya |
+| `serverTime` | string | Waktu server ISO-8601 |
 
-Kedua pemicunya:
+Kedua pemicunya (isi `message`):
 
-| `reason` | Pemicu |
+| `message` | Pemicu |
 |---|---|
-| `redis_disconnected` | sse-server kehilangan Redis |
-| `no_admission_updates` | tidak ada broadcast > 30 detik padahal `state ∈ {OPEN, FULL_BOOKED}` — `admission-ctl` diam, atau Pub/Sub ke task ini putus |
+| "Koneksi server terputus, mencoba menyambung kembali" | sse-server kehilangan Redis |
+| "Data antrian belum diperbarui" | tidak ada broadcast > 30 detik padahal `state ∈ {OPEN, FULL_BOOKED}` — `admission-ctl` diam, atau Pub/Sub ke task ini putus |
 
-> **Yang basi adalah DATA, bukan koneksinya.** Pada `no_admission_updates` koneksinya justru
+> **Yang basi adalah DATA, bukan koneksinya.** Pada keheningan 30 detik koneksinya justru
 > sehat — `: keepalive` tetap datang tiap 15 detik — tetapi `nowServing` berhenti maju. Itu
 > sebabnya keheningan tidak dapat dideteksi dari keepalive, dan sebabnya indikator ini ada.
 
 > **Klien TIDAK BOLEH** menutup stream, mereset posisi, atau reconnect sendiri karena
 > `stale`. 300.000 klien yang reconnect pada satu sinyal bersama adalah badai yang dihindari
 > seluruh desain ini. Yang benar: pertahankan angka posisi di layar, redupkan, tampilkan
-> "Memperbarui…". Satu indikator melayani kedua `reason`; tidak ada cabang baru di klien.
+> "Memperbarui…". Satu indikator melayani kedua penyebab; tidak ada cabang baru di klien.
 
-> Dikirim **hanya pada transisi**, tidak diulang selama tetap basi. `{"stale": false}`
+> Dikirim **hanya pada transisi**, tidak diulang selama tetap basi. `{"stale":false,"state":…,"serverTime":…}` (tanpa `message`)
 > menyusul saat data mengalir lagi, dan posisinya berlanjut tanpa kode transisi khusus.
 
 **Event: `sold-out`** — sale ditutup permanen. Dikirim tepat setelah `status {state: CLOSED}`,
@@ -1228,7 +1222,7 @@ bukan saat stok pertama kali mencapai nol (itu `status {state: FULL_BOOKED}`).
 
 ```
 event: sold-out
-data: {"message":"Tiket sudah habis"}
+data: {"state":"CLOSED","message":"Tiket sudah habis","serverTime":"2026-10-24T13:55:42.000Z"}
 ```
 
 > **Klien WAJIB memanggil `eventSource.close()`** pada event ini. Tanpa itu `EventSource`
@@ -1246,15 +1240,17 @@ data: {"message":"Tiket sudah habis"}
 > setelah itu tidak ada hold yang mungkin kedaluwarsa lagi), lalu server menyetel `CLOSED`
 > dan mengirim `sold-out`. Jadi satu-satunya pemutusan terjadi sekali, di akhir.
 
+> **Bentuk seragam (v2.12):** setiap event bernama (`status`, `stale`, `sold-out`, `reconnect`) dan pesan default membawa `state` dan `serverTime`. `message` (teks siap tampil, Indonesia) ada pada `stale` true, `sold-out` dan `reconnect`. Klien bercabang pada nama event, `stale` dan `state`, **bukan** pada `message`.
+
 **Event: `reconnect`** — task sedang shutdown; `retry:` berisi jeda berjitter 1–15 detik.
 
 ```
 event: reconnect
 retry: 7300
-data: {}
+data: {"state":"OPEN","message":"Server sedang diperbarui, menyambung ulang otomatis","serverTime":"2026-10-24T13:10:00.000Z"}
 ```
 
-> `data` selalu `{}` (Apidog: `QueueStreamReconnect`, v2.10).
+> `state` tidak pernah `CLOSED` di sini (stream yang ditutup memakai `sold-out`). Apidog: `QueueStreamReconnect`.
 
 **Keepalive** — komentar SSE tiap **15 detik**, bukan event bernama:
 
@@ -2780,7 +2776,7 @@ Bagian per endpoint menulis error yang khas. Error umum berikut juga berlaku dan
 | FR-02 | `GET /events` (`status: AVAILABLE`) | ✅ |
 | FR-03 | `GET /events` (`status: SOLD_OUT`) | ✅ |
 | FR-04 | `POST /events/{id}/queue/join` | ✅ |
-| FR-05 | `POST /events/{id}/queue/join` → `granted: true` bila nomor muat di tempat kosong, termasuk batch pertama saat dibuka (menunggu tick admission-ctl, ≤ 1 detik) | ✅ |
+| FR-05 | `POST /events/{id}/queue/join` → antre; bila ada tempat kosong, tick admission-ctl berikutnya (≤ 500 ms) memasukkan customer dan klien tahu lewat stream + `/queue/me` (tanpa jalur langsung-masuk, ADR-006 §8.14) | ⚠️ Perlu persetujuan pemilik requirement (ADR-006 §10 #8) |
 | FR-06 | Join response + SSE payload `nowServing` | ✅ |
 | FR-07 | `GET /events/{id}/queue/stream`, fallback `…/queue/serving` | ✅ |
 | FR-08 | broadcast `nowServing ≥ ticket_no` → `GET /events/{id}/queue/me` | ✅ |
@@ -2922,7 +2918,7 @@ Legenda: ✅ terpenuhi di kontrak · ⚙️ di luar permukaan API (backend atau 
 | Auth | Cookie `queue_token` (web — `EventSource` tidak bisa menyetel header) / header `X-Queue-Token` (mobile) — tidak pernah query string |
 | Broadcast | Saat `nowServing` berubah, atau tiap 10 detik |
 | Perubahan state | Event `status {state}` tiap transisi `OPEN ↔ FULL_BOOKED`, `→ CLOSED` |
-| Data basi | Event `stale {stale, reason}` |
+| Data basi | Event `stale {stale, state, message?, serverTime}` |
 | Tick admission | 500 ms |
 | Keepalive | Komentar `: keepalive` tiap **15 detik** (bukan event bernama) |
 | Snapshot awal | Ya — dikirim saat koneksi terbuka (FR-10) |
@@ -3204,3 +3200,12 @@ Penyelarasan dengan ADR-005. Yang memutus kompatibilitas ditandai **BREAKING**.
 | 86 | §3.1 FR-05: join menunggu grant bagi **setiap** pendatang yang nomornya muat di tempat kosong (`ticket_no ≤ now_serving + min(free_slots, JOIN_DIRECT_MAX)`), bukan hanya `now_serving + 1` (ADR-006 §8.11) | Batch pertama saat penjualan dibuka langsung ke Detail Ticket tanpa melihat ruang tunggu sekejap |
 | 87 | §2.1: `granted: true` juga bisa menjadi jawaban untuk `JOIN_QUEUE`; klien merutekan berdasarkan respons | Halaman utama bisa masih `OPEN` saat ada tempat kosong (mis. tepat saat dibuka) |
 | 88 | admission-ctl berhenti → join tidak menunggu (`free_slots` lebih tua dari 2 detik) | Tidak menahan setiap pendatang 1 detik saat antrian memang beku. Bentuk respons tidak berubah |
+
+### v2.11 → v2.12
+
+| # | Perubahan | Alasan |
+|---|---|---|
+| 89 | §3.1: **respons `granted: true` dihapus**; join tidak menunggu grant dan selalu menjawab `queued` atau `rejoined` (ADR-006 §8.14). Mencabut butir 86–88 | Tunggu ≤ 1 detik menahan Lambda per pendatang (hingga 500 sekaligus saat T0) dan menambah konfigurasi, field Redis dan cabang respons, demi menghemat sekitar satu tick. Satu jalur ke grant: stream + `/queue/me` |
+| 90 | §2.1: `GO_TO_TICKETS` tetap memanggil join, tetapi klien menampilkan "Memproses…" sampai pesan stream pertama, bukan layar antrian | FR-05 dipenuhi oleh ruang tunggu yang berlangsung sekitar satu tick |
+| 91 | Apendiks: tabel FR memberi FR-05 ⚠️ (menunggu persetujuan pemilik requirement) | Wording FR-05 mengasumsikan jalur langsung |
+| 92 | §3.2: bentuk event stream seragam: `stale {stale, state, message?, serverTime}` (`reason` dihapus), `sold-out {state, message, serverTime}`, `reconnect {state, message, serverTime}`. Skema Apidog `QueueStreamStale`, `QueueStreamSoldOut`, `QueueStreamReconnect` diperbarui | Klien menangani setiap event dengan field yang sama (`state` selalu ada), dan teks tampil datang dari server. `message` bukan kode: klien tidak bercabang padanya |

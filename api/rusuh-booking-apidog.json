@@ -3926,7 +3926,7 @@
           "securityScheme": {},
           "parentId": 0,
           "serverId": "",
-          "description": "",
+          "description": "# Alur antrian untuk frontend (web dan mobile)\n\nSatu jalur ke tiket: **join → stream → /queue/me → halaman tiket**. Join tidak pernah langsung memberi grant dan tidak menunggu (v2.12, ADR-006 §8.14); bila tempat masih kosong, giliran tiba dalam satu tick (≤ 500 ms).\n\n```mermaid\nsequenceDiagram\n    autonumber\n    actor C as Klien\n    participant API as api.my-rusuh.my.id\n    participant SSE as events.my-rusuh.my.id\n\n    C->>API: POST /events/{id}/queue/join (captcha_token, X-Device-Id, Bearer?)\n    alt 200 queued / rejoined\n        API-->>C: ticket_no, queue_token, sse_url (+ cookie)\n    else 401 DEVICE_MISMATCH / UNAUTHORIZED\n        Note over C: hapus queue_token tersimpan, join lagi tanpa token\n    else 409 SALE_NOT_OPEN / FULL_BOOKED, 410 SALE_CLOSED, 503 QUEUE_FULL\n        Note over C: tampilkan pesan, tombol nonaktif\n    else 429 TOO_MANY_REQUESTS\n        Note over C: tunggu data.retry_after, coba lagi\n    end\n\n    C->>SSE: GET sse_url (cookie queue_token, atau X-Queue-Token di mobile)\n    loop pesan broadcast yang sama untuk semua\n        SSE-->>C: nowServing, ratePerMin\n        Note over C: posisi = ticket_no - nowServing, estimasi = ceil(posisi / ratePerMin) menit\n    end\n    Note over C: nowServing >= ticket_no berarti giliran saya\n    C->>API: GET /events/{id}/queue/me\n    API-->>C: state\n    alt GRANTED\n        Note over C: simpan grant_token, buka Detail Ticket\n        C->>API: GET /events/{id}/tickets (X-Grant-Token)\n    else QUEUED (belum tertulis)\n        Note over C: coba lagi sekitar 1 detik\n    else SELECTING / AWAITING_PAYMENT / CONFIRMED\n        Note over C: rutekan sesuai state (lanjutkan booking, pembayaran, atau sukses)\n    end\n```\n\n## Aturan klien\n\n| Situasi | Yang dilakukan klien |\n|---|---|\n| Stream putus atau event `reconnect` | Sambung ulang dengan jeda acak; tidak perlu join lagi |\n| Event `stale` | Tampilkan \"koneksi lambat\"; pesan berikutnya menghapusnya |\n| Event `status` | Perbarui tombol dan label sesuai `state` (OPEN, FULL_BOOKED) |\n| Event `sold-out` | Final: tampilkan \"Tiket sudah habis\" lalu **tutup stream** |\n| Stream tidak bisa dipakai | Fallback polling `GET /events/{id}/queue/serving`, interval dari `poll_tiers` |\n| Refresh halaman atau kembali dari aplikasi bank | `GET /queue/me`, **bukan** join |\n| Tombol \"Beli Tiket\" (`DIRECT`) | Tetap memanggil join, lalu stream; tampilkan \"Memproses...\" bukan layar antrian |\n| Web | Cookie `queue_token` dikirim otomatis, jangan simpan di localStorage |\n| Mobile | Simpan `queue_token` di secure storage, kirim `X-Queue-Token` |\n",
           "identityPattern": {
             "httpApi": {
               "type": "inherit",
@@ -4105,20 +4105,6 @@
                               "type": "string",
                               "example": "QUEUED",
                               "description": "Hanya pada rejoined: keadaan engagement (§3.3); bila bukan QUEUED rutekan sesuai state"
-                            },
-                            "granted": {
-                              "type": "boolean",
-                              "description": "true bila nomor customer muat di tempat kosong (free_slots, termasuk batch pertama saat penjualan dibuka) dan admission-ctl memberi grant ≤ 1 detik (FR-05, ADR-006 §8.11). Bisa muncul untuk JOIN_QUEUE maupun GO_TO_TICKETS"
-                            },
-                            "grant_token": {
-                              "type": "string",
-                              "example": "gt_abc123",
-                              "description": "Hanya bila granted. Kirim sebagai X-Grant-Token"
-                            },
-                            "booking_expires_at": {
-                              "type": "string",
-                              "format": "date-time",
-                              "description": "Hanya bila granted"
                             }
                           },
                           "x-apidog-orders": [
@@ -4129,10 +4115,7 @@
                             "sse_url",
                             "event",
                             "rejoined",
-                            "state",
-                            "granted",
-                            "grant_token",
-                            "booking_expires_at"
+                            "state"
                           ]
                         }
                       },
@@ -4736,14 +4719,6 @@
                     "data": "{\"meta\": {\"code\": 200, \"message\": \"Rejoined existing queue position\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {\"ticket_no\": 32748, \"now_serving\": 31520, \"position\": 1228, \"queue_token\": \"qt_xyz789\", \"sse_url\": \"https://events.my-rusuh.my.id/events/evt_konser_a/queue/stream\", \"rejoined\": true, \"state\": \"QUEUED\"}}"
                   },
                   {
-                    "name": "Straight in — granted (FR-05)",
-                    "responseId": "186209177",
-                    "description": "",
-                    "oasKey": "",
-                    "oasExtensions": "",
-                    "data": "{\"meta\": {\"code\": 200, \"message\": \"No queue — access granted\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {\"granted\": true, \"grant_token\": \"gt_abc123\", \"queue_token\": \"qt_xyz789\", \"booking_expires_at\": \"2026-11-10T02:05:00Z\"}}"
-                  },
-                  {
                     "name": "CAPTCHA_REQUIRED",
                     "responseId": "400430001",
                     "description": "",
@@ -4902,7 +4877,7 @@
                     }
                   ]
                 },
-                "description": "Join queue. Dipanggil oleh tombol event dengan action JOIN_QUEUE maupun GO_TO_TICKETS (§2.1).\n\nURUTAN PEMERIKSAAN: bentuk request → identitas (Bearer tidak sah = 401, bukan tamu; tamu wajib X-Device-Id) → rate limit → CAPTCHA → state sale → pemulihan (BR-09 queue_token milik pemanggil, lalu BR-07 akun) → FULL_BOOKED → kapasitas → nomor baru. Rate limit DULU, CAPTCHA kemudian: rate limit adalah panggilan Redis lokal; verifikasi CAPTCHA adalah round trip eksternal. Penolakan apa pun tidak memakan ticket_no.\n\nCookie: queue_token=…; Domain=my-rusuh.my.id; Path=/events/{event_id}; HttpOnly; Secure; SameSite=Strict; Max-Age diturunkan dari SALE_WINDOW_SECONDS — ia harus kedaluwarsa bersamaan dengan token:{queue_token}.\n\nRespons membawa queue_token (untuk mobile, v2.7) dan sse_url absolut (host events.*, v2.8). Tidak ada estimasi waktu tunggu: frontend menghitungnya dari ratePerMin (api-contracts §3.5).\n\nqueue_token hanya berlaku bagi pemiliknya (v2.9, ADR-006 §8.9): token tamu dari perangkat lain → 401 DEVICE_MISMATCH; token akun dipakai akun lain / tamu → 401 UNAUTHORIZED. Keduanya menghapus cookie; klien menghapus token antriannya lalu join lagi tanpa token.\n\nLANGSUNG MASUK (FR-05, v2.11, ADR-006 §8.11): bila ticket_no ≤ now_serving + min(free_slots, JOIN_DIRECT_MAX) dan free_slots (ditulis admission-ctl tiap tick) tidak lebih tua dari 2 detik, join menunggu ≤ 1 detik untuk grant dari admission-ctl lalu menjawab granted: true. Saat penjualan dibuka ini mencakup batch pertama (hingga MAX_CONCURRENT_SLOTS orang). granted: true bisa datang dari JOIN_QUEUE maupun GO_TO_TICKETS: klien merutekan berdasarkan respons. Join tidak pernah memberi grant sendiri.",
+                "description": "Join queue. Dipanggil oleh tombol event dengan action JOIN_QUEUE maupun GO_TO_TICKETS (§2.1).\n\nURUTAN PEMERIKSAAN: bentuk request → identitas (Bearer tidak sah = 401, bukan tamu; tamu wajib X-Device-Id) → rate limit → CAPTCHA → state sale → pemulihan (BR-09 queue_token milik pemanggil, lalu BR-07 akun) → FULL_BOOKED → kapasitas → nomor baru. Rate limit DULU, CAPTCHA kemudian: rate limit adalah panggilan Redis lokal; verifikasi CAPTCHA adalah round trip eksternal. Penolakan apa pun tidak memakan ticket_no.\n\nCookie: queue_token=…; Domain=my-rusuh.my.id; Path=/events/{event_id}; HttpOnly; Secure; SameSite=Strict; Max-Age diturunkan dari SALE_WINDOW_SECONDS — ia harus kedaluwarsa bersamaan dengan token:{queue_token}.\n\nRespons membawa queue_token (untuk mobile, v2.7) dan sse_url absolut (host events.*, v2.8). Tidak ada estimasi waktu tunggu: frontend menghitungnya dari ratePerMin (api-contracts §3.5).\n\nqueue_token hanya berlaku bagi pemiliknya (v2.9, ADR-006 §8.9): token tamu dari perangkat lain → 401 DEVICE_MISMATCH; token akun dipakai akun lain / tamu → 401 UNAUTHORIZED. Keduanya menghapus cookie; klien menghapus token antriannya lalu join lagi tanpa token.\n\nTANPA LANGSUNG-MASUK (v2.12, ADR-006 §8.14): join tidak menunggu grant dan tidak pernah menjawab granted. Bila tempat masih kosong, tick admission-ctl berikutnya (≤ 500 ms) memasukkan customer; klien tahu lewat stream dan GET /queue/me. Join tidak pernah memberi grant sendiri.",
                 "tags": [
                   "Queue"
                 ],
@@ -5094,20 +5069,38 @@
                                   "type": "boolean",
                                   "example": true
                                 },
-                                "reason": {
+                                "state": {
                                   "type": "string",
                                   "enum": [
-                                    "redis_disconnected",
-                                    "no_admission_updates"
-                                  ]
+                                    "SCHEDULED",
+                                    "OPEN",
+                                    "FULL_BOOKED",
+                                    "CLOSED"
+                                  ],
+                                  "example": "OPEN",
+                                  "description": "Keadaan sale saat pesan dikirim"
+                                },
+                                "message": {
+                                  "type": "string",
+                                  "example": "Data antrian belum diperbarui",
+                                  "description": "Teks untuk pelanggan; ada saat stale true, tidak ada saat pulih"
+                                },
+                                "serverTime": {
+                                  "type": "string",
+                                  "format": "date-time",
+                                  "example": "2026-10-24T13:10:01.004Z"
                                 }
                               },
                               "required": [
-                                "stale"
+                                "stale",
+                                "state",
+                                "serverTime"
                               ],
                               "x-apidog-orders": [
                                 "stale",
-                                "reason"
+                                "state",
+                                "message",
+                                "serverTime"
                               ],
                               "additionalProperties": false
                             },
@@ -5115,24 +5108,70 @@
                               "title": "QueueStreamSoldOut (event: sold-out)",
                               "type": "object",
                               "properties": {
+                                "state": {
+                                  "type": "string",
+                                  "enum": [
+                                    "CLOSED"
+                                  ],
+                                  "example": "CLOSED",
+                                  "description": "Keadaan sale saat pesan dikirim"
+                                },
                                 "message": {
                                   "type": "string",
                                   "example": "Tiket sudah habis"
+                                },
+                                "serverTime": {
+                                  "type": "string",
+                                  "format": "date-time",
+                                  "example": "2026-10-24T13:10:01.004Z"
                                 }
                               },
                               "required": [
-                                "message"
+                                "state",
+                                "message",
+                                "serverTime"
                               ],
                               "x-apidog-orders": [
-                                "message"
+                                "state",
+                                "message",
+                                "serverTime"
                               ],
                               "additionalProperties": false
                             },
                             {
                               "title": "QueueStreamReconnect (event: reconnect)",
                               "type": "object",
-                              "properties": {},
-                              "x-apidog-orders": [],
+                              "properties": {
+                                "state": {
+                                  "type": "string",
+                                  "enum": [
+                                    "SCHEDULED",
+                                    "OPEN",
+                                    "FULL_BOOKED"
+                                  ],
+                                  "example": "OPEN",
+                                  "description": "Keadaan sale saat pesan dikirim (tidak pernah CLOSED: stream yang ditutup memakai sold-out)"
+                                },
+                                "message": {
+                                  "type": "string",
+                                  "example": "Server sedang diperbarui, menyambung ulang otomatis"
+                                },
+                                "serverTime": {
+                                  "type": "string",
+                                  "format": "date-time",
+                                  "example": "2026-10-24T13:10:01.004Z"
+                                }
+                              },
+                              "required": [
+                                "state",
+                                "message",
+                                "serverTime"
+                              ],
+                              "x-apidog-orders": [
+                                "state",
+                                "message",
+                                "serverTime"
+                              ],
                               "additionalProperties": false
                             }
                           ]
@@ -5587,7 +5626,7 @@
                   },
                   {
                     "name": "Closed — es.close()",
-                    "data": "event: status\ndata: {\"state\":\"CLOSED\",\"fullBookedAt\":null,\"serverTime\":\"2026-10-24T13:55:42.000Z\"}\n\nevent: sold-out\ndata: {\"message\":\"Tiket sudah habis\"}\n",
+                    "data": "event: status\ndata: {\"state\":\"CLOSED\",\"fullBookedAt\":null,\"serverTime\":\"2026-10-24T13:55:42.000Z\"}\n\nevent: sold-out\ndata: {\"state\":\"CLOSED\",\"message\":\"Tiket sudah habis\",\"serverTime\":\"2026-10-24T13:55:42.000Z\"}\n",
                     "responseId": "117070702",
                     "description": "",
                     "oasKey": "closed",
@@ -5595,7 +5634,7 @@
                   },
                   {
                     "name": "Stale",
-                    "data": "event: stale\ndata: {\"stale\":true,\"reason\":\"no_admission_updates\"}\n",
+                    "data": "event: stale\ndata: {\"stale\":true,\"state\":\"OPEN\",\"message\":\"Data antrian belum diperbarui\",\"serverTime\":\"2026-10-24T13:10:31.000Z\"}\n",
                     "responseId": "117070702",
                     "description": "",
                     "oasKey": "stale",
@@ -5643,7 +5682,7 @@
                   },
                   {
                     "name": "Reconnect (server shutting down)",
-                    "data": "event: reconnect\nretry: 7300\ndata: {}\n\n",
+                    "data": "event: reconnect\nretry: 7300\ndata: {\"state\":\"OPEN\",\"message\":\"Server sedang diperbarui, menyambung ulang otomatis\",\"serverTime\":\"2026-10-24T13:10:00.000Z\"}\n\n",
                     "responseId": "117070702",
                     "description": "",
                     "oasKey": "stale",
@@ -5673,7 +5712,7 @@
                   "additionalContentTypes": [],
                   "oasExtensions": ""
                 },
-                "description": "SSE stream (ALB events.my-rusuh.my.id). Auth: cookie queue_token (web) / X-Queue-Token (mobile).\n\nSemua koneksi event menerima byte yang identik. Frontend menghitung position = ticket_no − nowServing dan estimasi menit dari ratePerMin (api-contracts §3.5). nowServing ≥ ticket_no → GET /queue/me.\n\n| Event | Kapan | data |\n|---|---|---|\n| (default) | snapshot saat connect, tiap nowServing berubah, heartbeat 10 detik | {nowServing, state, ratePerMin, serverTime} + id |\n| status | tiap transisi state: OPEN → FULL_BOOKED, FULL_BOOKED → OPEN, → CLOSED | {state, fullBookedAt, serverTime} |\n| stale | data berhenti segar (Redis putus / tanpa broadcast 30 detik), dan saat pulih | {stale, reason} |\n| sold-out | tepat setelah status CLOSED | {message} — klien WAJIB es.close() |\n| reconnect | task shutdown | retry: berjitter 1–15 detik |\n| : keepalive | tiap 15 detik | komentar SSE |\n\nFULL_BOOKED reversibel: klien tetap tersambung. Hanya CLOSED yang menutup stream (410 untuk koneksi baru).",
+                "description": "SSE stream (ALB events.my-rusuh.my.id). Auth: cookie queue_token (web) / X-Queue-Token (mobile).\n\nSemua koneksi event menerima byte yang identik. Frontend menghitung position = ticket_no − nowServing dan estimasi menit dari ratePerMin (api-contracts §3.5). nowServing ≥ ticket_no → GET /queue/me.\n\n| Event | Kapan | data |\n|---|---|---|\n| (default) | snapshot saat connect, tiap nowServing berubah, heartbeat 10 detik | {nowServing, state, ratePerMin, serverTime} + id |\n| status | tiap transisi state: OPEN → FULL_BOOKED, FULL_BOOKED → OPEN, → CLOSED | {state, fullBookedAt, serverTime} |\n| stale | data berhenti segar (Redis putus / tanpa broadcast 30 detik), dan saat pulih | {stale, state, message?, serverTime} |\n| sold-out | tepat setelah status CLOSED | {state: CLOSED, message, serverTime} — klien WAJIB es.close() |\n| reconnect | task shutdown | retry: berjitter 1–15 detik; data {state, message, serverTime} |\n| : keepalive | tiap 15 detik | komentar SSE |\n\nFULL_BOOKED reversibel: klien tetap tersambung. Hanya CLOSED yang menutup stream (410 untuk koneksi baru).\n\nSetiap event bernama membawa `state` dan `serverTime`. `message` adalah teks siap tampil (stale true, sold-out, reconnect); jangan dijadikan kondisi percabangan, gunakan `stale`, `state` dan nama event.",
                 "tags": [
                   "Queue"
                 ],

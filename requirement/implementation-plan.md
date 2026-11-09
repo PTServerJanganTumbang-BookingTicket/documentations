@@ -20,7 +20,7 @@
 > |---|---|
 > | §3.1 `pkg/rediskeys` | hapus `regrant:{ev}`, `slots:open:{ev}`, kanal `sse-grant`; `ctl:leader`, `ctl:epoch`, `qpersist:{ev}` ditunda ke produksi |
 > | §5.6 Abandon, §10.5 webhook inline, §13.2 outbox | `DECRBY slots:open` + `EVALSHA advance_now_serving.lua` + `PUBLISH` **dihapus**; tick admission-ctl berikutnya memakai tempat yang bebas |
-> | §7.2 Join | bypass Lua → tunggu ≤ 1 detik untuk tick berikutnya (baca saja); tanpa `RPUSH qpersist` |
+> | §7.2 Join | bypass Lua **dihapus** dan join **tidak menunggu** grant (ADR-006 §8.14, 9 Nov 2026; semula tunggu ≤ 1 detik, §8.11); tanpa `RPUSH qpersist`; langkah 10 "BYPASS FR-05" tidak dibangun |
 > | §7.3 `/me` | cek ulang di writer; status pending; masuk normal lewat `nowServing ≥ ticket_no` |
 > | §7.4 `/serving` | tanpa query string, `poll_tiers` |
 > | §8 sse-server | tanpa peta token → koneksi, tanpa `sse-grant` |

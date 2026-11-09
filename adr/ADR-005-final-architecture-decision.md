@@ -366,7 +366,7 @@ dikelola lewat Bagian 11.
 
 ## 5. Halaman Utama dan Jalur Masuk
 
-> ⚠️ **Diubah oleh ADR-006** — bypass FR-05 tidak lagi menjalankan Lua di Lambda join; join hanya menunggu ≤ 1 detik sampai tick admission-ctl berikutnya memberi grant (ADR-006 §4.1).
+> ⚠️ **Diubah oleh ADR-006** — bypass FR-05 tidak lagi menjalankan Lua di Lambda join; join tidak lagi menunggu grant sama sekali (ADR-006 §4.1, §8.14): tidak ada jalur langsung-masuk, customer dimasukkan oleh tick admission-ctl berikutnya.
 
 | Requirement | Implementasi |
 |---|---|
@@ -2940,7 +2940,7 @@ yang diterbitkan `outbox-publisher`.
 
 ## 14. Pemenuhan Requirement
 
-> ⚠️ **Diubah oleh ADR-006** — FR-05 dipenuhi oleh join yang menunggu ≤ 1 detik untuk grant dari admission-ctl (bukan bypass Lua), FR-08 oleh `nowServing ≥ ticket_no` → `/queue/me` (bukan `event: grant`), FR-09 oleh ADR-006 §6.
+> ⚠️ **Diubah oleh ADR-006 §8.14** — FR-05 dipenuhi tanpa jalur langsung-masuk: join tidak menunggu dan tidak menjawab `granted`; bila ada tempat kosong, customer menerima giliran dalam satu tick (≤ 500 ms) lewat stream + `/queue/me`. Selain itu, FR-08 oleh `nowServing ≥ ticket_no` → `/queue/me` (bukan `event: grant`), FR-09 oleh ADR-006 §6.
 
 | ID | Requirement | Dipenuhi oleh |
 |---|---|---|
