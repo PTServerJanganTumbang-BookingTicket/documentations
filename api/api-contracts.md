@@ -1,12 +1,18 @@
 # Rusuh Booking Tiket — API Contracts
 
-**Versi**: 2.12.0  
+**Versi**: 2.13.0  
 **Tanggal**: 9 November 2026  
 **Status**: Draft  
 **Base URL**: `https://api.my-rusuh.my.id` (tanpa versi di path untuk saat ini; v2.9). Stream: `https://events.my-rusuh.my.id`  
 **Selaras dengan**: ADR-005 (Keputusan Arsitektur Final — SSE + ECS Fargate), diamandemen ADR-006 (antrian)  
 **Pasangan mesin**: `rusuh-booking-apidog.json` (Apidog) — **sumber kebenaran bentuk respons**. Dokumen ini menjelaskan perilaku dan alasannya; keduanya wajib sinkron. `rusuh-booking-openapi.yaml` diarsipkan (`archive/`) dan tidak dipelihara lagi
 
+> **v2.13** (halaman tiket dan detail booking, `be-rusuh-war-ticketing/docs/05-booking`): **dua perubahan breaking
+> kecil di §4.4**: `summary.price_per_ticket` **dihapus** (`summary = {quantity, total}`, harga ada di
+> `tickets[].price`) dan `paid_at` **dihapus** dari contoh Paid (tidak ada kolomnya); `payment_method` masuk skema.
+> Selebihnya mendokumentasikan perilaku: daftar `status` §4.4, error 400/401/503 §4.1, aturan `max_per_order`,
+> kredensial saat `EXPIRED`/`LAPSED` (§3.3). Lihat Appendix C, v2.12 → v2.13.
+>
 > **v2.12 (bentuk event stream seragam, ADR-006 §4.2):** setiap event bernama membawa `state` dan `serverTime`; `stale.reason` diganti `message` (teks siap tampil; **breaking** bagi klien yang membaca `reason`, field itu hanya diagnostik); `sold-out` dan `reconnect` menambah `state`, `message`, `serverTime` (`reconnect` tidak lagi `data: {}`). Lihat Appendix C butir 92.
 >
 > **v2.12** (ADR-006 §8.14, **tidak breaking** bagi klien yang merutekan berdasarkan respons): **tanpa langsung-masuk
@@ -1341,7 +1347,8 @@ menghapusnya aktif:
 | Keadaan | Kredensial antrian | Akibat pada §3.3 |
 |---|---|---|
 | grant diterbitkan | **tetap** | pemulihan setelah grant justru bergantung padanya — `GRANTED`, `SELECTING`, `AWAITING_PAYMENT`, termasuk "kembali dari aplikasi bank" |
-| `EXPIRED`, `LAPSED`, `ABANDONED` | dihapus | `{"state":"EXPIRED"}` — tidak ada apa pun untuk kembali ke sana. `LAPSED` bersifat final: tidak ada kesempatan kedua (ADR-005 Bagian 7) |
+| `LAPSED`, `EXPIRED` dari `SELECTING` (5 menit habis) | **hanya grant dihapus**; `token:{uuid}` dan `acct` tetap sampai jendela sale habis | `{"state":"EXPIRED"}`. Join ulang menemukan keterlibatan lama (`rejoined`), bukan tempat baru: tidak ada kesempatan kedua (ADR-005 Bagian 7) |
+| `EXPIRED` dari pembayaran, `ABANDONED` | dihapus | `{"state":"EXPIRED"}` — tidak ada apa pun untuk kembali ke sana |
 | `CONFIRMED` | dihapus, diganti **nisan** | tetap `{"state":"CONFIRMED","booking_id":…}` selama `SETTLED_TOMBSTONE_SECONDS` |
 
 > **Nisan, bukan perpanjangan.** Pada `CONFIRMED`, `token:{uuid}` dihapus dan `settled:{uuid}`
@@ -1470,7 +1477,7 @@ dikirim ke endpoint mana pun di sini.
 | Header | Wajib | Membuktikan | Bila salah/hilang |
 |---|---|---|---|
 | `X-Grant-Token` | ✅ | pemegang **punya slot** | `401 GRANT_TOKEN_MISSING` / `GRANT_TOKEN_INVALID` |
-| `X-Device-Id` | ✅ bila **tidak login** | grant masih di perangkat yang menerimanya | `401 DEVICE_MISMATCH` |
+| `X-Device-Id` | ✅ bila **tidak login** | grant masih di perangkat yang menerimanya | hilang: `400 DEVICE_ID_REQUIRED` · perangkat lain: `401 DEVICE_MISMATCH` |
 
 > **Mengapa grant yang menjaga, bukan sesi.** Tamu boleh membeli (FR-02): ia tidak punya akun,
 > jadi tidak ada sesi untuk diperiksa. Yang dimilikinya adalah slot.
@@ -1571,9 +1578,36 @@ X-Device-Id: {device_id}               # wajib bila customer TIDAK login
 > melakukan apa pun, dan status `HELD` atau `AWAITING_PAYMENT` tetap merender halaman —
 > customer yang menekan Back dari halaman pembayaran harus melihat pilihannya, bukan error.
 >
+> **Claim hanya sebelum tenggat** (jam Aurora, jam yang sama dengan sweep). Memuat halaman setelah 5 menit habis,
+> sebelum sweep berjalan, tidak meng-claim: booking tetap `GRANTED` lalu menjadi `LAPSED`. Halaman tetap dirender
+> dengan `ttl_seconds: 0`; klien menampilkan layar kedaluwarsa dari hitung mundur. Booking `SELECTING` yang 5
+> menitnya habis menjadi `EXPIRED` oleh sweep, dan tempatnya diberikan ke antrian berikutnya.
+>
 > Konsekuensi operasional: **respons ini tidak boleh di-cache**, dan tidak boleh di-prefetch
 > oleh klien. `Cache-Control: no-store`. ADR-005 Bagian 6 menugaskan transisi ini ke
 > `booking-service` tanpa menyebut endpoint mana yang menjalankannya; ini endpointnya.
+
+**Aturan field**:
+
+| Field | Aturan |
+|---|---|
+| `session.expires_at` | tenggat yang **sedang berlaku**: `booking_expires_at` (5 menit sejak giliran) sampai tombol Bayar ditekan; sejak `HELD`, `payment_expires_at`. Customer yang menekan Back dari halaman pembayaran tidak boleh diberi tahu waktunya habis selagi kursinya masih di-hold |
+| `session.ttl_seconds` | detik tersisa, dibulatkan ke atas, tidak pernah di bawah 0 |
+| `categories[]` | urutan tampilan (VIP, Festival, Tribune), bukan urutan id |
+| `categories[].available` | stok hidup di Redis; nilai negatif ditampilkan 0. Stok yang **tidak diketahui** tidak pernah ditampilkan 0: lihat 503 `STOCK_UNINITIALIZED` |
+| `categories[].max_per_order` | `min(batas kategori, available, 3)`; `0` bila habis |
+
+**Error**:
+
+| HTTP | `error_code` | Kapan | Klien |
+|---|---|---|---|
+| 400 | `DEVICE_ID_REQUIRED` | grant tamu tanpa `X-Device-Id` | kirim header |
+| 401 | `GRANT_TOKEN_MISSING` | tanpa `X-Grant-Token` | ambil grant dari `GET /queue/me` |
+| 401 | `GRANT_TOKEN_INVALID` | grant tidak dikenal/kedaluwarsa, grant untuk event lain, atau booking-nya sudah selesai (`LAPSED`, `EXPIRED`, `CONFIRMED`, `ABANDONED`) | `GET /queue/me` menunjukkan keadaannya |
+| 401 | `DEVICE_MISMATCH` | grant tamu dari perangkat lain | slot tetap milik perangkat penerima |
+| 404 | `NOT_FOUND` | event tidak ada | — |
+| 503 | `STOCK_UNINITIALIZED` | kunci stok hilang dari Redis (bukan "habis") | coba lagi |
+| 503 | `INTERNAL_ERROR` | basis data atau Redis tidak dapat dihubungi | coba lagi |
 
 **Requirement Coverage**: FR-11, FR-12, FR-13, FR-17, BR-01, BR-02
 
@@ -1925,7 +1959,6 @@ X-Device-Id: {device_id}               # wajib bila customer TIDAK login
     ],
     "summary": {
       "quantity": 1,
-      "price_per_ticket": 1500000,
       "total": 1500000
     },
     "payment_ttl": {
@@ -1967,14 +2000,43 @@ X-Device-Id: {device_id}               # wajib bila customer TIDAK login
       "quantity": 1,
       "total": 1500000
     },
-    "paid_at": "2026-10-23T13:20:00Z",
     "payment_method": "Virtual Account"
   }
 }
 ```
 
+**`data.status`** (empat nilai; klien merutekan berdasarkan ini):
+
+| `data.status` | Status `bookings` | Halaman |
+|---|---|---|
+| `SELECTING` | `GRANTED`, `SELECTING` | kembali ke Detail Ticket (belum menekan Bayar; `tickets` kosong) |
+| `PENDING_PAYMENT` | `HELD`, `AWAITING_PAYMENT`, `PENDING_CANCELLATION` | Payment Page dengan `payment_ttl`. Saat `PENDING_CANCELLATION` (tenggat lewat, grace 30 detik) `ttl_seconds` = 0 dan pembayaran masih bisa masuk: tampilkan "memverifikasi pembayaran…" dari §5.4, **bukan** layar kedaluwarsa |
+| `PAID` | `CONFIRMED` | Success Page |
+| `EXPIRED` | `EXPIRED`, `LAPSED`, `ABANDONED` | layar kedaluwarsa |
+
+**Aturan field**:
+
+| Field | Aturan |
+|---|---|
+| `tickets[]` | satu per kursi, urutan pilihan customer; `[]` (bukan `null`) sebelum `HELD` |
+| `tickets[].price` | harga kursi itu. **`summary.price_per_ticket` dihapus (v2.13)**: tidak ada nilai yang benar bila satu pesanan berisi kategori berbeda (FR-13a) |
+| `summary` | `{quantity, total}`: jumlah kursi dan jumlah harganya |
+| `payment_ttl` | hanya saat `PENDING_PAYMENT` |
+| `tickets[].ticket_id`, `eticket_url` | hanya saat `PAID`, **setelah tiket diterbitkan**. Tiket diterbitkan sesaat setelah webhook, jadi beberapa detik pertama `PAID` dapat datang tanpa keduanya: Success Page mengulang permintaan ini (mis. tiap 2 detik, maks 30 detik) sampai setiap kursi punya tautan. Tiket yang dicabut (`REVOKED`) atau kedaluwarsa tetap membawa `ticket_id` tetapi tanpa `eticket_url` |
+| `payment_method` | hanya saat `PAID`, sebagai label: `"Virtual Account"`, `"GoPay"`; metode lain ditampilkan apa adanya |
+| `paid_at` | **dihapus (v2.13)**: waktu pembayaran tidak disimpan |
+
+**Error**:
+
+| HTTP | `error_code` | Kapan |
+|---|---|---|
+| 400 | `DEVICE_ID_REQUIRED` | grant tamu tanpa `X-Device-Id` |
+| 401 | `GRANT_TOKEN_MISSING` / `GRANT_TOKEN_INVALID` / `DEVICE_MISMATCH` | grant hilang, tidak dikenal, atau dari perangkat lain |
+| 404 | `NOT_FOUND` | `booking_id` bukan milik grant ini atau tidak ada (tidak dibedakan, ADR-005 Bagian 12) |
+| 503 | `INTERNAL_ERROR` | basis data atau Redis tidak dapat dihubungi |
+
 > **`eticket_url` sudah membawa token e-tiket (`?t=`) saat `PAID`.** Token yang sama dengan
-> tautan email (§6.2): HMAC atas satu `ticket_id`, berlaku sampai tanggal event + 1 hari,
+> tautan email (§6.2): HMAC atas satu `ticket_id`, berlaku sampai pukul 00:00 WIB sehari setelah event,
 > diterbitkan lewat `pkg/eticket`. Success Page menautkannya langsung, sehingga customer —
 > termasuk tamu — dapat membuka e-tiket **tanpa akun dan tanpa menunggu email**. Inilah jalur
 > NFR-10 ("email adalah kenyamanan"), menggantikan `GET /bookings/{id}/tickets` yang dihapus.
@@ -2740,11 +2802,11 @@ Bagian per endpoint menulis error yang khas. Error umum berikut juga berlaku dan
 | `POST /auth/register` | 400 `VALIDATION_ERROR` (format NIK / email) |
 | `GET /events/{event_id}` | 404 `NOT_FOUND` |
 | `GET /events/{event_id}/queue/me` | 401 `UNAUTHORIZED` (tidak ada kredensial, atau Bearer tanpa `acct` untuk event ini) |
-| `GET /events/{event_id}/tickets` | 401 `GRANT_TOKEN_MISSING` / `GRANT_TOKEN_INVALID` |
+| `GET /events/{event_id}/tickets` | 400 `DEVICE_ID_REQUIRED` · 401 `GRANT_TOKEN_MISSING` / `GRANT_TOKEN_INVALID` / `DEVICE_MISMATCH` · 404 `NOT_FOUND` · 503 `STOCK_UNINITIALIZED` / `INTERNAL_ERROR` (§4.1) |
 | `POST /nik/validate` | 400 `VALIDATION_ERROR` · 429 `TOO_MANY_REQUESTS` · 503 `DUKCAPIL_UNAVAILABLE` |
-| `GET /bookings/{booking_id}` | 404 `NOT_FOUND` |
+| `GET /bookings/{booking_id}` | 400 `DEVICE_ID_REQUIRED` · 404 `NOT_FOUND` · 503 `INTERNAL_ERROR` (§4.4) |
 | `GET /tickets/{ticket_id}/eticket` | 401 `ETICKET_TOKEN_INVALID` · 404 `NOT_FOUND` |
-| semua endpoint ber-grant (§4, §5) | 401 `GRANT_TOKEN_MISSING` / `GRANT_TOKEN_INVALID` / `DEVICE_MISMATCH` |
+| semua endpoint ber-grant (§4, §5) | 400 `DEVICE_ID_REQUIRED` · 401 `GRANT_TOKEN_MISSING` / `GRANT_TOKEN_INVALID` / `DEVICE_MISMATCH` |
 
 > `GET /bookings/{booking_id}/tickets` **dihapus** (v2.7, ADR-006 §8.8): §4.4 sudah mengembalikan
 > `tickets[]` dengan `eticket_url` bertoken saat `PAID`.
@@ -2776,7 +2838,7 @@ Bagian per endpoint menulis error yang khas. Error umum berikut juga berlaku dan
 | FR-02 | `GET /events` (`status: AVAILABLE`) | ✅ |
 | FR-03 | `GET /events` (`status: SOLD_OUT`) | ✅ |
 | FR-04 | `POST /events/{id}/queue/join` | ✅ |
-| FR-05 | `POST /events/{id}/queue/join` → antre; bila ada tempat kosong, tick admission-ctl berikutnya (≤ 500 ms) memasukkan customer dan klien tahu lewat stream + `/queue/me` (tanpa jalur langsung-masuk, ADR-006 §8.14) | ⚠️ Perlu persetujuan pemilik requirement (ADR-006 §10 #8) |
+| FR-05 | `POST /events/{id}/queue/join` → antre; bila ada tempat kosong, tick admission-ctl berikutnya (≤ 500 ms) memasukkan customer dan klien tahu lewat stream + `/queue/me` (tanpa jalur langsung-masuk, ADR-006 §8.14) | ✅ Diputuskan: langsung ke halaman tiket setelah antri ≤ 500 ms |
 | FR-06 | Join response + SSE payload `nowServing` | ✅ |
 | FR-07 | `GET /events/{id}/queue/stream`, fallback `…/queue/serving` | ✅ |
 | FR-08 | broadcast `nowServing ≥ ticket_no` → `GET /events/{id}/queue/me` | ✅ |
@@ -3207,5 +3269,17 @@ Penyelarasan dengan ADR-005. Yang memutus kompatibilitas ditandai **BREAKING**.
 |---|---|---|
 | 89 | §3.1: **respons `granted: true` dihapus**; join tidak menunggu grant dan selalu menjawab `queued` atau `rejoined` (ADR-006 §8.14). Mencabut butir 86–88 | Tunggu ≤ 1 detik menahan Lambda per pendatang (hingga 500 sekaligus saat T0) dan menambah konfigurasi, field Redis dan cabang respons, demi menghemat sekitar satu tick. Satu jalur ke grant: stream + `/queue/me` |
 | 90 | §2.1: `GO_TO_TICKETS` tetap memanggil join, tetapi klien menampilkan "Memproses…" sampai pesan stream pertama, bukan layar antrian | FR-05 dipenuhi oleh ruang tunggu yang berlangsung sekitar satu tick |
-| 91 | Apendiks: tabel FR memberi FR-05 ⚠️ (menunggu persetujuan pemilik requirement) | Wording FR-05 mengasumsikan jalur langsung |
+| 91 | Apendiks: tabel FR mencatat FR-05 dipenuhi dengan antri ≤ 500 ms (diputuskan) | Wording FR-05 mengasumsikan jalur langsung |
 | 92 | §3.2: bentuk event stream seragam: `stale {stale, state, message?, serverTime}` (`reason` dihapus), `sold-out {state, message, serverTime}`, `reconnect {state, message, serverTime}`. Skema Apidog `QueueStreamStale`, `QueueStreamSoldOut`, `QueueStreamReconnect` diperbarui | Klien menangani setiap event dengan field yang sama (`state` selalu ada), dan teks tampil datang dari server. `message` bukan kode: klien tidak bercabang padanya |
+
+### v2.12 → v2.13
+
+| # | Perubahan | Alasan |
+|---|---|---|
+| 93 | §4.4: **`summary.price_per_ticket` dihapus** (**BREAKING**); `summary = {quantity, total}` | Tidak ada nilai yang benar untuk pesanan lintas kategori (FR-13a); harga tiap kursi ada di `tickets[].price` |
+| 94 | §4.4: **`paid_at` dihapus** dari contoh Paid (**BREAKING** bagi klien yang membacanya); `payment_method` masuk skema sebagai label (`Virtual Account`, `GoPay`, selain itu apa adanya) | Waktu pembayaran tidak disimpan di `bookings` |
+| 95 | §4.4: daftar `data.status` (`SELECTING`, `PENDING_PAYMENT`, `PAID`, `EXPIRED`) dan pemetaannya dari status `bookings`; `payment_ttl` hanya saat `PENDING_PAYMENT`; `tickets[]` tidak pernah `null` | Kontrak hanya menunjukkan dua nilai |
+| 96 | §4.4: `PAID` dapat datang beberapa detik tanpa `ticket_id`/`eticket_url` (tiket sedang diterbitkan; klien mengulang); tiket `REVOKED`/kedaluwarsa tanpa `eticket_url`; tautan berlaku sampai 00:00 WIB sehari setelah event | Perilaku yang dibangun |
+| 97 | §4.1: tabel aturan field (`session.expires_at` = tenggat yang sedang berlaku, `max_per_order = min(batas kategori, available, 3)`, urutan kategori) dan tabel error (400 `DEVICE_ID_REQUIRED`, 401 `DEVICE_MISMATCH`, 404, 503 `STOCK_UNINITIALIZED`, 503 `INTERNAL_ERROR`); claim hanya sebelum tenggat | Error dan aturan yang belum tertulis |
+| 98 | §4 tabel header: `X-Device-Id` hilang → **400 `DEVICE_ID_REQUIRED`** (sebelumnya tertulis 401 `DEVICE_MISMATCH`, bertentangan dengan Appendix A) | Selaras dengan Appendix A dan join |
+| 99 | §3.3: `LAPSED` dan `EXPIRED` dari `SELECTING` hanya menghapus grant; `token:{uuid}` dan `acct` tetap, join ulang menjawab `rejoined` (tidak ada giliran kedua). `EXPIRED` dari pembayaran dan `ABANDONED` tetap menghapus kredensial | Perilaku admission-ctl yang dibangun |
