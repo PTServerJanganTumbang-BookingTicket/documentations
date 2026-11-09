@@ -362,6 +362,8 @@ dikelola lewat Bagian 11.
     PGCircuitState · PGThrottled · AdmissionPausedSeconds · WebhookLag · EmailDLQDepth
 ```
 
+> ⚠️ **Diubah oleh ADR-006 §8.15** — `booking_items.holder_email` dihapus: e-tiket seluruh booking dikirim ke `bookings.contact_email` (FR-26 diubah).
+
 ---
 
 ## 5. Halaman Utama dan Jalur Masuk
@@ -2021,6 +2023,8 @@ pekerjaan ~60ms memberi margin ~500×.
 
 ### Langkah 4 — Konsumer outbox (fallback + email)
 
+> ⚠️ **Diubah oleh ADR-006 §8.15** — `ticket.issue` mengirim ke `contact_email` (bukan `booking_items.holder_email`), dan `booking.expired` hanya ke `contact_email`.
+
 ```
 outbox-publisher, tiap 1 detik:
   SELECT * FROM outbox WHERE published_at IS NULL
@@ -2789,6 +2793,8 @@ dapat memulihkan apa pun. Umurnya `SETTLED_TOMBSTONE_SECONDS`.
 > terdaftar*). `contact_email` dan `holder_email` wajib di `POST /bookings`, jadi kanal itu
 > selalu ada; itulah yang membuat penghapusan ini dapat diterima, dan juga mengapa token
 > e-ticket di atas wajib ada.
+>
+> ⚠️ **Diubah oleh ADR-006 §8.15** — hanya `contact_email` yang wajib di `POST /bookings`; kanal email tetap selalu ada.
 
 > **Mengapa ini perlu dinyatakan.** Sampai kontrak v2.2 ketiganya dikirim di
 > `Authorization: Bearer` dan ADR ini menyebut yang kedua `accessToken` — nama kredensial
@@ -2857,6 +2863,10 @@ keadaannya, dan ia mengembalikan **token yang sama** selama TTL belum habis:
 dari aplikasi bank tidak pernah menerbitkan token baru maupun memindahkan customer.
 
 ### `contact_email`, `holder_email`, dan penerimaan T&C
+
+> ⚠️ **Diubah oleh ADR-006 §8.15** — `holder_email` dihapus; hanya `contact_email` (pembeli) yang dikumpulkan dan seluruh e-tiket dikirim ke sana. `contact_email` wajib sejak `HELD` (diisi pada `POST /bookings`), bukan sejak `SELECTING`: halaman pilih tiket sudah memindahkan booking ke `SELECTING` sebelum customer mengisi apa pun (migrasi 0008).
+>
+> ⚠️ **Diubah oleh ADR-006 §8.16** — `terms_version`, `terms_accepted_at` dan `TERMS_VERSION` dihapus; persetujuan dicatat saat registrasi.
 
 Baris `bookings` dibuat saat **GRANTED**, ketika customer belum mengisi apa pun. Kolom-kolom
 ini karena itu **tidak bisa** dideklarasikan `NOT NULL`; penegakannya bersyarat status (Bagian 4).
@@ -2941,6 +2951,8 @@ yang diterbitkan `outbox-publisher`.
 ## 14. Pemenuhan Requirement
 
 > ⚠️ **Diubah oleh ADR-006 §8.14** — FR-05 dipenuhi tanpa jalur langsung-masuk: join tidak menunggu dan tidak menjawab `granted`; bila ada tempat kosong, customer menerima giliran dalam satu tick (≤ 500 ms) lewat stream + `/queue/me`. Selain itu, FR-08 oleh `nowServing ≥ ticket_no` → `/queue/me` (bukan `event: grant`), FR-09 oleh ADR-006 §6.
+
+> ⚠️ **Diubah oleh ADR-006 §8.15** — FR-26 diubah: e-tiket ke email pembeli (`contact_email`), bukan ke tiap pemegang NIK.
 
 | ID | Requirement | Dipenuhi oleh |
 |---|---|---|

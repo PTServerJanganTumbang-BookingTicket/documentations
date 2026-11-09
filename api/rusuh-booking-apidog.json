@@ -6467,11 +6467,6 @@
                                   "example": "2026-10-23T13:15:00Z",
                                   "description": "Tenggat yang sedang berlaku: booking_expires_at (5 menit sejak giliran) sampai tombol Bayar ditekan; sejak HELD, payment_expires_at"
                                 },
-                                "ttl_seconds": {
-                                  "type": "integer",
-                                  "example": 287,
-                                  "description": "Detik tersisa, dibulatkan ke atas, tidak pernah di bawah 0"
-                                },
                                 "server_time": {
                                   "type": "string",
                                   "example": "2026-10-23T13:10:13Z"
@@ -6479,7 +6474,6 @@
                               },
                               "x-apidog-orders": [
                                 "expires_at",
-                                "ttl_seconds",
                                 "server_time"
                               ]
                             },
@@ -6542,13 +6536,39 @@
                                 "max_tickets_per_order",
                                 "one_nik_per_ticket"
                               ]
+                            },
+                            "account": {
+                              "type": [
+                                "object",
+                                "null"
+                              ],
+                              "description": "Customer login: email dan NIK tersamar dari akunnya, untuk mengisi form lebih dulu (dapat diubah). Tamu: null. NIK lengkap tidak pernah dikirim (NFR-11)",
+                              "properties": {
+                                "email": {
+                                  "type": "string",
+                                  "example": "buyer@example.com"
+                                },
+                                "nik_masked": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ],
+                                  "example": "3171********0022",
+                                  "description": "null bila akun belum punya NIK terverifikasi"
+                                }
+                              },
+                              "x-apidog-orders": [
+                                "email",
+                                "nik_masked"
+                              ]
                             }
                           },
                           "x-apidog-orders": [
                             "event",
                             "session",
                             "categories",
-                            "rules"
+                            "rules",
+                            "account"
                           ]
                         }
                       },
@@ -6956,8 +6976,16 @@
                 ],
                 "responseExamples": [
                   {
-                    "name": "Success",
-                    "data": "{\"meta\":{\"code\":200,\"message\":\"Success\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{\"event\":{\"id\":\"evt_konser_a\",\"name\":\"Konser A\",\"date\":\"2026-12-25\",\"venue\":\"GBK, Jakarta\",\"image_url\":\"https://cdn.rusuh.id/events/konser-a.jpg\"},\"session\":{\"expires_at\":\"2026-10-23T13:15:00Z\",\"ttl_seconds\":287,\"server_time\":\"2026-10-23T13:10:13Z\"},\"categories\":[{\"id\":\"cat_vip\",\"name\":\"VIP\",\"description\":\"Lebih dekat.\",\"price\":1500000,\"available\":12,\"max_per_order\":3},{\"id\":\"cat_festival\",\"name\":\"Festival\",\"description\":\"Area festival.\",\"price\":850000,\"available\":240,\"max_per_order\":3},{\"id\":\"cat_tribune\",\"name\":\"Tribune\",\"description\":\"Area tribun.\",\"price\":500000,\"available\":0,\"max_per_order\":0}],\"rules\":{\"max_tickets_per_order\":3,\"one_nik_per_ticket\":true}}}",
+                    "name": "Success (logged in)",
+                    "data": "{\"meta\": {\"code\": 200, \"message\": \"Success\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {\"event\": {\"id\": \"evt_konser_a\", \"name\": \"Konser A\", \"date\": \"2026-12-25\", \"venue\": \"GBK, Jakarta\", \"image_url\": \"https://cdn.rusuh.id/events/konser-a.jpg\"}, \"session\": {\"expires_at\": \"2026-10-23T13:15:00Z\", \"server_time\": \"2026-10-23T13:10:13Z\"}, \"categories\": [{\"id\": \"cat_vip\", \"name\": \"VIP\", \"description\": \"Lebih dekat.\", \"price\": 1500000, \"available\": 12, \"max_per_order\": 3}, {\"id\": \"cat_festival\", \"name\": \"Festival\", \"description\": \"Area festival.\", \"price\": 850000, \"available\": 240, \"max_per_order\": 3}, {\"id\": \"cat_tribune\", \"name\": \"Tribune\", \"description\": \"Area tribun.\", \"price\": 500000, \"available\": 0, \"max_per_order\": 0}], \"rules\": {\"max_tickets_per_order\": 3, \"one_nik_per_ticket\": true}, \"account\": {\"email\": \"buyer@example.com\", \"nik_masked\": \"3171********0022\"}}}",
+                    "responseId": "168132602",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": ""
+                  },
+                  {
+                    "name": "Success (guest)",
+                    "data": "{\"meta\": {\"code\": 200, \"message\": \"Success\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {\"event\": {\"id\": \"evt_konser_a\", \"name\": \"Konser A\", \"date\": \"2026-12-25\", \"venue\": \"GBK, Jakarta\", \"image_url\": \"https://cdn.rusuh.id/events/konser-a.jpg\"}, \"session\": {\"expires_at\": \"2026-10-23T13:15:00Z\", \"server_time\": \"2026-10-23T13:10:13Z\"}, \"categories\": [{\"id\": \"cat_vip\", \"name\": \"VIP\", \"description\": \"Lebih dekat.\", \"price\": 1500000, \"available\": 12, \"max_per_order\": 3}, {\"id\": \"cat_festival\", \"name\": \"Festival\", \"description\": \"Area festival.\", \"price\": 850000, \"available\": 240, \"max_per_order\": 3}, {\"id\": \"cat_tribune\", \"name\": \"Tribune\", \"description\": \"Area tribun.\", \"price\": 500000, \"available\": 0, \"max_per_order\": 0}], \"rules\": {\"max_tickets_per_order\": 3, \"one_nik_per_ticket\": true}, \"account\": null}}",
                     "responseId": "168132602",
                     "description": "",
                     "oasKey": "",
@@ -7027,7 +7055,7 @@
                   "additionalContentTypes": [],
                   "oasExtensions": ""
                 },
-                "description": "Ticket selection.\n\nGET yang mengubah state: pemuatan pertama meng-claim booking GRANTED → SELECTING, hanya sebelum tenggat (setelahnya booking tetap GRANTED dan menjadi LAPSED). Booking yang sudah selesai (LAPSED, EXPIRED, CONFIRMED, ABANDONED) atau grant untuk event lain → 401 GRANT_TOKEN_INVALID. Cache-Control: no-store.",
+                "description": "Ticket selection.\n\nGET yang mengubah state: pemuatan pertama meng-claim booking GRANTED → SELECTING, hanya sebelum tenggat (setelahnya booking tetap GRANTED dan menjadi LAPSED). Booking yang sudah selesai (LAPSED, EXPIRED, CONFIRMED, ABANDONED) atau grant untuk event lain → 401 GRANT_TOKEN_INVALID. Cache-Control: no-store.\n\nv2.14: account {email, nik_masked} untuk customer login (null untuk tamu), untuk mengisi form lebih dulu.",
                 "tags": [
                   "Booking"
                 ],
@@ -7247,10 +7275,6 @@
                                   "type": "string",
                                   "example": "2026-10-23T13:25:00Z"
                                 },
-                                "ttl_seconds": {
-                                  "type": "integer",
-                                  "example": 600
-                                },
                                 "server_time": {
                                   "type": "string",
                                   "example": "2026-10-23T13:15:00Z"
@@ -7258,7 +7282,6 @@
                               },
                               "x-apidog-orders": [
                                 "expires_at",
-                                "ttl_seconds",
                                 "server_time"
                               ]
                             },
@@ -7423,7 +7446,7 @@
                 "responseExamples": [
                   {
                     "name": "Success",
-                    "data": "{\"meta\":{\"code\":201,\"message\":\"Booking created successfully\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{\"booking_id\":\"RB-00912\",\"status\":\"PENDING_PAYMENT\",\"event\":{\"id\":\"evt_konser_a\",\"name\":\"Konser A\",\"date\":\"2026-12-25\",\"venue\":\"GBK, Jakarta\"},\"tickets\":[{\"category\":\"VIP\",\"price\":1500000,\"nik_masked\":\"3171********xx22\"},{\"category\":\"Festival\",\"price\":850000,\"nik_masked\":\"3171********xx33\"}],\"summary\":{\"subtotal\":2350000,\"service_fee\":0,\"total\":2350000},\"payment_ttl\":{\"expires_at\":\"2026-10-23T13:25:00Z\",\"ttl_seconds\":600,\"server_time\":\"2026-10-23T13:15:00Z\"},\"redirect_url\":\"/bookings/RB-00912/payment\"}}",
+                    "data": "{\"meta\": {\"code\": 201, \"message\": \"Booking created successfully\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {\"booking_id\": \"RB-00912\", \"status\": \"PENDING_PAYMENT\", \"event\": {\"id\": \"evt_konser_a\", \"name\": \"Konser A\", \"date\": \"2026-12-25\", \"venue\": \"GBK, Jakarta\"}, \"tickets\": [{\"category\": \"VIP\", \"price\": 1500000, \"nik_masked\": \"3171********xx22\"}, {\"category\": \"Festival\", \"price\": 850000, \"nik_masked\": \"3171********xx33\"}], \"summary\": {\"subtotal\": 2350000, \"service_fee\": 0, \"total\": 2350000}, \"payment_ttl\": {\"expires_at\": \"2026-10-23T13:25:00Z\", \"server_time\": \"2026-10-23T13:15:00Z\"}, \"redirect_url\": \"/bookings/RB-00912/payment\"}}",
                     "responseId": "139987344",
                     "description": "",
                     "oasKey": "",
@@ -7469,9 +7492,7 @@
                     "type": "object",
                     "required": [
                       "event_id",
-                      "tickets",
-                      "contact_email",
-                      "terms_version"
+                      "tickets"
                     ],
                     "properties": {
                       "event_id": {
@@ -7484,9 +7505,7 @@
                         "items": {
                           "type": "object",
                           "required": [
-                            "category_id",
-                            "nik",
-                            "holder_email"
+                            "category_id"
                           ],
                           "properties": {
                             "category_id": {
@@ -7495,33 +7514,40 @@
                             "nik": {
                               "type": "string",
                               "minLength": 16,
-                              "maxLength": 16
+                              "maxLength": 16,
+                              "description": "NIK yang diketik (16 digit). Tepat satu dari nik, saved_nik_id, use_account_nik per kursi"
                             },
-                            "holder_email": {
+                            "saved_nik_id": {
                               "type": "string",
-                              "format": "email"
+                              "example": "snk_1",
+                              "description": "Id entri Daftar NIK Teman milik customer login (GET /accounts/me/saved-niks). Tidak dikenal / milik akun lain / tamu → 400 VALIDATION_ERROR + data.index"
+                            },
+                            "use_account_nik": {
+                              "type": "boolean",
+                              "example": true,
+                              "description": "true = kursi ini memakai NIK terdaftar milik customer login. Paling banyak satu kursi; akun harus punya NIK terverifikasi; tamu → 400 VALIDATION_ERROR + data.index"
                             }
                           },
                           "x-apidog-orders": [
                             "category_id",
                             "nik",
-                            "holder_email"
-                          ]
-                        }
+                            "saved_nik_id",
+                            "use_account_nik"
+                          ],
+                          "description": "Tepat satu dari nik, saved_nik_id, use_account_nik"
+                        },
+                        "description": "Satu per kursi (maks 3 total, lintas kategori). Tanpa holder_email sejak v2.14: seluruh e-tiket dikirim ke contact_email"
                       },
                       "contact_email": {
                         "type": "string",
-                        "format": "email"
-                      },
-                      "terms_version": {
-                        "type": "string"
+                        "format": "email",
+                        "description": "Email pembeli; seluruh e-tiket booking ini dikirim ke sini (FR-26 diubah, ADR-006 §8.15)"
                       }
                     },
                     "x-apidog-orders": [
                       "event_id",
                       "tickets",
-                      "contact_email",
-                      "terms_version"
+                      "contact_email"
                     ]
                   },
                   "mediaType": "application/json",
@@ -7530,13 +7556,13 @@
                   "additionalContentTypes": [],
                   "examples": [
                     {
-                      "value": "{\"event_id\":\"evt_konser_a\",\"tickets\":[{\"category_id\":\"cat_vip\",\"nik\":\"3171xxxxxxxxxx22\",\"holder_email\":\"buyer@example.com\"}],\"contact_email\":\"buyer@example.com\",\"terms_version\":\"2026-10-01\"}",
+                      "value": "{\n  \"event_id\": \"evt_konser_a\",\n  \"tickets\": [\n    {\n      \"category_id\": \"cat_vip\",\n      \"use_account_nik\": true\n    },\n    {\n      \"category_id\": \"cat_vip\",\n      \"saved_nik_id\": \"snk_1\"\n    },\n    {\n      \"category_id\": \"cat_festival\",\n      \"nik\": \"3171xxxxxxxxxx33\"\n    }\n  ],\n  \"contact_email\": \"buyer@example.com\"\n}",
                       "mediaType": "application/json",
                       "description": ""
                     }
                   ]
                 },
-                "description": "Create booking.",
+                "description": "Create booking.\n\nv2.14: tickets[].holder_email dihapus; seluruh e-tiket dikirim ke contact_email.\n\nv2.16: tiap kursi membawa tepat satu dari nik, saved_nik_id, use_account_nik: true.\n\nv2.17: terms_version dihapus (persetujuan dicatat saat registrasi).",
                 "tags": [
                   "Booking"
                 ],
@@ -7790,10 +7816,6 @@
                                   "type": "string",
                                   "example": "2026-10-23T13:25:00Z"
                                 },
-                                "ttl_seconds": {
-                                  "type": "integer",
-                                  "example": 342
-                                },
                                 "server_time": {
                                   "type": "string",
                                   "example": "2026-10-23T13:19:18Z"
@@ -7801,10 +7823,9 @@
                               },
                               "x-apidog-orders": [
                                 "expires_at",
-                                "ttl_seconds",
                                 "server_time"
                               ],
-                              "description": "Hanya saat PENDING_PAYMENT; ttl_seconds 0 selama grace PENDING_CANCELLATION"
+                              "description": "Hanya saat PENDING_PAYMENT; selama grace PENDING_CANCELLATION expires_at sudah lewat tetapi pembayaran masih bisa masuk"
                             },
                             "payment_method": {
                               "type": "string",
@@ -8163,7 +8184,7 @@
                 "responseExamples": [
                   {
                     "name": "Pending payment",
-                    "data": "{\"meta\": {\"code\": 200, \"message\": \"Success\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {\"booking_id\": \"RB-00912\", \"status\": \"PENDING_PAYMENT\", \"event\": {\"id\": \"evt_konser_a\", \"name\": \"Konser A\", \"date\": \"2026-12-25\", \"venue\": \"GBK, Jakarta\", \"image_url\": \"https://cdn.rusuh.id/events/konser-a.jpg\"}, \"tickets\": [{\"category\": \"VIP\", \"price\": 1500000, \"nik_masked\": \"3171********xx22\"}], \"summary\": {\"quantity\": 1, \"total\": 1500000}, \"payment_ttl\": {\"expires_at\": \"2026-10-23T13:25:00Z\", \"ttl_seconds\": 342, \"server_time\": \"2026-10-23T13:19:18Z\"}}}",
+                    "data": "{\"meta\": {\"code\": 200, \"message\": \"Success\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {\"booking_id\": \"RB-00912\", \"status\": \"PENDING_PAYMENT\", \"event\": {\"id\": \"evt_konser_a\", \"name\": \"Konser A\", \"date\": \"2026-12-25\", \"venue\": \"GBK, Jakarta\", \"image_url\": \"https://cdn.rusuh.id/events/konser-a.jpg\"}, \"tickets\": [{\"category\": \"VIP\", \"price\": 1500000, \"nik_masked\": \"3171********xx22\"}], \"summary\": {\"quantity\": 1, \"total\": 1500000}, \"payment_ttl\": {\"expires_at\": \"2026-10-23T13:25:00Z\", \"server_time\": \"2026-10-23T13:19:18Z\"}}}",
                     "responseId": "136154444",
                     "description": "",
                     "oasKey": "pending_payment",
@@ -9176,10 +9197,6 @@
                                   "type": "string",
                                   "example": "2026-10-25T10:25:00Z"
                                 },
-                                "ttl_seconds": {
-                                  "type": "integer",
-                                  "example": 540
-                                },
                                 "server_time": {
                                   "type": "string",
                                   "example": "2026-10-25T10:16:00Z"
@@ -9187,7 +9204,6 @@
                               },
                               "x-apidog-orders": [
                                 "expires_at",
-                                "ttl_seconds",
                                 "server_time"
                               ]
                             }
@@ -9346,7 +9362,7 @@
                 "responseExamples": [
                   {
                     "name": "VA BCA",
-                    "data": "{\"meta\":{\"code\":200,\"message\":\"Payment initiated\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{\"payment_id\":\"RB-00912:1\",\"method\":\"bank_transfer\",\"status\":\"PENDING\",\"instructions\":{\"bank\":\"bca\",\"va_number\":\"8801234567890\"},\"ttl\":{\"expires_at\":\"2026-10-25T10:25:00Z\",\"ttl_seconds\":540,\"server_time\":\"2026-10-25T10:16:00Z\"}}}",
+                    "data": "{\"meta\": {\"code\": 200, \"message\": \"Payment initiated\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {\"payment_id\": \"RB-00912:1\", \"method\": \"bank_transfer\", \"status\": \"PENDING\", \"instructions\": {\"bank\": \"bca\", \"va_number\": \"8801234567890\"}, \"ttl\": {\"expires_at\": \"2026-10-25T10:25:00Z\", \"server_time\": \"2026-10-25T10:16:00Z\"}}}",
                     "responseId": "187223650",
                     "description": "",
                     "oasKey": "bank_transfer",
@@ -9354,7 +9370,7 @@
                   },
                   {
                     "name": "GoPay",
-                    "data": "{\"meta\":{\"code\":200,\"message\":\"Payment initiated\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{\"payment_id\":\"RB-00912:1\",\"method\":\"gopay\",\"status\":\"PENDING\",\"instructions\":{\"qr_url\":\"https://api.midtrans.com/v2/gopay/.../qr-code\",\"deeplink_url\":\"https://gojek.link/...\"},\"ttl\":{\"expires_at\":\"2026-10-25T10:25:00Z\",\"ttl_seconds\":540,\"server_time\":\"2026-10-25T10:16:00Z\"}}}",
+                    "data": "{\"meta\": {\"code\": 200, \"message\": \"Payment initiated\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {\"payment_id\": \"RB-00912:1\", \"method\": \"gopay\", \"status\": \"PENDING\", \"instructions\": {\"qr_url\": \"https://api.midtrans.com/v2/gopay/.../qr-code\", \"deeplink_url\": \"https://gojek.link/...\"}, \"ttl\": {\"expires_at\": \"2026-10-25T10:25:00Z\", \"server_time\": \"2026-10-25T10:16:00Z\"}}}",
                     "responseId": "187223650",
                     "description": "",
                     "oasKey": "gopay",
@@ -10097,15 +10113,17 @@
                               "type": "string",
                               "example": "2026-10-23T13:22:00Z"
                             },
-                            "ttl_seconds": {
-                              "type": "integer",
-                              "example": 180
+                            "expires_at": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-10-23T13:25:00Z",
+                              "description": "Tenggat pembayaran (payment_expires_at). Klien menghitung mundur dari sini dengan jam yang dikoreksi server_time. Hanya saat PENDING"
                             }
                           },
                           "x-apidog-orders": [
                             "status",
-                            "server_time",
-                            "ttl_seconds"
+                            "expires_at",
+                            "server_time"
                           ]
                         }
                       },
@@ -10124,7 +10142,7 @@
                 "responseExamples": [
                   {
                     "name": "Pending",
-                    "data": "{\"meta\":{\"code\":200,\"message\":\"Payment pending\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{\"status\":\"PENDING\",\"server_time\":\"2026-10-23T13:22:00Z\",\"ttl_seconds\":180}}",
+                    "data": "{\"meta\": {\"code\": 200, \"message\": \"Payment pending\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {\"status\": \"PENDING\", \"expires_at\": \"2026-10-23T13:25:00Z\", \"server_time\": \"2026-10-23T13:22:00Z\"}}",
                     "responseId": "197531305",
                     "description": "",
                     "oasKey": "pending",

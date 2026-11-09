@@ -82,7 +82,7 @@ menangani lonjakan trafik ekstrem (flash crowd) saat penjualan tiket dibuka.
 | FR-23d | Payment       | Customer dapat mengganti metode pembayaran selama status `AWAITING_PAYMENT`; transaksi lama dibatalkan ke gateway | MUST     |
 | FR-24  | Payment       | API pembayaran dapat dikonsumsi web dan mobile (shared API)           | MUST     |
 | FR-25  | Payment       | Menangani callback payment gateway secara idempoten                   | MUST     |
-| FR-26  | Notification  | Email tiket dikirim ke **masing-masing pemegang NIK**                 | MUST     |
+| FR-26  | Notification  | ~~Email tiket dikirim ke **masing-masing pemegang NIK**~~ ✏️ **Diubah (10 November 2026, ADR-006 §8.15):** seluruh e-tiket satu booking dikirim ke **email pembeli** (`contact_email`). Tidak ada email per pemegang NIK; tiap tiket tetap memuat NIK pemegangnya (FR-27) dan dapat dibuka lewat tautan di Success Page | MUST     |
 | FR-27  | Notification  | Tiket berisi: QR code, kategori tiket, NIK pemegang (**nomor bangku tidak diimplementasikan di POC**) | MUST     |
 | FR-28  | Notification  | Email expired dikirim jika pembayaran tidak selesai dalam TTL         | MUST     |
 | FR-28a | Notification  | Email pemberitahuan **kegagalan pembayaran** dikirim pada tiga kondisi: (a) gateway menyatakan gagal, (b) TTL + grace berlalu tanpa callback, (c) callback sukses tiba setelah pembatalan (Disputed) | MUST     |
@@ -358,7 +358,7 @@ antrian penuh sebelum mengklik.
 | BR-07         | ✔ RESTORED | Satu keterlibatan aktif per event, user login saja — alasannya okupansi slot, bukan scalping |
 | BR-09         | ➕ NEW     | Re-entrant user dalam TTL kembali ke halaman yang sama    |
 | BR-10         | ➕ NEW     | Server time sebagai source of truth                       |
-| FR-26..28     | ➕ NEW     | Email ke pemegang NIK, bukan hanya pembeli                |
+| FR-26..28     | ➕ NEW     | ~~Email ke pemegang NIK, bukan hanya pembeli~~ ✏️ e-tiket ke email pembeli (FR-26 diubah 10 November 2026, ADR-006 §8.15) |
 | FR-29..32     | ➕ NEW     | Login opsional, verifikasi via link, multi-bahasa         |
 | FR-33..35     | ➕ NEW     | Dashboard operasional real-time                           |
 | Transport     | 🔧 DECIDED | **Server-Sent Events (SSE)** via ECS Fargate — REST polling tetap sebagai fallback (jaringan blokir SSE / degraded mode) |

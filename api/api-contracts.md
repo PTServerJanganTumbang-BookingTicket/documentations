@@ -1,12 +1,29 @@
 # Rusuh Booking Tiket — API Contracts
 
-**Versi**: 2.13.0  
+**Versi**: 2.17.0  
 **Tanggal**: 9 November 2026  
 **Status**: Draft  
 **Base URL**: `https://api.my-rusuh.my.id` (tanpa versi di path untuk saat ini; v2.9). Stream: `https://events.my-rusuh.my.id`  
 **Selaras dengan**: ADR-005 (Keputusan Arsitektur Final — SSE + ECS Fargate), diamandemen ADR-006 (antrian)  
 **Pasangan mesin**: `rusuh-booking-apidog.json` (Apidog) — **sumber kebenaran bentuk respons**. Dokumen ini menjelaskan perilaku dan alasannya; keduanya wajib sinkron. `rusuh-booking-openapi.yaml` diarsipkan (`archive/`) dan tidak dipelihara lagi
 
+> **v2.17** (**breaking kecil**, ADR-006 §8.16): **`terms_version` dihapus** dari `POST /bookings` dan error
+> `TERMS_NOT_ACCEPTED` dihapus. Persetujuan PDP dan syarat dicatat saat registrasi (§1.5), bukan saat Bayar.
+> Lihat Appendix C, v2.16 → v2.17.
+>
+> **v2.16** (aditif): tiap kursi pada `POST /bookings` membawa **tepat satu** dari `nik` (diketik),
+> `saved_nik_id` (dari Daftar NIK Teman §1.6) atau `use_account_nik: true` (NIK terdaftar milik customer login).
+> NIK tersimpan dan NIK akun tidak perlu diketik ulang dan tidak memanggil nik-verify. Lihat Appendix C, v2.15 → v2.16.
+>
+> **v2.15** (**breaking kecil**): **`ttl_seconds` dihapus** dari semua respons (§4.1 `session`, §4.3/§4.4
+> `payment_ttl`, §5.2 `ttl`, §5.4). Klien menghitung mundur dari `expires_at` saja, dengan jam yang dikoreksi
+> `server_time` (BR-10). §5.4 kini membawa `expires_at`. Lihat Appendix C, v2.14 → v2.15.
+>
+> **v2.14** (ADR-006 §8.15, FR-26 diubah): **e-tiket ke email pembeli.** `POST /bookings` tidak lagi menerima
+> `tickets[].holder_email` (**breaking** bagi klien yang mengirimnya: field itu diabaikan); seluruh e-tiket satu booking
+> dikirim ke `contact_email`. `GET /events/{event_id}/tickets` menambah `account {email, nik_masked}` milik customer
+> login untuk mengisi form lebih dulu (`null` untuk tamu, aditif). Lihat Appendix C, v2.13 → v2.14.
+>
 > **v2.13** (halaman tiket dan detail booking, `be-rusuh-war-ticketing/docs/05-booking`): **dua perubahan breaking
 > kecil di §4.4**: `summary.price_per_ticket` **dihapus** (`summary = {quantity, total}`, harga ada di
 > `tickets[].price`) dan `paid_at` **dihapus** dari contoh Paid (tidak ada kolomnya); `payment_method` masuk skema.
@@ -1367,8 +1384,8 @@ menghapusnya aktif:
 > customer, jadi tidak ada respons lain untuk menumpangi.
 >
 > **Setelah nisan kedaluwarsa, email adalah rutenya** — ditambah mendaftar dengan NIK yang
-> sama, yang mewarisi tiket lewat klausa kepemilikan §6.1. `contact_email` dan `holder_email`
-> wajib di §4.3, jadi kanal itu selalu ada. Itulah yang membuat penghapusan ini dapat
+> sama, yang mewarisi tiket lewat klausa kepemilikan §6.1. `contact_email` wajib di §4.3
+> (sejak v2.14 satu-satunya email; seluruh e-tiket dikirim ke sana), jadi kanal itu selalu ada. Itulah yang membuat penghapusan ini dapat
 > diterima — dan mengapa tautan e-tiket **wajib** dapat dibuka tanpa akun (§6.2).
 
 > `POST /queue/claim-token` dari v1.1 **dihapus**. Pada model itu klien meminta slot setelah
@@ -1532,7 +1549,6 @@ X-Device-Id: {device_id}               # wajib bila customer TIDAK login
     },
     "session": {
       "expires_at": "2026-10-23T13:15:00Z",
-      "ttl_seconds": 287,
       "server_time": "2026-10-23T13:10:13Z"
     },
     "categories": [
@@ -1564,6 +1580,10 @@ X-Device-Id: {device_id}               # wajib bila customer TIDAK login
     "rules": {
       "max_tickets_per_order": 3,
       "one_nik_per_ticket": true
+    },
+    "account": {
+      "email": "buyer@example.com",
+      "nik_masked": "3171********0022"
     }
   }
 }
@@ -1580,7 +1600,7 @@ X-Device-Id: {device_id}               # wajib bila customer TIDAK login
 >
 > **Claim hanya sebelum tenggat** (jam Aurora, jam yang sama dengan sweep). Memuat halaman setelah 5 menit habis,
 > sebelum sweep berjalan, tidak meng-claim: booking tetap `GRANTED` lalu menjadi `LAPSED`. Halaman tetap dirender
-> dengan `ttl_seconds: 0`; klien menampilkan layar kedaluwarsa dari hitung mundur. Booking `SELECTING` yang 5
+> apa adanya; `expires_at` sudah lewat, jadi klien menampilkan layar kedaluwarsa dari hitung mundur. Booking `SELECTING` yang 5
 > menitnya habis menjadi `EXPIRED` oleh sweep, dan tempatnya diberikan ke antrian berikutnya.
 >
 > Konsekuensi operasional: **respons ini tidak boleh di-cache**, dan tidak boleh di-prefetch
@@ -1592,10 +1612,11 @@ X-Device-Id: {device_id}               # wajib bila customer TIDAK login
 | Field | Aturan |
 |---|---|
 | `session.expires_at` | tenggat yang **sedang berlaku**: `booking_expires_at` (5 menit sejak giliran) sampai tombol Bayar ditekan; sejak `HELD`, `payment_expires_at`. Customer yang menekan Back dari halaman pembayaran tidak boleh diberi tahu waktunya habis selagi kursinya masih di-hold |
-| `session.ttl_seconds` | detik tersisa, dibulatkan ke atas, tidak pernah di bawah 0 |
+| hitung mundur | klien menghitung dari `session.expires_at` dengan jam yang dikoreksi `server_time` (`sisa = expires_at − (jam perangkat + selisih)`); tidak ada `ttl_seconds` (dihapus v2.15) |
 | `categories[]` | urutan tampilan (VIP, Festival, Tribune), bukan urutan id |
 | `categories[].available` | stok hidup di Redis; nilai negatif ditampilkan 0. Stok yang **tidak diketahui** tidak pernah ditampilkan 0: lihat 503 `STOCK_UNINITIALIZED` |
 | `categories[].max_per_order` | `min(batas kategori, available, 3)`; `0` bila habis |
+| `account` | customer login: `{email, nik_masked}` dari akunnya, untuk mengisi `contact_email` dan NIK kursi pertama lebih dulu (keduanya dapat diubah). `nik_masked` `null` bila akun belum punya NIK terverifikasi. **Tamu: `account` = `null`.** NIK hanya tersamar: NIK lengkap tidak disimpan (NFR-11); NIK akun dipakai lewat Daftar NIK / NIK terdaftar, bukan dengan mengetik ulang |
 
 **Error**:
 
@@ -1785,32 +1806,48 @@ X-Device-Id: {device_id}               # wajib bila customer TIDAK login
   "tickets": [
     {
       "category_id": "cat_vip",
-      "nik": "3171xxxxxxxxxx22",
-      "holder_email": "buyer@example.com"
+      "use_account_nik": true
     },
     {
       "category_id": "cat_vip",
-      "nik": "3171xxxxxxxxxx33",
-      "holder_email": "friend@example.com"
+      "saved_nik_id": "snk_1"
+    },
+    {
+      "category_id": "cat_festival",
+      "nik": "3171xxxxxxxxxx33"
     }
   ],
-  "contact_email": "buyer@example.com",
-  "terms_version": "2026-10-01"
+  "contact_email": "buyer@example.com"
 }
 ```
+
+**NIK tiap kursi** — tepat satu dari tiga field:
+
+| Field | Untuk | Aturan |
+|---|---|---|
+| `nik` | NIK yang diketik | 16 digit; diverifikasi lewat nik-verify (bukti tersimpan → cache 24 jam → Dukcapil) |
+| `saved_nik_id` | entri Daftar NIK Teman (`GET /accounts/me/saved-niks`, §1.6) | harus milik akun customer login; tidak memanggil nik-verify (sudah terverifikasi) |
+| `use_account_nik: true` | NIK terdaftar milik customer login sendiri (`account.nik_masked` di §4.1) | **paling banyak satu kursi**; akun harus punya NIK terverifikasi; tidak memanggil nik-verify |
+
+Nol atau lebih dari satu field pada satu kursi, `saved_nik_id` yang tidak dikenal / milik akun lain / sudah dihapus,
+`use_account_nik` tanpa NIK akun, atau salah satu dari keduanya dari **tamu** → `400 VALIDATION_ERROR` dengan
+`data.index` kursi itu (jawabannya sama untuk semua sebab, sehingga tidak membocorkan id milik akun lain). NIK yang
+sama pada dua kursi ditolak, termasuk bila satu diketik dan yang lain diambil dari daftar atau akun (dibandingkan
+lewat hash NIK).
 
 > **Multi-kategori diizinkan.** `tickets[]` boleh memuat `category_id` yang berbeda-beda —
 > misalnya 1 Premium + 1 Festival + 1 VIP. Batas FR-13 adalah **3 tiket per transaksi secara
 > total**, bukan 3 per kategori. Hold-nya all-or-nothing: stok seluruh kategori diperiksa
 > sebelum satu pun dikurangi, dalam satu skrip atomik.
 >
-> **Satu baris per kursi** (BR-02: 1 NIK = 1 seat). `holder_email` adalah alamat tujuan
-> e-tiket kursi itu — FR-26 menuntut tiket sampai ke tiap pemegang NIK, bukan hanya pembeli.
-> Tidak ada field nama: Dukcapil hanya memvalidasi NIK.
+> **Satu baris per kursi** (BR-02: 1 NIK = 1 seat). **Satu email per booking**: seluruh e-tiket
+> dikirim ke `contact_email` (FR-26 diubah, v2.14; `tickets[].holder_email` dihapus dan diabaikan
+> bila dikirim). Tiap tiket tetap memuat NIK pemegangnya (FR-27). Tidak ada field nama: Dukcapil
+> hanya memvalidasi NIK.
 >
 > **Panggilan inilah yang memulai TTL pembayaran.** "Booking dibuat" pada BR-05 adalah saat
-> ini: kursi dipilih, NIK diisi, stok di-hold. `payment_ttl.ttl_seconds` karena itu selalu
-> **600** — setiap customer mendapat 10 menit penuh, berapa pun lama ia memilih kursi.
+> ini: kursi dipilih, NIK diisi, stok di-hold. `payment_ttl.expires_at` karena itu selalu
+> **10 menit** setelah respons ini — setiap customer mendapat 10 menit penuh, berapa pun lama ia memilih kursi.
 > TTL booking (5 menit, dihitung dari `granted_at` — **bukan** dari saat halaman dibuka)
 > berhenti berlaku begitu booking ini dibuat; keduanya berurutan,
 > tidak tumpang tindih.
@@ -1855,7 +1892,6 @@ X-Device-Id: {device_id}               # wajib bila customer TIDAK login
     },
     "payment_ttl": {
       "expires_at": "2026-10-23T13:25:00Z",
-      "ttl_seconds": 600,
       "server_time": "2026-10-23T13:15:00Z"
     },
     "redirect_url": "/bookings/RB-00912/payment"
@@ -1963,7 +1999,6 @@ X-Device-Id: {device_id}               # wajib bila customer TIDAK login
     },
     "payment_ttl": {
       "expires_at": "2026-10-23T13:25:00Z",
-      "ttl_seconds": 342,
       "server_time": "2026-10-23T13:19:18Z"
     }
   }
@@ -2010,7 +2045,7 @@ X-Device-Id: {device_id}               # wajib bila customer TIDAK login
 | `data.status` | Status `bookings` | Halaman |
 |---|---|---|
 | `SELECTING` | `GRANTED`, `SELECTING` | kembali ke Detail Ticket (belum menekan Bayar; `tickets` kosong) |
-| `PENDING_PAYMENT` | `HELD`, `AWAITING_PAYMENT`, `PENDING_CANCELLATION` | Payment Page dengan `payment_ttl`. Saat `PENDING_CANCELLATION` (tenggat lewat, grace 30 detik) `ttl_seconds` = 0 dan pembayaran masih bisa masuk: tampilkan "memverifikasi pembayaran…" dari §5.4, **bukan** layar kedaluwarsa |
+| `PENDING_PAYMENT` | `HELD`, `AWAITING_PAYMENT`, `PENDING_CANCELLATION` | Payment Page dengan `payment_ttl`. Saat `PENDING_CANCELLATION` (tenggat lewat, grace 30 detik) `expires_at` sudah lewat tetapi pembayaran masih bisa masuk: tampilkan "memverifikasi pembayaran…" dari §5.4, **bukan** layar kedaluwarsa |
 | `PAID` | `CONFIRMED` | Success Page |
 | `EXPIRED` | `EXPIRED`, `LAPSED`, `ABANDONED` | layar kedaluwarsa |
 
@@ -2166,7 +2201,7 @@ Bentuk request berbeda per metode:
     "method": "bank_transfer",
     "status": "PENDING",
     "instructions": { "bank": "bca", "va_number": "8801234567890" },
-    "ttl": { "expires_at": "2026-10-25T10:25:00Z", "ttl_seconds": 540, "server_time": "2026-10-25T10:16:00Z" }
+    "ttl": { "expires_at": "2026-10-25T10:25:00Z", "server_time": "2026-10-25T10:16:00Z" }
   }
 }
 ```
@@ -2182,7 +2217,7 @@ Bentuk request berbeda per metode:
       "qr_url": "https://api.midtrans.com/v2/gopay/.../qr-code",
       "deeplink_url": "https://gojek.link/..."
     },
-    "ttl": { "expires_at": "2026-10-25T10:25:00Z", "ttl_seconds": 540, "server_time": "2026-10-25T10:16:00Z" }
+    "ttl": { "expires_at": "2026-10-25T10:25:00Z", "server_time": "2026-10-25T10:16:00Z" }
   }
 }
 ```
@@ -2332,8 +2367,8 @@ X-Device-Id: {device_id}               # wajib bila customer TIDAK login
   },
   "data": {
     "status": "PENDING",
-    "server_time": "2026-10-23T13:22:00Z",
-    "ttl_seconds": 180
+    "expires_at": "2026-10-23T13:25:00Z",
+    "server_time": "2026-10-23T13:22:00Z"
   }
 }
 ```
@@ -2513,7 +2548,7 @@ memicu unique violation, seluruh transaksi batal, dan endpoint tetap menjawab `2
 
 | `transaction_status` | `fraud_status` | Transisi | Efek |
 |---|---|---|---|
-| `settlement` | `accept` | → `CONFIRMED` | Lepas slot, terbitkan tiket per `booking_item`, kirim e-tiket ke tiap `holder_email` |
+| `settlement` | `accept` | → `CONFIRMED` | Lepas slot, terbitkan tiket per `booking_item`, kirim seluruh e-tiket ke `contact_email` |
 | `capture` (kartu) | **`accept`** | → `CONFIRMED` | Idem. `capture` menjadi `settlement` keesokan hari tanpa tindakan |
 | `capture` (kartu) | **bukan `accept`** | tidak ada | **Belum lunas.** Jangan terbitkan tiket; tetap `AWAITING_PAYMENT` |
 | `settlement` / `capture` atas booking **`EXPIRED`** | — | tidak ada | **`payment.refund` diterbitkan** + alarm `LatePaymentRefund`. Uang masuk setelah stok dijual ulang |
@@ -2617,14 +2652,14 @@ Download/view e-ticket. UI: "Lihat E-Tiket" button.
 | Kredensial | Dipakai oleh | Resolusi |
 |---|---|---|
 | `Authorization: Bearer {access_token}` | pemilik akun, dari menu "Tiket Saya" (§6.1) | klausa kepemilikan: *pembeli **atau** pemegang NIK terdaftar* |
-| `?t={eticket_token}` | **pemegang NIK**, dari tautan di email e-tiket | HMAC terhadap `ticket_id`; tidak membawa identitas akun |
+| `?t={eticket_token}` | pembeli, dari tautan di email e-tiket atau Success Page, dan siapa pun yang ia teruskan tautannya (pemegang NIK) | HMAC terhadap `ticket_id`; tidak membawa identitas akun |
 
 Endpoint ini tidak menerima `X-Grant-Token`: grant membuktikan slot, bukan kepemilikan tiket,
 dan grant sudah kedaluwarsa jauh sebelum tanggal event.
 
-> **Mengapa `?t=` wajib ada, bukan kemudahan tambahan.** FR-26 menuntut tiket dikirim ke
-> **masing-masing pemegang NIK**, dan pemegang NIK kedua dan ketiga biasanya bukan pemilik
-> akun — sering bukan pembeli sama sekali. Rute yang hanya menerima sesi akun berarti tombol
+> **Mengapa `?t=` wajib ada, bukan kemudahan tambahan.** Sejak v2.14 seluruh e-tiket dikirim ke
+> pembeli, yang meneruskannya ke pemegang NIK kedua dan ketiga; mereka biasanya bukan pemilik
+> akun. *(Sebelum v2.14 FR-26 mengirim tiket langsung ke masing-masing pemegang NIK; alasannya sama.)* Rute yang hanya menerima sesi akun berarti tombol
 > "Buka e-tiket" di email mereka menjawab **401**: jalur pengiriman utama requirement itu
 > tidak berfungsi untuk orang-orang yang requirement itu ditulis untuk mereka. Hal yang sama
 > berlaku bagi pembeli tamu, yang setelah §3.3 menghapus kredensial antriannya hanya memiliki
@@ -2855,12 +2890,12 @@ Bagian per endpoint menulis error yang khas. Error umum berikut juga berlaku dan
 | FR-18 | Sweep server-side; tidak terlihat di API | ⚙️ Backend |
 | FR-19 | `server_time` pada setiap response REST + `serverTime` pada tiap payload SSE | ✅ |
 | FR-20 | `GET /payments/{id}/methods`, `POST /payments/{id}`, `POST /payments/{id}/retry` | ✅ |
-| FR-21 | `payment_expires_at` + `ttl_seconds` | ✅ |
-| FR-22 | Webhook `PAID` → e-tiket per `holder_email` | ✅ |
+| FR-21 | `payment_expires_at` + `server_time` (hitung mundur di klien) | ✅ |
+| FR-22 | Webhook `PAID` → seluruh e-tiket ke `contact_email` | ✅ |
 | FR-23 | Webhook `EXPIRE` / sweep → stok dilepas | ✅ |
 | FR-24 | REST/JSON, identik untuk web dan mobile | ✅ |
 | FR-25 | `payment_events.gateway_event_id UNIQUE`; charge diputar ulang dari state booking | ✅ |
-| FR-26 | `holder_email` per kursi pada §4.3, **dan** tautan e-tiket yang dapat dibuka pemegang NIK tanpa akun (§6.2 `?t=`) | ✅ |
+| FR-26 | (diubah, ADR-006 §8.15) seluruh e-tiket ke `contact_email` pembeli; tautan e-tiket dapat dibuka tanpa akun (§6.2 `?t=`) sehingga pembeli dapat meneruskannya | ✅ |
 | FR-27 | `GET /tickets/{id}/eticket` — QR, kategori, NIK. **Nomor bangku di luar lingkup POC** | ✅ |
 | FR-28 | Webhook `EXPIRE` / sweep → email expired | ⚙️ Backend |
 | FR-29 | Semua endpoint pembelian dapat diakses tanpa akun; grant anonim diikat ke `X-Device-Id` (§9) | ✅ |
@@ -2942,7 +2977,6 @@ Legenda: ✅ terpenuhi di kontrak · ⚙️ di luar permukaan API (backend atau 
 | `STOCK_NEGATIVE` | **503** — guard terakhir menyala; seluruh pengurangan dikembalikan |
 | `INSUFFICIENT_STOCK` | Stok tiket tidak mencukupi |
 | `TICKETS_UNAVAILABLE` | Tiket sudah habis |
-| `TERMS_NOT_ACCEPTED` | Syarat & ketentuan dan persetujuan PDP belum diterima |
 | `PAYMENT_ALREADY_INITIATED` | Charge sudah berjalan; respons sebelumnya diputar ulang |
 | `BANK_NOT_SUPPORTED` | Bank di luar bca/bni/bri/cimb |
 | `MAX_ATTEMPTS_EXCEEDED` | Melewati batas percobaan pembayaran per booking |
@@ -3283,3 +3317,29 @@ Penyelarasan dengan ADR-005. Yang memutus kompatibilitas ditandai **BREAKING**.
 | 97 | §4.1: tabel aturan field (`session.expires_at` = tenggat yang sedang berlaku, `max_per_order = min(batas kategori, available, 3)`, urutan kategori) dan tabel error (400 `DEVICE_ID_REQUIRED`, 401 `DEVICE_MISMATCH`, 404, 503 `STOCK_UNINITIALIZED`, 503 `INTERNAL_ERROR`); claim hanya sebelum tenggat | Error dan aturan yang belum tertulis |
 | 98 | §4 tabel header: `X-Device-Id` hilang → **400 `DEVICE_ID_REQUIRED`** (sebelumnya tertulis 401 `DEVICE_MISMATCH`, bertentangan dengan Appendix A) | Selaras dengan Appendix A dan join |
 | 99 | §3.3: `LAPSED` dan `EXPIRED` dari `SELECTING` hanya menghapus grant; `token:{uuid}` dan `acct` tetap, join ulang menjawab `rejoined` (tidak ada giliran kedua). `EXPIRED` dari pembayaran dan `ABANDONED` tetap menghapus kredensial | Perilaku admission-ctl yang dibangun |
+
+### v2.13 → v2.14
+
+| # | Perubahan | Alasan |
+|---|---|---|
+| 100 | §4.3: **`tickets[].holder_email` dihapus** (**BREAKING** bagi klien yang mengirimnya; diabaikan bila masih dikirim). Seluruh e-tiket satu booking dikirim ke `contact_email`; `booking.expired` dan pemberitahuan kegagalan juga hanya ke sana (ADR-006 §8.15, FR-26 diubah) | Satu email per booking: form lebih sederhana, pembeli yang membayar menerima semua tiket. NIK tetap mengikat kursi (BR-02) |
+| 101 | §4.1: field baru `account {email, nik_masked}` milik customer login (`null` untuk tamu) untuk mengisi form lebih dulu | Customer login tidak perlu mengetik ulang email dan NIK-nya |
+| 102 | §5.5, §6.2, Apendiks: e-tiket ke `contact_email`; `?t=` diteruskan pembeli ke pemegang NIK | Mengikuti butir 100 |
+
+### v2.14 → v2.15
+
+| # | Perubahan | Alasan |
+|---|---|---|
+| 103 | **`ttl_seconds` dihapus** (**BREAKING** bagi klien yang membacanya) dari §4.1 `session`, §4.3 dan §4.4 `payment_ttl`, §5.2 `ttl`, §5.4. §5.4 menambah `expires_at` (tenggat pembayaran) | Dua sumber untuk satu angka; `ttl_seconds` sudah usang begitu respons tiba. Klien menghitung dari `expires_at` dengan selisih jam dari `server_time` (BR-10) |
+
+### v2.15 → v2.16
+
+| # | Perubahan | Alasan |
+|---|---|---|
+| 104 | §4.3: tiap kursi membawa tepat satu dari `nik`, `saved_nik_id`, `use_account_nik: true`; kesalahan → `400 VALIDATION_ERROR` + `data.index` | Daftar NIK Teman (§1.6) dan NIK akun hanya dikirim tersamar, jadi frontend tidak dapat mengirim NIK lengkapnya; kursi merujuk entri itu. Respons §1.6 tidak berubah |
+
+### v2.16 → v2.17
+
+| # | Perubahan | Alasan |
+|---|---|---|
+| 105 | §4.3: **`terms_version` dihapus** dari request (**BREAKING** bagi klien yang mengirimnya; diabaikan bila masih dikirim); kode `TERMS_NOT_ACCEPTED` dihapus dari Appendix A (ADR-006 §8.16) | Persetujuan sudah dicatat saat registrasi (`consent_records`, §1.5); catatan versi per booking tidak diperlukan |
