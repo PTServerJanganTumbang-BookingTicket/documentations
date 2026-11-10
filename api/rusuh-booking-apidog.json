@@ -6582,6 +6582,18 @@
                         "type": "string"
                       },
                       "id": "DevIdHdr00"
+                    },
+                    {
+                      "id": "Auth000401",
+                      "name": "Authorization",
+                      "required": false,
+                      "enable": true,
+                      "description": "Bearer access token akun. WAJIB bila grant milik akun login (harus akun yang sama dengan grant); tamu tidak mengirimnya. Hilang/akun lain → 401 UNAUTHORIZED, kedaluwarsa → 401 TOKEN_EXPIRED, tidak sah → 401 TOKEN_INVALID",
+                      "example": "Bearer eyJhbGciOi…",
+                      "type": "string",
+                      "schema": {
+                        "type": "string"
+                      }
                     }
                   ]
                 },
@@ -7195,6 +7207,201 @@
                     "oasExtensions": "",
                     "name": "INTERNAL_ERROR",
                     "mediaType": "application/json"
+                  },
+                  {
+                    "id": "960000402",
+                    "code": "401",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 401
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Authorization diperlukan untuk grant milik akun login"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "UNAUTHORIZED",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "Unauthorized",
+                    "contentType": "json",
+                    "oasExtensions": "",
+                    "name": "UNAUTHORIZED",
+                    "mediaType": "application/json"
+                  },
+                  {
+                    "id": "960000403",
+                    "code": "401",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 401
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Sesi kedaluwarsa"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "TOKEN_EXPIRED",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "Unauthorized",
+                    "contentType": "json",
+                    "oasExtensions": "",
+                    "name": "TOKEN_EXPIRED",
+                    "mediaType": "application/json"
+                  },
+                  {
+                    "id": "960000404",
+                    "code": "401",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 401
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Token tidak sah"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "TOKEN_INVALID",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "Unauthorized",
+                    "contentType": "json",
+                    "oasExtensions": "",
+                    "name": "TOKEN_INVALID",
+                    "mediaType": "application/json"
                   }
                 ],
                 "responseExamples": [
@@ -7269,6 +7476,30 @@
                     "oasKey": "",
                     "oasExtensions": "",
                     "data": "{\"meta\": {\"code\": 503, \"message\": \"Layanan sedang sibuk, coba lagi\", \"error_code\": \"INTERNAL_ERROR\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}"
+                  },
+                  {
+                    "name": "UNAUTHORIZED",
+                    "responseId": "960000402",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": "",
+                    "data": "{\"meta\": {\"code\": 401, \"message\": \"Authorization diperlukan untuk grant milik akun login\", \"error_code\": \"UNAUTHORIZED\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}"
+                  },
+                  {
+                    "name": "TOKEN_EXPIRED",
+                    "responseId": "960000403",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": "",
+                    "data": "{\"meta\": {\"code\": 401, \"message\": \"Sesi kedaluwarsa\", \"error_code\": \"TOKEN_EXPIRED\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}"
+                  },
+                  {
+                    "name": "TOKEN_INVALID",
+                    "responseId": "960000404",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": "",
+                    "data": "{\"meta\": {\"code\": 401, \"message\": \"Token tidak sah\", \"error_code\": \"TOKEN_INVALID\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}"
                   }
                 ],
                 "requestBody": {
@@ -7278,7 +7509,7 @@
                   "additionalContentTypes": [],
                   "oasExtensions": ""
                 },
-                "description": "Ticket selection.\n\nGET yang mengubah state: pemuatan pertama meng-claim booking GRANTED → SELECTING, hanya sebelum tenggat (setelahnya booking tetap GRANTED dan menjadi LAPSED). Booking yang sudah selesai (LAPSED, EXPIRED, CONFIRMED, ABANDONED) atau grant untuk event lain → 401 GRANT_TOKEN_INVALID. Cache-Control: no-store.\n\nv2.14: account {email, nik_masked} untuk customer login (null untuk tamu), untuk mengisi form lebih dulu.",
+                "description": "Ticket selection.\n\nGET yang mengubah state: pemuatan pertama meng-claim booking GRANTED → SELECTING, hanya sebelum tenggat (setelahnya booking tetap GRANTED dan menjadi LAPSED). Booking yang sudah selesai (LAPSED, EXPIRED, CONFIRMED, ABANDONED) atau grant untuk event lain → 401 GRANT_TOKEN_INVALID. Cache-Control: no-store.\n\nv2.14: account {email, nik_masked} untuk customer login (null untuk tamu), untuk mengisi form lebih dulu.\n\nv2.20: Authorization: Bearer wajib bila grant milik akun login (401 UNAUTHORIZED / TOKEN_EXPIRED / TOKEN_INVALID).",
                 "tags": [
                   "Booking"
                 ],
@@ -7341,6 +7572,18 @@
                         "type": "string"
                       },
                       "id": "DevIdHdr01"
+                    },
+                    {
+                      "id": "Auth000405",
+                      "name": "Authorization",
+                      "required": false,
+                      "enable": true,
+                      "description": "Bearer access token akun. WAJIB bila grant milik akun login (harus akun yang sama dengan grant); tamu tidak mengirimnya. Hilang/akun lain → 401 UNAUTHORIZED, kedaluwarsa → 401 TOKEN_EXPIRED, tidak sah → 401 TOKEN_INVALID",
+                      "example": "Bearer eyJhbGciOi…",
+                      "type": "string",
+                      "schema": {
+                        "type": "string"
+                      }
                     }
                   ]
                 },
@@ -8987,6 +9230,201 @@
                     "oasExtensions": "",
                     "name": "INTERNAL_ERROR",
                     "mediaType": "application/json"
+                  },
+                  {
+                    "id": "960000406",
+                    "code": "401",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 401
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Authorization diperlukan untuk grant milik akun login"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "UNAUTHORIZED",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "Unauthorized",
+                    "contentType": "json",
+                    "oasExtensions": "",
+                    "name": "UNAUTHORIZED",
+                    "mediaType": "application/json"
+                  },
+                  {
+                    "id": "960000407",
+                    "code": "401",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 401
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Sesi kedaluwarsa"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "TOKEN_EXPIRED",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "Unauthorized",
+                    "contentType": "json",
+                    "oasExtensions": "",
+                    "name": "TOKEN_EXPIRED",
+                    "mediaType": "application/json"
+                  },
+                  {
+                    "id": "960000408",
+                    "code": "401",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 401
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Token tidak sah"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "TOKEN_INVALID",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "Unauthorized",
+                    "contentType": "json",
+                    "oasExtensions": "",
+                    "name": "TOKEN_INVALID",
+                    "mediaType": "application/json"
                   }
                 ],
                 "responseExamples": [
@@ -9149,6 +9587,30 @@
                     "oasKey": "",
                     "oasExtensions": "",
                     "data": "{\"meta\": {\"code\": 503, \"message\": \"Layanan sedang sibuk, coba lagi\", \"error_code\": \"INTERNAL_ERROR\", \"server_time\": \"2026-10-23T13:15:00.412Z\"}, \"data\": {}}"
+                  },
+                  {
+                    "name": "UNAUTHORIZED",
+                    "responseId": "960000406",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": "",
+                    "data": "{\"meta\": {\"code\": 401, \"message\": \"Authorization diperlukan untuk grant milik akun login\", \"error_code\": \"UNAUTHORIZED\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}"
+                  },
+                  {
+                    "name": "TOKEN_EXPIRED",
+                    "responseId": "960000407",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": "",
+                    "data": "{\"meta\": {\"code\": 401, \"message\": \"Sesi kedaluwarsa\", \"error_code\": \"TOKEN_EXPIRED\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}"
+                  },
+                  {
+                    "name": "TOKEN_INVALID",
+                    "responseId": "960000408",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": "",
+                    "data": "{\"meta\": {\"code\": 401, \"message\": \"Token tidak sah\", \"error_code\": \"TOKEN_INVALID\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}"
                   }
                 ],
                 "requestBody": {
@@ -9179,9 +9641,7 @@
                             },
                             "nik": {
                               "type": "string",
-                              "minLength": 16,
-                              "maxLength": 16,
-                              "description": "NIK yang diketik (16 digit). Tepat satu dari nik, saved_nik_id, use_account_nik per kursi"
+                              "description": "NIK yang diketik, dinormalisasi seperti POST /nik/validate: semua karakter selain angka dibuang (spasi, titik, tanda hubung), lalu wajib tepat 16 digit; selain itu 400 VALIDATION_ERROR + data.index. Tepat satu dari nik, saved_nik_id, use_account_nik per kursi"
                             },
                             "saved_nik_id": {
                               "type": "string",
@@ -9228,7 +9688,7 @@
                     }
                   ]
                 },
-                "description": "Create booking.\n\nv2.14: tickets[].holder_email dihapus; seluruh e-tiket dikirim ke contact_email.\n\nv2.16: tiap kursi membawa tepat satu dari nik, saved_nik_id, use_account_nik: true.\n\nv2.17: terms_version dihapus (persetujuan dicatat saat registrasi).\n\nv2.18: respons 201 sama dengan GET /bookings/{id} PENDING_PAYMENT (tanpa subtotal, service_fee, redirect_url); 200 untuk submit ulang; daftar error lengkap (api-contracts §4.3).\n\nv2.19: 409 TICKETS_UNAVAILABLE = habis total (queue_state FULL_BOOKED / CLOSED); 409 INSUFFICIENT_STOCK = habis sebagian.",
+                "description": "Create booking.\n\nv2.14: tickets[].holder_email dihapus; seluruh e-tiket dikirim ke contact_email.\n\nv2.16: tiap kursi membawa tepat satu dari nik, saved_nik_id, use_account_nik: true.\n\nv2.17: terms_version dihapus (persetujuan dicatat saat registrasi).\n\nv2.18: respons 201 sama dengan GET /bookings/{id} PENDING_PAYMENT (tanpa subtotal, service_fee, redirect_url); 200 untuk submit ulang; daftar error lengkap (api-contracts §4.3).\n\nv2.19: 409 TICKETS_UNAVAILABLE = habis total (queue_state FULL_BOOKED / CLOSED); 409 INSUFFICIENT_STOCK = habis sebagian.\n\nv2.20: Authorization: Bearer wajib bila grant milik akun login (401 UNAUTHORIZED / TOKEN_EXPIRED / TOKEN_INVALID).\n\nv2.21: (1) nik dinormalisasi seperti POST /nik/validate (hanya angka, lalu 16 digit). (2) Status booking diperiksa sebelum isi body dan verifikasi NIK: submit ulang pada booking HELD atau lebih jauh selalu 200, juga saat body berubah atau nik-verify gangguan.",
                 "tags": [
                   "Booking"
                 ],
@@ -9304,6 +9764,18 @@
                         "type": "string"
                       },
                       "id": "DevIdHdr02"
+                    },
+                    {
+                      "id": "Auth000409",
+                      "name": "Authorization",
+                      "required": false,
+                      "enable": true,
+                      "description": "Bearer access token akun. WAJIB bila grant milik akun login (harus akun yang sama dengan grant); tamu tidak mengirimnya. Hilang/akun lain → 401 UNAUTHORIZED, kedaluwarsa → 401 TOKEN_EXPIRED, tidak sah → 401 TOKEN_INVALID",
+                      "example": "Bearer eyJhbGciOi…",
+                      "type": "string",
+                      "schema": {
+                        "type": "string"
+                      }
                     }
                   ]
                 },
@@ -9845,6 +10317,201 @@
                     "oasExtensions": "",
                     "name": "INTERNAL_ERROR",
                     "mediaType": "application/json"
+                  },
+                  {
+                    "id": "960000410",
+                    "code": "401",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 401
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Authorization diperlukan untuk grant milik akun login"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "UNAUTHORIZED",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "Unauthorized",
+                    "contentType": "json",
+                    "oasExtensions": "",
+                    "name": "UNAUTHORIZED",
+                    "mediaType": "application/json"
+                  },
+                  {
+                    "id": "960000411",
+                    "code": "401",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 401
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Sesi kedaluwarsa"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "TOKEN_EXPIRED",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "Unauthorized",
+                    "contentType": "json",
+                    "oasExtensions": "",
+                    "name": "TOKEN_EXPIRED",
+                    "mediaType": "application/json"
+                  },
+                  {
+                    "id": "960000412",
+                    "code": "401",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 401
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Token tidak sah"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "TOKEN_INVALID",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "Unauthorized",
+                    "contentType": "json",
+                    "oasExtensions": "",
+                    "name": "TOKEN_INVALID",
+                    "mediaType": "application/json"
                   }
                 ],
                 "responseExamples": [
@@ -9911,6 +10578,30 @@
                     "oasKey": "",
                     "oasExtensions": "",
                     "data": "{\"meta\": {\"code\": 503, \"message\": \"Layanan sedang sibuk, coba lagi\", \"error_code\": \"INTERNAL_ERROR\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}"
+                  },
+                  {
+                    "name": "UNAUTHORIZED",
+                    "responseId": "960000410",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": "",
+                    "data": "{\"meta\": {\"code\": 401, \"message\": \"Authorization diperlukan untuk grant milik akun login\", \"error_code\": \"UNAUTHORIZED\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}"
+                  },
+                  {
+                    "name": "TOKEN_EXPIRED",
+                    "responseId": "960000411",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": "",
+                    "data": "{\"meta\": {\"code\": 401, \"message\": \"Sesi kedaluwarsa\", \"error_code\": \"TOKEN_EXPIRED\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}"
+                  },
+                  {
+                    "name": "TOKEN_INVALID",
+                    "responseId": "960000412",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": "",
+                    "data": "{\"meta\": {\"code\": 401, \"message\": \"Token tidak sah\", \"error_code\": \"TOKEN_INVALID\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}"
                   }
                 ],
                 "requestBody": {
@@ -9920,7 +10611,7 @@
                   "additionalContentTypes": [],
                   "oasExtensions": ""
                 },
-                "description": "Booking detail.\n\nSaat PAID, tickets[].eticket_url sudah membawa ?t= (token e-tiket), sehingga Success Page dapat membuka e-tiket tanpa akun dan tanpa email (NFR-10). Menggantikan GET /bookings/{id}/tickets (dihapus, ADR-006 §8.8).\n\nv2.13: summary.price_per_ticket dan paid_at dihapus; payment_method masuk skema. status: SELECTING / PENDING_PAYMENT / PAID / EXPIRED. 404 NOT_FOUND bila booking_id bukan milik grant ini (tidak dibedakan dari tidak ada).",
+                "description": "Booking detail.\n\nSaat PAID, tickets[].eticket_url sudah membawa ?t= (token e-tiket), sehingga Success Page dapat membuka e-tiket tanpa akun dan tanpa email (NFR-10). Menggantikan GET /bookings/{id}/tickets (dihapus, ADR-006 §8.8).\n\nv2.13: summary.price_per_ticket dan paid_at dihapus; payment_method masuk skema. status: SELECTING / PENDING_PAYMENT / PAID / EXPIRED. 404 NOT_FOUND bila booking_id bukan milik grant ini (tidak dibedakan dari tidak ada).\n\nv2.20: Authorization: Bearer wajib bila grant milik akun login (401 UNAUTHORIZED / TOKEN_EXPIRED / TOKEN_INVALID).",
                 "tags": [
                   "Booking"
                 ],
@@ -10020,6 +10711,18 @@
                         "type": "string"
                       },
                       "id": "DevIdHdr04"
+                    },
+                    {
+                      "id": "Auth000413",
+                      "name": "Authorization",
+                      "required": false,
+                      "enable": true,
+                      "description": "Bearer access token akun. WAJIB bila grant milik akun login (harus akun yang sama dengan grant); tamu tidak mengirimnya. Hilang/akun lain → 401 UNAUTHORIZED, kedaluwarsa → 401 TOKEN_EXPIRED, tidak sah → 401 TOKEN_INVALID",
+                      "example": "Bearer eyJhbGciOi…",
+                      "type": "string",
+                      "schema": {
+                        "type": "string"
+                      }
                     }
                   ]
                 },
@@ -10326,6 +11029,201 @@
                         "data"
                       ]
                     }
+                  },
+                  {
+                    "id": "960000414",
+                    "code": "401",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 401
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Authorization diperlukan untuk grant milik akun login"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "UNAUTHORIZED",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "Unauthorized",
+                    "contentType": "json",
+                    "oasExtensions": "",
+                    "name": "UNAUTHORIZED",
+                    "mediaType": "application/json"
+                  },
+                  {
+                    "id": "960000415",
+                    "code": "401",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 401
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Sesi kedaluwarsa"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "TOKEN_EXPIRED",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "Unauthorized",
+                    "contentType": "json",
+                    "oasExtensions": "",
+                    "name": "TOKEN_EXPIRED",
+                    "mediaType": "application/json"
+                  },
+                  {
+                    "id": "960000416",
+                    "code": "401",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 401
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Token tidak sah"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "TOKEN_INVALID",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "Unauthorized",
+                    "contentType": "json",
+                    "oasExtensions": "",
+                    "name": "TOKEN_INVALID",
+                    "mediaType": "application/json"
                   }
                 ],
                 "responseExamples": [
@@ -10368,6 +11266,30 @@
                     "oasKey": "",
                     "oasExtensions": "",
                     "data": "{\"meta\":{\"code\":503,\"message\":\"Verifikasi NIK sedang gangguan, coba lagi\",\"error_code\":\"DUKCAPIL_UNAVAILABLE\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{}}"
+                  },
+                  {
+                    "name": "UNAUTHORIZED",
+                    "responseId": "960000414",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": "",
+                    "data": "{\"meta\": {\"code\": 401, \"message\": \"Authorization diperlukan untuk grant milik akun login\", \"error_code\": \"UNAUTHORIZED\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}"
+                  },
+                  {
+                    "name": "TOKEN_EXPIRED",
+                    "responseId": "960000415",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": "",
+                    "data": "{\"meta\": {\"code\": 401, \"message\": \"Sesi kedaluwarsa\", \"error_code\": \"TOKEN_EXPIRED\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}"
+                  },
+                  {
+                    "name": "TOKEN_INVALID",
+                    "responseId": "960000416",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": "",
+                    "data": "{\"meta\": {\"code\": 401, \"message\": \"Token tidak sah\", \"error_code\": \"TOKEN_INVALID\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}"
                   }
                 ],
                 "requestBody": {
@@ -10381,8 +11303,8 @@
                     "properties": {
                       "nik": {
                         "type": "string",
-                        "minLength": 16,
-                        "maxLength": 16
+                        "description": "NIK, dinormalisasi seperti POST /nik/validate: semua karakter selain angka dibuang (spasi, titik, tanda hubung), lalu wajib tepat 16 digit; selain itu 400 VALIDATION_ERROR (\"NIK must be exactly 16 digits\")",
+                        "example": "3171 0000 0000 0022"
                       }
                     },
                     "x-apidog-orders": [
@@ -10401,7 +11323,7 @@
                     }
                   ]
                 },
-                "description": "Validate NIK.",
+                "description": "Validate NIK.\n\nv2.20: Authorization: Bearer wajib bila grant milik akun login (401 UNAUTHORIZED / TOKEN_EXPIRED / TOKEN_INVALID).\n\nv2.21: nik tidak lagi dibatasi 16 karakter di skema; server menormalisasi (hanya angka) lalu mewajibkan 16 digit.\n\nv2.21: field name dihapus dari respons (FR-15a: nama tidak pernah dikembalikan).",
                 "tags": [
                   "NIK"
                 ],
@@ -10514,6 +11436,18 @@
                         "type": "string"
                       },
                       "id": "DevIdHdr05"
+                    },
+                    {
+                      "id": "Auth000417",
+                      "name": "Authorization",
+                      "required": false,
+                      "enable": true,
+                      "description": "Bearer access token akun. WAJIB bila grant milik akun login (harus akun yang sama dengan grant); tamu tidak mengirimnya. Hilang/akun lain → 401 UNAUTHORIZED, kedaluwarsa → 401 TOKEN_EXPIRED, tidak sah → 401 TOKEN_INVALID",
+                      "example": "Bearer eyJhbGciOi…",
+                      "type": "string",
+                      "schema": {
+                        "type": "string"
+                      }
                     }
                   ]
                 },
@@ -10659,6 +11593,201 @@
                     "contentType": "json",
                     "mediaType": "application/json",
                     "oasExtensions": ""
+                  },
+                  {
+                    "id": "960000418",
+                    "code": "401",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 401
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Authorization diperlukan untuk grant milik akun login"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "UNAUTHORIZED",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "Unauthorized",
+                    "contentType": "json",
+                    "oasExtensions": "",
+                    "name": "UNAUTHORIZED",
+                    "mediaType": "application/json"
+                  },
+                  {
+                    "id": "960000419",
+                    "code": "401",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 401
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Sesi kedaluwarsa"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "TOKEN_EXPIRED",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "Unauthorized",
+                    "contentType": "json",
+                    "oasExtensions": "",
+                    "name": "TOKEN_EXPIRED",
+                    "mediaType": "application/json"
+                  },
+                  {
+                    "id": "960000420",
+                    "code": "401",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 401
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Token tidak sah"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "TOKEN_INVALID",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "Unauthorized",
+                    "contentType": "json",
+                    "oasExtensions": "",
+                    "name": "TOKEN_INVALID",
+                    "mediaType": "application/json"
                   }
                 ],
                 "responseExamples": [
@@ -10669,6 +11798,30 @@
                     "description": "",
                     "oasKey": "",
                     "oasExtensions": ""
+                  },
+                  {
+                    "name": "UNAUTHORIZED",
+                    "responseId": "960000418",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": "",
+                    "data": "{\"meta\": {\"code\": 401, \"message\": \"Authorization diperlukan untuk grant milik akun login\", \"error_code\": \"UNAUTHORIZED\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}"
+                  },
+                  {
+                    "name": "TOKEN_EXPIRED",
+                    "responseId": "960000419",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": "",
+                    "data": "{\"meta\": {\"code\": 401, \"message\": \"Sesi kedaluwarsa\", \"error_code\": \"TOKEN_EXPIRED\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}"
+                  },
+                  {
+                    "name": "TOKEN_INVALID",
+                    "responseId": "960000420",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": "",
+                    "data": "{\"meta\": {\"code\": 401, \"message\": \"Token tidak sah\", \"error_code\": \"TOKEN_INVALID\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}"
                   }
                 ],
                 "requestBody": {
@@ -10678,7 +11831,7 @@
                   "additionalContentTypes": [],
                   "oasExtensions": ""
                 },
-                "description": "Payment methods.",
+                "description": "Payment methods.\n\nv2.20: Authorization: Bearer wajib bila grant milik akun login (401 UNAUTHORIZED / TOKEN_EXPIRED / TOKEN_INVALID).",
                 "tags": [
                   "Payment"
                 ],
@@ -10754,6 +11907,18 @@
                         "type": "string"
                       },
                       "id": "DevIdHdr06"
+                    },
+                    {
+                      "id": "Auth000421",
+                      "name": "Authorization",
+                      "required": false,
+                      "enable": true,
+                      "description": "Bearer access token akun. WAJIB bila grant milik akun login (harus akun yang sama dengan grant); tamu tidak mengirimnya. Hilang/akun lain → 401 UNAUTHORIZED, kedaluwarsa → 401 TOKEN_EXPIRED, tidak sah → 401 TOKEN_INVALID",
+                      "example": "Bearer eyJhbGciOi…",
+                      "type": "string",
+                      "schema": {
+                        "type": "string"
+                      }
                     }
                   ]
                 },
@@ -11018,6 +12183,201 @@
                         "data"
                       ]
                     }
+                  },
+                  {
+                    "id": "960000422",
+                    "code": "401",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 401
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Authorization diperlukan untuk grant milik akun login"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "UNAUTHORIZED",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "Unauthorized",
+                    "contentType": "json",
+                    "oasExtensions": "",
+                    "name": "UNAUTHORIZED",
+                    "mediaType": "application/json"
+                  },
+                  {
+                    "id": "960000423",
+                    "code": "401",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 401
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Sesi kedaluwarsa"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "TOKEN_EXPIRED",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "Unauthorized",
+                    "contentType": "json",
+                    "oasExtensions": "",
+                    "name": "TOKEN_EXPIRED",
+                    "mediaType": "application/json"
+                  },
+                  {
+                    "id": "960000424",
+                    "code": "401",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 401
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Token tidak sah"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "TOKEN_INVALID",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "Unauthorized",
+                    "contentType": "json",
+                    "oasExtensions": "",
+                    "name": "TOKEN_INVALID",
+                    "mediaType": "application/json"
                   }
                 ],
                 "responseExamples": [
@@ -11052,6 +12412,30 @@
                     "oasKey": "",
                     "oasExtensions": "",
                     "data": "{\"meta\":{\"code\":503,\"message\":\"Pembayaran sedang gangguan, coba lagi\",\"error_code\":\"PAYMENT_GATEWAY_UNAVAILABLE\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{}}"
+                  },
+                  {
+                    "name": "UNAUTHORIZED",
+                    "responseId": "960000422",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": "",
+                    "data": "{\"meta\": {\"code\": 401, \"message\": \"Authorization diperlukan untuk grant milik akun login\", \"error_code\": \"UNAUTHORIZED\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}"
+                  },
+                  {
+                    "name": "TOKEN_EXPIRED",
+                    "responseId": "960000423",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": "",
+                    "data": "{\"meta\": {\"code\": 401, \"message\": \"Sesi kedaluwarsa\", \"error_code\": \"TOKEN_EXPIRED\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}"
+                  },
+                  {
+                    "name": "TOKEN_INVALID",
+                    "responseId": "960000424",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": "",
+                    "data": "{\"meta\": {\"code\": 401, \"message\": \"Token tidak sah\", \"error_code\": \"TOKEN_INVALID\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}"
                   }
                 ],
                 "requestBody": {
@@ -11106,7 +12490,7 @@
                   "required": true,
                   "additionalContentTypes": []
                 },
-                "description": "Initiate payment.",
+                "description": "Initiate payment.\n\nv2.20: Authorization: Bearer wajib bila grant milik akun login (401 UNAUTHORIZED / TOKEN_EXPIRED / TOKEN_INVALID).",
                 "tags": [
                   "Payment"
                 ],
@@ -11182,6 +12566,18 @@
                         "type": "string"
                       },
                       "id": "DevIdHdr07"
+                    },
+                    {
+                      "id": "Auth000425",
+                      "name": "Authorization",
+                      "required": false,
+                      "enable": true,
+                      "description": "Bearer access token akun. WAJIB bila grant milik akun login (harus akun yang sama dengan grant); tamu tidak mengirimnya. Hilang/akun lain → 401 UNAUTHORIZED, kedaluwarsa → 401 TOKEN_EXPIRED, tidak sah → 401 TOKEN_INVALID",
+                      "example": "Bearer eyJhbGciOi…",
+                      "type": "string",
+                      "schema": {
+                        "type": "string"
+                      }
                     }
                   ]
                 },
@@ -11555,6 +12951,201 @@
                         "data"
                       ]
                     }
+                  },
+                  {
+                    "id": "960000426",
+                    "code": "401",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 401
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Authorization diperlukan untuk grant milik akun login"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "UNAUTHORIZED",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "Unauthorized",
+                    "contentType": "json",
+                    "oasExtensions": "",
+                    "name": "UNAUTHORIZED",
+                    "mediaType": "application/json"
+                  },
+                  {
+                    "id": "960000427",
+                    "code": "401",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 401
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Sesi kedaluwarsa"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "TOKEN_EXPIRED",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "Unauthorized",
+                    "contentType": "json",
+                    "oasExtensions": "",
+                    "name": "TOKEN_EXPIRED",
+                    "mediaType": "application/json"
+                  },
+                  {
+                    "id": "960000428",
+                    "code": "401",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 401
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Token tidak sah"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "TOKEN_INVALID",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "Unauthorized",
+                    "contentType": "json",
+                    "oasExtensions": "",
+                    "name": "TOKEN_INVALID",
+                    "mediaType": "application/json"
                   }
                 ],
                 "responseExamples": [
@@ -11613,6 +13204,30 @@
                     "oasKey": "",
                     "oasExtensions": "",
                     "data": "{\"meta\":{\"code\":503,\"message\":\"Pembayaran sedang gangguan, coba lagi\",\"error_code\":\"PAYMENT_GATEWAY_UNAVAILABLE\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{}}"
+                  },
+                  {
+                    "name": "UNAUTHORIZED",
+                    "responseId": "960000426",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": "",
+                    "data": "{\"meta\": {\"code\": 401, \"message\": \"Authorization diperlukan untuk grant milik akun login\", \"error_code\": \"UNAUTHORIZED\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}"
+                  },
+                  {
+                    "name": "TOKEN_EXPIRED",
+                    "responseId": "960000427",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": "",
+                    "data": "{\"meta\": {\"code\": 401, \"message\": \"Sesi kedaluwarsa\", \"error_code\": \"TOKEN_EXPIRED\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}"
+                  },
+                  {
+                    "name": "TOKEN_INVALID",
+                    "responseId": "960000428",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": "",
+                    "data": "{\"meta\": {\"code\": 401, \"message\": \"Token tidak sah\", \"error_code\": \"TOKEN_INVALID\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}"
                   }
                 ],
                 "requestBody": {
@@ -11622,7 +13237,7 @@
                   "additionalContentTypes": [],
                   "oasExtensions": ""
                 },
-                "description": "Cancel and switch payment.",
+                "description": "Cancel and switch payment.\n\nv2.20: Authorization: Bearer wajib bila grant milik akun login (401 UNAUTHORIZED / TOKEN_EXPIRED / TOKEN_INVALID).",
                 "tags": [
                   "Payment"
                 ],
@@ -11698,6 +13313,18 @@
                         "type": "string"
                       },
                       "id": "DevIdHdr08"
+                    },
+                    {
+                      "id": "Auth000429",
+                      "name": "Authorization",
+                      "required": false,
+                      "enable": true,
+                      "description": "Bearer access token akun. WAJIB bila grant milik akun login (harus akun yang sama dengan grant); tamu tidak mengirimnya. Hilang/akun lain → 401 UNAUTHORIZED, kedaluwarsa → 401 TOKEN_EXPIRED, tidak sah → 401 TOKEN_INVALID",
+                      "example": "Bearer eyJhbGciOi…",
+                      "type": "string",
+                      "schema": {
+                        "type": "string"
+                      }
                     }
                   ]
                 },
@@ -11798,6 +13425,201 @@
                     "contentType": "json",
                     "mediaType": "application/json",
                     "oasExtensions": ""
+                  },
+                  {
+                    "id": "960000430",
+                    "code": "401",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 401
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Authorization diperlukan untuk grant milik akun login"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "UNAUTHORIZED",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "Unauthorized",
+                    "contentType": "json",
+                    "oasExtensions": "",
+                    "name": "UNAUTHORIZED",
+                    "mediaType": "application/json"
+                  },
+                  {
+                    "id": "960000431",
+                    "code": "401",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 401
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Sesi kedaluwarsa"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "TOKEN_EXPIRED",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "Unauthorized",
+                    "contentType": "json",
+                    "oasExtensions": "",
+                    "name": "TOKEN_EXPIRED",
+                    "mediaType": "application/json"
+                  },
+                  {
+                    "id": "960000432",
+                    "code": "401",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 401
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Token tidak sah"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "TOKEN_INVALID",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "Unauthorized",
+                    "contentType": "json",
+                    "oasExtensions": "",
+                    "name": "TOKEN_INVALID",
+                    "mediaType": "application/json"
                   }
                 ],
                 "responseExamples": [
@@ -11824,6 +13646,30 @@
                     "description": "",
                     "oasKey": "failed",
                     "oasExtensions": ""
+                  },
+                  {
+                    "name": "UNAUTHORIZED",
+                    "responseId": "960000430",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": "",
+                    "data": "{\"meta\": {\"code\": 401, \"message\": \"Authorization diperlukan untuk grant milik akun login\", \"error_code\": \"UNAUTHORIZED\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}"
+                  },
+                  {
+                    "name": "TOKEN_EXPIRED",
+                    "responseId": "960000431",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": "",
+                    "data": "{\"meta\": {\"code\": 401, \"message\": \"Sesi kedaluwarsa\", \"error_code\": \"TOKEN_EXPIRED\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}"
+                  },
+                  {
+                    "name": "TOKEN_INVALID",
+                    "responseId": "960000432",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": "",
+                    "data": "{\"meta\": {\"code\": 401, \"message\": \"Token tidak sah\", \"error_code\": \"TOKEN_INVALID\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}"
                   }
                 ],
                 "requestBody": {
@@ -11833,7 +13679,7 @@
                   "additionalContentTypes": [],
                   "oasExtensions": ""
                 },
-                "description": "Payment status.\n\nreason adalah PASSTHROUGH status_message dari penyedia, untuk support — bukan teks tampilan. Kartu kredit tidak dibuka di POC ini, jadi contoh bernuansa kartu menyesatkan.",
+                "description": "Payment status.\n\nreason adalah PASSTHROUGH status_message dari penyedia, untuk support — bukan teks tampilan. Kartu kredit tidak dibuka di POC ini, jadi contoh bernuansa kartu menyesatkan.\n\nv2.20: Authorization: Bearer wajib bila grant milik akun login (401 UNAUTHORIZED / TOKEN_EXPIRED / TOKEN_INVALID).",
                 "tags": [
                   "Payment"
                 ],

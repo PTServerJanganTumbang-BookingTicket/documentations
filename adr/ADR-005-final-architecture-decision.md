@@ -2515,6 +2515,8 @@ memakai cookie/header — dan mengapa perilaku yang sama dipakai **dengan sengaj
 | **Login** | `account_id` | FR-29 opsional |
 | **Anonim** | `queue_token` + `device_id` (di bawah) | FR-29, FR-30 |
 
+
+> ⚠️ **Diubah oleh ADR-006 §8.17** — grant milik akun login wajib disertai `Authorization: Bearer` milik akun yang sama (konjungsi kedua di bawah menjadi wajib, bukan opsional); grant tamu tidak berubah.
 ### Pengikatan device untuk grant anonim
 
 > ⚠️ **Diubah oleh ADR-006 §8.9** — **tanpa rebind.** Baris "Toleransi" dan paragraf "Satu rebind, dan itu sengaja
