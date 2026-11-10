@@ -1,12 +1,17 @@
 # Rusuh Booking Tiket — API Contracts
 
-**Versi**: 2.18.0  
+**Versi**: 2.19.0  
 **Tanggal**: 10 November 2026  
 **Status**: Draft  
 **Base URL**: `https://api.my-rusuh.my.id` (tanpa versi di path untuk saat ini; v2.9). Stream: `https://events.my-rusuh.my.id`  
 **Selaras dengan**: ADR-005 (Keputusan Arsitektur Final — SSE + ECS Fargate), diamandemen ADR-006 (antrian)  
 **Pasangan mesin**: `rusuh-booking-apidog.json` (Apidog) — **sumber kebenaran bentuk respons**. Dokumen ini menjelaskan perilaku dan alasannya; keduanya wajib sinkron. `rusuh-booking-openapi.yaml` diarsipkan (`archive/`) dan tidak dipelihara lagi
 
+> **v2.19** (aditif): `POST /bookings` membedakan **stok habis sebagian** dan **habis total**. Sebagian →
+> `409 INSUFFICIENT_STOCK` (tetap di halaman tiket). Seluruh kategori habis → **`409 TICKETS_UNAVAILABLE`** dengan
+> `data {queue_state, full_booked_at}`: klien menuju halaman "tiket habis" dan memilih teksnya dari `queue_state`.
+> Lihat Appendix C, v2.18 → v2.19.
+>
 > **v2.18** (**breaking kecil**): **§4.3 `POST /bookings` ditulis ulang.** Respons 201 kini **sama dengan
 > `GET /bookings/{id}`** untuk `PENDING_PAYMENT` (`summary {quantity, total}`, `payment_ttl {expires_at, server_time}`,
 > `event.image_url`; **`subtotal`, `service_fee` dan `redirect_url` dihapus**). Submit ulang pada booking yang sudah
@@ -2009,7 +2014,8 @@ mengembalikan **booking yang ada, apa adanya**, apa pun isi body-nya. Mengganti 
 | 401 | `GRANT_TOKEN_INVALID` | tidak ada booking untuk grant ini, atau booking sudah berakhir (`LAPSED`, `EXPIRED`, `ABANDONED`; grant-nya sudah dihapus) | — | berakhir |
 | 409 | `BOOKING_STATUS_INVALID` | halaman tiket belum pernah dibuka (`GRANTED`): belum ada pilihan untuk dikirim | — | `GRANTED` |
 | 409 | `BOOKING_EXPIRED` | 5 menit habis saat booking masih `SELECTING` (sweep belum berjalan) | — | segera `EXPIRED` |
-| 409 | `INSUFFICIENT_STOCK` | stok sebuah kategori tidak cukup | `{category_id, available, requested}` | tetap `SELECTING`, sisa waktu berjalan |
+| 409 | `INSUFFICIENT_STOCK` | **habis sebagian**: stok sebuah kategori yang dipesan tidak cukup, tetapi **masih ada kategori lain** yang tersedia | `{category_id, available, requested}` | tetap `SELECTING`, sisa waktu berjalan |
+| 409 | `TICKETS_UNAVAILABLE` | **habis total**: setiap kategori event ini sudah 0 | `{queue_state, full_booked_at}` | tetap `SELECTING`, sisa waktu berjalan |
 | 409 | `NIK_ALREADY_USED` | NIK sudah memegang kursi untuk event ini (juga bila Redis terlewat dan basis data menolaknya) | `{index}` | tetap `SELECTING` |
 | 503 | `STOCK_UNINITIALIZED` | kunci stok hilang dari Redis: stok **tidak diketahui**, bukan habis | — | tetap `SELECTING` |
 | 503 | `STOCK_NEGATIVE` | guard terakhir menyala; seluruh pengurangan dikembalikan | — | tetap `SELECTING` |
@@ -2022,11 +2028,21 @@ mengembalikan **booking yang ada, apa adanya**, apa pun isi body-nya. Mengganti 
 > menghasilkan `VALIDATION_ERROR` yang sama, sehingga tidak membocorkan id milik akun lain. Pesan kesalahan tidak pernah
 > memuat NIK, hanya `index`.
 >
+> **Habis sebagian vs habis total.** Hanya bila hold ditolak karena stok, server membaca stok **seluruh kategori event**
+> (satu `MGET`): bila semuanya ≤ 0 jawabannya `TICKETS_UNAVAILABLE`, selain itu `INSUFFICIENT_STOCK` untuk kategori
+> pertama yang kurang pada pesanan. Klien menangani keduanya berbeda:
+>
+> | Kode | Klien |
+> |---|---|
+> | `INSUFFICIENT_STOCK` | tetap di halaman tiket; tandai kategori `data.category_id`; sarankan kategori lain (muat ulang `GET /events/{id}/tickets`) |
+> | `TICKETS_UNAVAILABLE` | pindah ke halaman "tiket habis". `data.queue_state` `FULL_BOOKED` = semua kursi sedang di-hold dan **dapat tersedia lagi** ("habis untuk sementara", pesanan tetap `SELECTING` dengan sisa waktunya); `CLOSED` = penjualan berakhir, tidak akan tersedia lagi |
+>
+> `data` sama dengan 409 `FULL_BOOKED` pada join (§3.1), sehingga halaman "tiket habis" yang sama dapat dipakai.
+>
 > **Kode yang tidak muncul di endpoint ini:** `QTY_INVALID` dan `NIK_COUNT_MISMATCH` (satu kursi = satu tiket; hanya
-> penjaga di skrip Lua), `TICKETS_UNAVAILABLE` (kategori habis = `INSUFFICIENT_STOCK` dengan `available: 0`),
-> `NIK_UNVERIFIED` dan `NIK_VALIDATION_FAILED` (verifikasi dilakukan server lewat nik-verify, bukan dituntut dari klien).
+> penjaga di skrip Lua), `NIK_UNVERIFIED` dan `NIK_VALIDATION_FAILED` (verifikasi dilakukan server lewat nik-verify, bukan dituntut dari klien).
 
-**Contoh** — NIK kursi kedua ditolak, dan stok VIP kurang:
+**Contoh** — NIK kursi kedua ditolak; stok VIP kurang (sebagian); semua kategori habis (total):
 ```json
 { "meta": { "code": 400, "message": "NIK pada kursi 2 tidak terdaftar di Dukcapil", "error_code": "NIK_NOT_FOUND", "server_time": "2026-10-23T13:15:00.412Z" },
   "data": { "index": 1 } }
@@ -2034,6 +2050,10 @@ mengembalikan **booking yang ada, apa adanya**, apa pun isi body-nya. Mengganti 
 ```json
 { "meta": { "code": 409, "message": "Stok VIP tidak mencukupi", "error_code": "INSUFFICIENT_STOCK", "server_time": "2026-10-23T13:15:00.412Z" },
   "data": { "category_id": "cat_vip", "available": 1, "requested": 2 } }
+```
+```json
+{ "meta": { "code": 409, "message": "Tiket habis untuk sementara", "error_code": "TICKETS_UNAVAILABLE", "server_time": "2026-10-23T13:15:00.412Z" },
+  "data": { "queue_state": "FULL_BOOKED", "full_booked_at": "2026-10-23T13:14:10Z" } }
 ```
 
 **Requirement Coverage**: FR-13, FR-14, FR-15, FR-16, NFR-04 (atomic stock), BR-01, BR-02
@@ -2924,7 +2944,7 @@ Bagian per endpoint menulis error yang khas. Error umum berikut juga berlaku dan
 | `GET /events/{event_id}/queue/me` | 401 `UNAUTHORIZED` (tidak ada kredensial, atau Bearer tanpa `acct` untuk event ini) |
 | `GET /events/{event_id}/tickets` | 400 `DEVICE_ID_REQUIRED` · 401 `GRANT_TOKEN_MISSING` / `GRANT_TOKEN_INVALID` / `DEVICE_MISMATCH` · 404 `NOT_FOUND` · 503 `STOCK_UNINITIALIZED` / `INTERNAL_ERROR` (§4.1) |
 | `POST /nik/validate` | 400 `VALIDATION_ERROR` · 429 `TOO_MANY_REQUESTS` · 503 `DUKCAPIL_UNAVAILABLE` |
-| `POST /bookings` | lengkap di §4.3: 400 `VALIDATION_ERROR` / `QTY_EXCEEDED` / `NIK_NOT_FOUND` / `NIK_INACTIVE` / `DEVICE_ID_REQUIRED` · 401 · 409 `INSUFFICIENT_STOCK` / `NIK_ALREADY_USED` / `BOOKING_STATUS_INVALID` / `BOOKING_EXPIRED` · 429 · 503 `DUKCAPIL_UNAVAILABLE` / `STOCK_UNINITIALIZED` / `STOCK_NEGATIVE` / `INTERNAL_ERROR` |
+| `POST /bookings` | lengkap di §4.3: 400 `VALIDATION_ERROR` / `QTY_EXCEEDED` / `NIK_NOT_FOUND` / `NIK_INACTIVE` / `DEVICE_ID_REQUIRED` · 401 · 409 `INSUFFICIENT_STOCK` / `TICKETS_UNAVAILABLE` / `NIK_ALREADY_USED` / `BOOKING_STATUS_INVALID` / `BOOKING_EXPIRED` · 429 · 503 `DUKCAPIL_UNAVAILABLE` / `STOCK_UNINITIALIZED` / `STOCK_NEGATIVE` / `INTERNAL_ERROR` |
 | `GET /bookings/{booking_id}` | 400 `DEVICE_ID_REQUIRED` · 404 `NOT_FOUND` · 503 `INTERNAL_ERROR` (§4.4) |
 | `GET /tickets/{ticket_id}/eticket` | 401 `ETICKET_TOKEN_INVALID` · 404 `NOT_FOUND` |
 | semua endpoint ber-grant (§4, §5) | 400 `DEVICE_ID_REQUIRED` · 401 `GRANT_TOKEN_MISSING` / `GRANT_TOKEN_INVALID` / `DEVICE_MISMATCH` |
@@ -3062,7 +3082,7 @@ Legenda: ✅ terpenuhi di kontrak · ⚙️ di luar permukaan API (backend atau 
 | `STOCK_UNINITIALIZED` | **503** — kunci stok hilang dari Redis (flush/failover). Bukan "habis": stok tidak diketahui |
 | `STOCK_NEGATIVE` | **503** — guard terakhir menyala; seluruh pengurangan dikembalikan |
 | `INSUFFICIENT_STOCK` | Stok tiket tidak mencukupi |
-| `TICKETS_UNAVAILABLE` | Tiket sudah habis |
+| `TICKETS_UNAVAILABLE` | **409** — habis total: setiap kategori event sudah 0 (`POST /bookings`, §4.3). `data {queue_state, full_booked_at}`; `queue_state` `FULL_BOOKED` = dapat tersedia lagi, `CLOSED` = penjualan berakhir. Habis sebagian: `INSUFFICIENT_STOCK` |
 | `PAYMENT_ALREADY_INITIATED` | Charge sudah berjalan; respons sebelumnya diputar ulang |
 | `BANK_NOT_SUPPORTED` | Bank di luar bca/bni/bri/cimb |
 | `MAX_ATTEMPTS_EXCEEDED` | Melewati batas percobaan pembayaran per booking |
@@ -3468,3 +3488,9 @@ Penyelarasan dengan ADR-005. Yang memutus kompatibilitas ditandai **BREAKING**.
 | 107 | §4.3: **200** untuk submit ulang pada booking yang sudah `HELD` atau lebih jauh (booking yang ada, tanpa hold kedua) | Klik ganda tidak boleh gagal dengan `NIK_ALREADY_USED` atas NIK sendiri |
 | 108 | §4.3: tabel error lengkap: `error_code`, `data` (`index`, `{category_id, available, requested}`, `retry_after`) dan status booking sesudahnya; pesan tidak memuat NIK | Contoh lama tanpa `error_code`, memuat NIK mentah, stok tanpa `category_id` |
 | 109 | §4.3 dan Appendix A: `BOOKING_EXPIRED` (409) hanya untuk `SELECTING` yang lewat tenggat; booking yang sudah berakhir menjawab `401 GRANT_TOKEN_INVALID` (selaras §4.1); 429 dari verifikasi NIK diteruskan dengan `retry_after`; konflik `nik_claims` menjawab `409 NIK_ALREADY_USED`; `NIK_UNVERIFIED`, `QTY_INVALID` tidak dipakai | Satu jawaban per keadaan; klien tidak perlu dua jalur untuk kasus yang sama |
+
+### v2.18 → v2.19
+
+| # | Perubahan | Alasan |
+|---|---|---|
+| 110 | §4.3: **`409 TICKETS_UNAVAILABLE`** (habis total, `data {queue_state, full_booked_at}`) dibedakan dari `409 INSUFFICIENT_STOCK` (habis sebagian); server membaca stok seluruh kategori hanya saat hold ditolak karena stok. Appendix A: `TICKETS_UNAVAILABLE` dipakai (sebelumnya tidak dipakai) | Klien menuju halaman berbeda: tetap di halaman tiket untuk sebagian, halaman "tiket habis" untuk total; `queue_state` membedakan "dapat tersedia lagi" dari "penjualan berakhir" |
