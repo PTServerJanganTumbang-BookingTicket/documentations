@@ -1,7 +1,7 @@
 # Rusuh Booking Tiket — API Contracts
 
 **Versi**: 2.18.0  
-**Tanggal**: 9 November 2026  
+**Tanggal**: 10 November 2026  
 **Status**: Draft  
 **Base URL**: `https://api.my-rusuh.my.id` (tanpa versi di path untuk saat ini; v2.9). Stream: `https://events.my-rusuh.my.id`  
 **Selaras dengan**: ADR-005 (Keputusan Arsitektur Final — SSE + ECS Fargate), diamandemen ADR-006 (antrian)  
@@ -35,6 +35,13 @@
 > `tickets[].price`) dan `paid_at` **dihapus** dari contoh Paid (tidak ada kolomnya); `payment_method` masuk skema.
 > Selebihnya mendokumentasikan perilaku: daftar `status` §4.4, error 400/401/503 §4.1, aturan `max_per_order`,
 > kredensial saat `EXPIRED`/`LAPSED` (§3.3). Lihat Appendix C, v2.12 → v2.13.
+>
+> **v2.12.1 (koreksi):** field `name` **dihapus dari seluruh permukaan API** — request §1.5
+> `POST /auth/register` dan respons §4.2 `POST /nik/validate`. Keduanya adalah sisa versi
+> sebelum FR-15a dipersempit menjadi "NIK saja", dan §4.2 bahkan bertentangan dengan
+> catatannya sendiri yang berbunyi "respons **tidak pernah** memuat nama". §1.6
+> `POST /accounts/me/saved-niks` sudah benar sejak awal (`nik` + `label` saja) dan menjadi
+> bentuk acuannya. `rusuh-booking-apidog.json` disinkronkan pada perubahan yang sama.
 >
 > **v2.12 (bentuk event stream seragam, ADR-006 §4.2):** setiap event bernama membawa `state` dan `serverTime`; `stale.reason` diganti `message` (teks siap tampil; **breaking** bagi klien yang membaca `reason`, field itu hanya diagnostik); `sold-out` dan `reconnect` menambah `state`, `message`, `serverTime` (`reconnect` tidak lagi `data: {}`). Lihat Appendix C butir 92.
 >
@@ -443,10 +450,15 @@ Buat akun baru dengan email dan NIK.
 ```json
 {
   "email": "alex@example.com",
-  "nik": "0000000000000000",
-  "name": "ALEX"
+  "nik": "3171xxxxxxxxxx22",
+  "consent": { "accepted": true, "policy_version": "2026-10-01" }
 }
 ```
+
+> **Tidak ada field `name`.** Dukcapil memvalidasi **NIK saja** — nama tidak dikumpulkan di
+> titik mana pun (FR-15a, `requirements.md` §12). Sampai v2.12.0 contoh di sini masih memuat
+> `"name": "ALEX"`, sisa versi sebelum FR-15a dipersempit, dan contoh itu juga mendahului
+> `consent` yang kini wajib.
 
 **Response** (200):
 ```json
@@ -461,17 +473,9 @@ Buat akun baru dengan email dan NIK.
 }
 ```
 
-**Request** (lengkap):
-```json
-{
-  "email": "alex@example.com",
-  "nik": "3171xxxxxxxxxx22",
-  "consent": { "accepted": true, "policy_version": "2026-10-01" }
-}
-```
-
 | Field | Wajib | Catatan |
 |---|---|---|
+| `email` | ✅ | Tujuan tautan verifikasi (§1.7). Unik per akun, dicocokkan case-insensitive |
 | `nik` | ✅ | **NIK_Terdaftar** — 16 digit, diverifikasi Dukcapil saat registrasi, terikat permanen ke akun |
 | `consent.accepted` | ✅ | Persetujuan pemrosesan NIK pihak ketiga. Checkbox **tidak boleh pre-checked** |
 | `consent.policy_version` | ✅ | Versi kebijakan privasi yang ditampilkan saat itu |
@@ -1671,8 +1675,8 @@ X-Device-Id: {device_id}               # wajib bila customer TIDAK login
   "data": {
     "nik": "3171xxxxxxxxxx22",
     "valid": true,
-    "name": "JOHN DOE",
-    "status": "ACTIVE"
+    "status": "ACTIVE",
+    "source": "registered"
   }
 }
 ```
@@ -3287,6 +3291,22 @@ Penyelarasan dengan ADR-005. Yang memutus kompatibilitas ditandai **BREAKING**.
 | 86 | §3.1 FR-05: join menunggu grant bagi **setiap** pendatang yang nomornya muat di tempat kosong (`ticket_no ≤ now_serving + min(free_slots, JOIN_DIRECT_MAX)`), bukan hanya `now_serving + 1` (ADR-006 §8.11) | Batch pertama saat penjualan dibuka langsung ke Detail Ticket tanpa melihat ruang tunggu sekejap |
 | 87 | §2.1: `granted: true` juga bisa menjadi jawaban untuk `JOIN_QUEUE`; klien merutekan berdasarkan respons | Halaman utama bisa masih `OPEN` saat ada tempat kosong (mis. tepat saat dibuka) |
 | 88 | admission-ctl berhenti → join tidak menunggu (`free_slots` lebih tua dari 2 detik) | Tidak menahan setiap pendatang 1 detik saat antrian memang beku. Bentuk respons tidak berubah |
+
+### v2.12 → v2.12.1
+
+| # | Perubahan | Alasan |
+|---|---|---|
+| 93 | §1.5 `POST /auth/register`: field `name` **dihapus** dari contoh request; contoh duplikat "(lengkap)" digabung menjadi satu; tabel field menambah baris `email` | Satu keputusan, tiga tempat yang tidak ikut: FR-15a dan `requirements.md` §12 menyatakan Dukcapil memvalidasi **NIK saja** dan nama **tidak dikumpulkan di titik mana pun**, tetapi §1.5 masih memuat `"name": "ALEX"`. Contoh itu juga mendahului `consent` yang kini wajib, sehingga ia salah dua kali — dan karena ada dua contoh request untuk satu endpoint, yang stale adalah yang dibaca lebih dulu. Tabel field tidak pernah memuat `name`, jadi hanya contohnya yang menyimpang; `email` ditambahkan karena ia wajib tetapi tidak pernah terdaftar |
+| 94 | §4.2 `POST /nik/validate`: field `name` **dihapus** dari respons valid; contoh memakai `source` | Respons memuat `"name": "JOHN DOE"` sementara catatan ~35 baris di bawahnya berbunyi "respons **tidak pernah** memuat nama (FR-15a)". Kontradiksi di dalam satu bagian. `status` **tetap**: keputusan FR-15a mengatur apa yang **dikirim** ke Dukcapil, dan `NIK_INACTIVE` adalah kode alasan yang terdokumentasi — status NIK adalah hasil validasi, bukan PII yang dikumpulkan |
+
+> **Apidog disinkronkan pada perubahan yang sama**: `properties.name` dan entri
+> `x-apidog-orders` dihapus dari kedua skema, beserta contohnya. Dua belas properti bernama
+> `name` yang **sah** tidak disentuh — `event.name`, `ticket_categories[].name`,
+> `methods[].name`, `banks[].name`. Berkas itu adalah **ekspor** dari proyek Apidog
+> (`projectSetting.id: 1406808`), jadi perubahan yang sama harus dibuat di proyeknya;
+> tanpa itu ekspor berikutnya mengembalikan `name`.
+
+---
 
 ### v2.11 → v2.12
 

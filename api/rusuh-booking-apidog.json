@@ -1485,9 +1485,6 @@
                         "minLength": 16,
                         "maxLength": 16
                       },
-                      "name": {
-                        "type": "string"
-                      },
                       "consent": {
                         "type": "object",
                         "required": [
@@ -1511,7 +1508,6 @@
                     "x-apidog-orders": [
                       "email",
                       "nik",
-                      "name",
                       "consent"
                     ]
                   },
@@ -1521,7 +1517,7 @@
                   "additionalContentTypes": [],
                   "examples": [
                     {
-                      "value": "{\"email\":\"alex@example.com\",\"nik\":\"3171xxxxxxxxxx22\",\"name\":\"ALEX\",\"consent\":{\"accepted\":true,\"policy_version\":\"2026-10-01\"}}",
+                      "value": "{\"email\":\"alex@example.com\",\"nik\":\"3171xxxxxxxxxx22\",\"consent\":{\"accepted\":true,\"policy_version\":\"2026-10-01\"}}",
                       "mediaType": "application/json",
                       "description": ""
                     }
@@ -9782,10 +9778,6 @@
                               "type": "boolean",
                               "example": true
                             },
-                            "name": {
-                              "type": "string",
-                              "example": "JOHN DOE"
-                            },
                             "status": {
                               "type": "string",
                               "example": "ACTIVE"
@@ -9798,7 +9790,6 @@
                           "x-apidog-orders": [
                             "nik",
                             "valid",
-                            "name",
                             "status",
                             "source"
                           ]
@@ -10022,7 +10013,7 @@
                 "responseExamples": [
                   {
                     "name": "NIK valid",
-                    "data": "{\"meta\":{\"code\":200,\"message\":\"NIK is valid\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{\"nik\":\"3171xxxxxxxxxx22\",\"valid\":true,\"name\":\"JOHN DOE\",\"status\":\"ACTIVE\",\"source\":\"verified\"}}",
+                    "data": "{\"meta\":{\"code\":200,\"message\":\"NIK is valid\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{\"nik\":\"3171xxxxxxxxxx22\",\"valid\":true,\"status\":\"ACTIVE\",\"source\":\"verified\"}}",
                     "responseId": "174461759",
                     "description": "",
                     "oasKey": "valid",
