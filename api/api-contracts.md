@@ -1,12 +1,18 @@
 # Rusuh Booking Tiket — API Contracts
 
-**Versi**: 2.17.0  
+**Versi**: 2.18.0  
 **Tanggal**: 9 November 2026  
 **Status**: Draft  
 **Base URL**: `https://api.my-rusuh.my.id` (tanpa versi di path untuk saat ini; v2.9). Stream: `https://events.my-rusuh.my.id`  
 **Selaras dengan**: ADR-005 (Keputusan Arsitektur Final — SSE + ECS Fargate), diamandemen ADR-006 (antrian)  
 **Pasangan mesin**: `rusuh-booking-apidog.json` (Apidog) — **sumber kebenaran bentuk respons**. Dokumen ini menjelaskan perilaku dan alasannya; keduanya wajib sinkron. `rusuh-booking-openapi.yaml` diarsipkan (`archive/`) dan tidak dipelihara lagi
 
+> **v2.18** (**breaking kecil**): **§4.3 `POST /bookings` ditulis ulang.** Respons 201 kini **sama dengan
+> `GET /bookings/{id}`** untuk `PENDING_PAYMENT` (`summary {quantity, total}`, `payment_ttl {expires_at, server_time}`,
+> `event.image_url`; **`subtotal`, `service_fee` dan `redirect_url` dihapus**). Submit ulang pada booking yang sudah
+> `HELD` menjawab **200** dengan booking yang sama. Daftar error lengkap dengan `error_code` dan `data` (indeks kursi,
+> `{category_id, available, requested}`, `retry_after`); `NIK_UNVERIFIED` tidak lagi dipakai. Lihat Appendix C, v2.17 → v2.18.
+>
 > **v2.17** (**breaking kecil**, ADR-006 §8.16): **`terms_version` dihapus** dari `POST /bookings` dan error
 > `TERMS_NOT_ACCEPTED` dihapus. Persetujuan PDP dan syarat dicatat saat registrasi (§1.5), bukan saat Bayar.
 > Lihat Appendix C, v2.16 → v2.17.
@@ -1855,15 +1861,12 @@ lewat hash NIK).
 > **Idempoten.** Submit yang diulang tidak menjalankan hold kedua. Server mengunci baris
 > booking (`SELECT … FOR UPDATE` atas `grant_token`); bila status sudah `HELD` atau lebih
 > jauh, booking yang ada dikembalikan dengan `200`. Tanpa guard ini retry akan gagal dengan
-> `NIK_TAKEN` atas NIK customer sendiri.
+> `NIK_ALREADY_USED` atas NIK customer sendiri.
 
-**Response** (201):
+**Response** (201 — booking dibuat, kursi dan NIK di-hold):
 ```json
 {
-  "meta": {
-    "code": 201,
-    "message": "Booking created successfully"
-  },
+  "meta": { "code": 201, "message": "Booking created successfully", "server_time": "2026-10-23T13:15:00.412Z" },
   "data": {
     "booking_id": "RB-00912",
     "status": "PENDING_PAYMENT",
@@ -1871,84 +1874,71 @@ lewat hash NIK).
       "id": "evt_konser_a",
       "name": "Konser A — Jakarta",
       "date": "2026-12-25",
-      "venue": "GBK, Jakarta"
+      "venue": "GBK, Jakarta",
+      "image_url": "https://cdn.rusuh.id/events/konser-a.jpg"
     },
     "tickets": [
-      {
-        "category": "VIP",
-        "price": 1500000,
-        "nik_masked": "3171********xx22"
-      },
-      {
-        "category": "VIP",
-        "price": 1500000,
-        "nik_masked": "3171********xx33"
-      }
+      { "category": "VIP", "price": 1500000, "nik_masked": "3171********0022" },
+      { "category": "Festival", "price": 850000, "nik_masked": "3171********0033" }
     ],
-    "summary": {
-      "subtotal": 3000000,
-      "service_fee": 0,
-      "total": 3000000
-    },
-    "payment_ttl": {
-      "expires_at": "2026-10-23T13:25:00Z",
-      "server_time": "2026-10-23T13:15:00Z"
-    },
-    "redirect_url": "/bookings/RB-00912/payment"
+    "summary": { "quantity": 2, "total": 2350000 },
+    "payment_ttl": { "expires_at": "2026-10-23T13:25:00Z", "server_time": "2026-10-23T13:15:00Z" }
   }
 }
 ```
 
-**Validation Errors** (400):
-```json
-{
-  "meta": {
-    "code": 400,
-    "message": "Maximum 3 tickets per order"
-  },
-  "data": {}
-}
-```
+> **Bentuk 201 sama persis dengan `GET /bookings/{id}` (§4.4) untuk `PENDING_PAYMENT`**: satu model untuk frontend.
+> `subtotal`, `service_fee` dan `redirect_url` dihapus (v2.18; rute halaman pembayaran milik frontend).
+> `payment_ttl.expires_at` selalu 10 menit setelah respons.
 
-**Response** (400 - NIK Invalid):
-```json
-{
-  "meta": {
-    "code": 400,
-    "message": "NIK 3171********xx22 tidak terdaftar di Dukcapil"
-  },
-  "data": {}
-}
-```
+**Response** (200 — sudah `HELD` atau lebih jauh): submit ulang (klik ganda, retry) tidak menjalankan hold kedua dan
+mengembalikan **booking yang ada, apa adanya**, apa pun isi body-nya. Mengganti kursi setelah Bayar tidak didukung.
 
 > **Tidak ada error "nama tidak cocok", dan tidak ada field nama pada respons.** Dukcapil
 > memvalidasi **NIK saja**; form tidak mengumpulkan nama dan §4.2 tidak pernah
-> mengembalikannya (FR-15a). v2.4 masih memuat keduanya sebagai sisa versi lama — dihapus di
-> v2.5.
+> mengembalikannya (FR-15a).
 
-**Response** (409 - NIK Already Used):
+**Error** — urutan pemeriksaan server, dan hasil tiap kegagalan. Semua memakai envelope
+`{meta:{code, message, error_code, server_time}, data}`; `data` = `{}` kecuali tertulis. `index` = posisi kursi pada
+`tickets[]`, mulai 0.
+
+| HTTP | `error_code` | Kapan | `data` | Booking sesudahnya |
+|---|---|---|---|---|
+| 400 | `DEVICE_ID_REQUIRED` | grant tamu tanpa `X-Device-Id` | — | tidak berubah |
+| 401 | `GRANT_TOKEN_MISSING` / `GRANT_TOKEN_INVALID` / `DEVICE_MISMATCH` | grant hilang, tidak dikenal, dari perangkat lain, atau `event_id` event lain | — | tidak berubah |
+| 400 | `VALIDATION_ERROR` | JSON rusak, `tickets` kosong, `contact_email` tidak valid, `category_id` tidak dikenal, kursi dengan nol atau lebih dari satu dari `nik` / `saved_nik_id` / `use_account_nik`, format NIK, `saved_nik_id` / `use_account_nik` tidak berlaku (bukan milik akun ini, sudah dihapus, tamu, akun tanpa NIK, `use_account_nik` di dua kursi), NIK sama di dua kursi (dibandingkan lewat hash) | `{index}` bila tentang satu kursi | tidak berubah |
+| 400 | `QTY_EXCEEDED` | lebih dari 3 kursi **secara total** (lintas kategori, BR-01) | — | tidak berubah |
+| 400 | `NIK_NOT_FOUND` / `NIK_INACTIVE` | nik-verify menyatakan NIK tidak terdaftar / tidak aktif | `{index}` | tidak berubah |
+| 429 | `TOO_MANY_REQUESTS` | verifikasi NIK dibatasi (§4.2); disertai header `Retry-After` | `{retry_after}` (detik) | tidak berubah |
+| 503 | `DUKCAPIL_UNAVAILABLE` | nik-verify atau Dukcapil tidak dapat menjawab (fail closed: tidak ada hold tanpa bukti) | — | tidak berubah |
+| 401 | `GRANT_TOKEN_INVALID` | tidak ada booking untuk grant ini, atau booking sudah berakhir (`LAPSED`, `EXPIRED`, `ABANDONED`; grant-nya sudah dihapus) | — | berakhir |
+| 409 | `BOOKING_STATUS_INVALID` | halaman tiket belum pernah dibuka (`GRANTED`): belum ada pilihan untuk dikirim | — | `GRANTED` |
+| 409 | `BOOKING_EXPIRED` | 5 menit habis saat booking masih `SELECTING` (sweep belum berjalan) | — | segera `EXPIRED` |
+| 409 | `INSUFFICIENT_STOCK` | stok sebuah kategori tidak cukup | `{category_id, available, requested}` | tetap `SELECTING`, sisa waktu berjalan |
+| 409 | `NIK_ALREADY_USED` | NIK sudah memegang kursi untuk event ini (juga bila Redis terlewat dan basis data menolaknya) | `{index}` | tetap `SELECTING` |
+| 503 | `STOCK_UNINITIALIZED` | kunci stok hilang dari Redis: stok **tidak diketahui**, bukan habis | — | tetap `SELECTING` |
+| 503 | `STOCK_NEGATIVE` | guard terakhir menyala; seluruh pengurangan dikembalikan | — | tetap `SELECTING` |
+| 503 | `INTERNAL_ERROR` | basis data atau Redis gagal; hold yang sudah berjalan dikembalikan (kompensasi) | — | tetap `SELECTING` |
+
+> **Gagal hold tidak menghilangkan giliran.** Semua penolakan stok dan NIK (409 dan 503 di atas) membiarkan booking
+> `SELECTING` dengan sisa 5 menitnya: customer memperbaiki pilihan lalu menekan Bayar lagi.
+>
+> **Jawaban sama untuk semua sebab pada `saved_nik_id`**: id yang tidak dikenal, milik akun lain, atau sudah dihapus
+> menghasilkan `VALIDATION_ERROR` yang sama, sehingga tidak membocorkan id milik akun lain. Pesan kesalahan tidak pernah
+> memuat NIK, hanya `index`.
+>
+> **Kode yang tidak muncul di endpoint ini:** `QTY_INVALID` dan `NIK_COUNT_MISMATCH` (satu kursi = satu tiket; hanya
+> penjaga di skrip Lua), `TICKETS_UNAVAILABLE` (kategori habis = `INSUFFICIENT_STOCK` dengan `available: 0`),
+> `NIK_UNVERIFIED` dan `NIK_VALIDATION_FAILED` (verifikasi dilakukan server lewat nik-verify, bukan dituntut dari klien).
+
+**Contoh** — NIK kursi kedua ditolak, dan stok VIP kurang:
 ```json
-{
-  "meta": {
-    "code": 409,
-    "message": "NIK 3171xxxxxxxxxx22 sudah digunakan untuk event ini"
-  },
-  "data": {}
-}
+{ "meta": { "code": 400, "message": "NIK pada kursi 2 tidak terdaftar di Dukcapil", "error_code": "NIK_NOT_FOUND", "server_time": "2026-10-23T13:15:00.412Z" },
+  "data": { "index": 1 } }
 ```
-
-**Response** (409 - Insufficient Stock):
 ```json
-{
-  "meta": {
-    "code": 409,
-    "message": "Stok VIP tidak mencukupi"
-  },
-  "data": {
-    "available": 1,
-    "requested": 2
-  }
-}
+{ "meta": { "code": 409, "message": "Stok VIP tidak mencukupi", "error_code": "INSUFFICIENT_STOCK", "server_time": "2026-10-23T13:15:00.412Z" },
+  "data": { "category_id": "cat_vip", "available": 1, "requested": 2 } }
 ```
 
 **Requirement Coverage**: FR-13, FR-14, FR-15, FR-16, NFR-04 (atomic stock), BR-01, BR-02
@@ -2839,6 +2829,7 @@ Bagian per endpoint menulis error yang khas. Error umum berikut juga berlaku dan
 | `GET /events/{event_id}/queue/me` | 401 `UNAUTHORIZED` (tidak ada kredensial, atau Bearer tanpa `acct` untuk event ini) |
 | `GET /events/{event_id}/tickets` | 400 `DEVICE_ID_REQUIRED` · 401 `GRANT_TOKEN_MISSING` / `GRANT_TOKEN_INVALID` / `DEVICE_MISMATCH` · 404 `NOT_FOUND` · 503 `STOCK_UNINITIALIZED` / `INTERNAL_ERROR` (§4.1) |
 | `POST /nik/validate` | 400 `VALIDATION_ERROR` · 429 `TOO_MANY_REQUESTS` · 503 `DUKCAPIL_UNAVAILABLE` |
+| `POST /bookings` | lengkap di §4.3: 400 `VALIDATION_ERROR` / `QTY_EXCEEDED` / `NIK_NOT_FOUND` / `NIK_INACTIVE` / `DEVICE_ID_REQUIRED` · 401 · 409 `INSUFFICIENT_STOCK` / `NIK_ALREADY_USED` / `BOOKING_STATUS_INVALID` / `BOOKING_EXPIRED` · 429 · 503 `DUKCAPIL_UNAVAILABLE` / `STOCK_UNINITIALIZED` / `STOCK_NEGATIVE` / `INTERNAL_ERROR` |
 | `GET /bookings/{booking_id}` | 400 `DEVICE_ID_REQUIRED` · 404 `NOT_FOUND` · 503 `INTERNAL_ERROR` (§4.4) |
 | `GET /tickets/{ticket_id}/eticket` | 401 `ETICKET_TOKEN_INVALID` · 404 `NOT_FOUND` |
 | semua endpoint ber-grant (§4, §5) | 400 `DEVICE_ID_REQUIRED` · 401 `GRANT_TOKEN_MISSING` / `GRANT_TOKEN_INVALID` / `DEVICE_MISMATCH` |
@@ -2969,10 +2960,10 @@ Legenda: ✅ terpenuhi di kontrak · ⚙️ di luar permukaan API (backend atau 
 | `NIK_NOT_FOUND` | NIK tidak terdaftar di Dukcapil |
 | `NIK_INACTIVE` | NIK terdaftar tapi status tidak aktif |
 | `NIK_VALIDATION_FAILED` | Validasi NIK ke Dukcapil gagal |
-| `NIK_UNVERIFIED` | Ada NIK dalam booking yang belum lolos `POST /nik/validate` |
+| `NIK_UNVERIFIED` | *(tidak dipakai sejak v2.18: `POST /bookings` memverifikasi NIK lewat nik-verify sendiri)* |
 | `DUKCAPIL_UNAVAILABLE` | Dukcapil tidak dapat dihubungi — pembayaran diblokir (fail closed) |
 | `QTY_EXCEEDED` | Melebihi 3 tiket per transaksi, dijumlahkan lintas kategori (BR-01) |
-| `QTY_INVALID` | Jumlah tiket sebuah kategori bukan bilangan ≥ 1 |
+| `QTY_INVALID` | *(tidak dapat terjadi pada `POST /bookings`: satu kursi = satu tiket; hanya penjaga di skrip Lua)* |
 | `STOCK_UNINITIALIZED` | **503** — kunci stok hilang dari Redis (flush/failover). Bukan "habis": stok tidak diketahui |
 | `STOCK_NEGATIVE` | **503** — guard terakhir menyala; seluruh pengurangan dikembalikan |
 | `INSUFFICIENT_STOCK` | Stok tiket tidak mencukupi |
@@ -2991,7 +2982,7 @@ Legenda: ✅ terpenuhi di kontrak · ⚙️ di luar permukaan API (backend atau 
 | `MAX_SAVED_NIKS_REACHED` | Daftar NIK Teman sudah mencapai 5 entri |
 | `CONSENT_REQUIRED` | Persetujuan pemrosesan data pribadi pihak ketiga belum diberikan |
 | `PAYMENT_GATEWAY_UNAVAILABLE` | **503** — breaker payment gateway terbuka; dapat di-retry. Menggantikan `ADMISSION_PAUSED` (v2.7, pause dihapus) |
-| `BOOKING_EXPIRED` | TTL booking habis |
+| `BOOKING_EXPIRED` | **409** — 5 menit habis saat booking masih `SELECTING` (§4.3). Booking yang sudah berakhir dan grant-nya dihapus menjawab `401 GRANT_TOKEN_INVALID` |
 | `PAYMENT_EXPIRED` | TTL pembayaran habis |
 | `TOO_MANY_REQUESTS` | Rate limited |
 | `TOKEN_EXPIRED` | **Hanya tentang sesi akun.** Access token kedaluwarsa, atau refresh token kedaluwarsa/dicabut/tidak dikenal — klien me-refresh (§1.4) atau login ulang |
@@ -3343,3 +3334,12 @@ Penyelarasan dengan ADR-005. Yang memutus kompatibilitas ditandai **BREAKING**.
 | # | Perubahan | Alasan |
 |---|---|---|
 | 105 | §4.3: **`terms_version` dihapus** dari request (**BREAKING** bagi klien yang mengirimnya; diabaikan bila masih dikirim); kode `TERMS_NOT_ACCEPTED` dihapus dari Appendix A (ADR-006 §8.16) | Persetujuan sudah dicatat saat registrasi (`consent_records`, §1.5); catatan versi per booking tidak diperlukan |
+
+### v2.17 → v2.18
+
+| # | Perubahan | Alasan |
+|---|---|---|
+| 106 | §4.3: respons 201 **sama dengan `GET /bookings/{id}`** `PENDING_PAYMENT`; **`summary.subtotal`, `summary.service_fee`, `redirect_url` dihapus** (**BREAKING** bagi klien yang membacanya); `event.image_url` ditambah; `payment_ttl` tanpa `ttl_seconds` | Satu model untuk frontend; contoh lama usang (tanpa `image_url`, `server_time`) |
+| 107 | §4.3: **200** untuk submit ulang pada booking yang sudah `HELD` atau lebih jauh (booking yang ada, tanpa hold kedua) | Klik ganda tidak boleh gagal dengan `NIK_ALREADY_USED` atas NIK sendiri |
+| 108 | §4.3: tabel error lengkap: `error_code`, `data` (`index`, `{category_id, available, requested}`, `retry_after`) dan status booking sesudahnya; pesan tidak memuat NIK | Contoh lama tanpa `error_code`, memuat NIK mentah, stok tanpa `category_id` |
+| 109 | §4.3 dan Appendix A: `BOOKING_EXPIRED` (409) hanya untuk `SELECTING` yang lewat tenggat; booking yang sudah berakhir menjawab `401 GRANT_TOKEN_INVALID` (selaras §4.1); 429 dari verifikasi NIK diteruskan dengan `retry_after`; konflik `nik_claims` menjawab `409 NIK_ALREADY_USED`; `NIK_UNVERIFIED`, `QTY_INVALID` tidak dipakai | Satu jawaban per keadaan; klien tidak perlu dua jalur untuk kasus yang sama |

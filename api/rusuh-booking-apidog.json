@@ -7153,7 +7153,7 @@
                 "commonParameters": {},
                 "responses": [
                   {
-                    "id": "139987344",
+                    "id": "960000201",
                     "code": "201",
                     "headers": [],
                     "jsonSchema": {
@@ -7192,7 +7192,14 @@
                             },
                             "status": {
                               "type": "string",
-                              "example": "PENDING_PAYMENT"
+                              "example": "PENDING_PAYMENT",
+                              "enum": [
+                                "SELECTING",
+                                "PENDING_PAYMENT",
+                                "PAID",
+                                "EXPIRED"
+                              ],
+                              "description": "SELECTING (GRANTED, SELECTING) · PENDING_PAYMENT (HELD, AWAITING_PAYMENT, PENDING_CANCELLATION) · PAID (CONFIRMED) · EXPIRED (EXPIRED, LAPSED, ABANDONED)"
                             },
                             "event": {
                               "type": "object",
@@ -7212,13 +7219,18 @@
                                 "venue": {
                                   "type": "string",
                                   "example": "GBK, Jakarta"
+                                },
+                                "image_url": {
+                                  "type": "string",
+                                  "example": "https://cdn.rusuh.id/events/konser-a.jpg"
                                 }
                               },
                               "x-apidog-orders": [
                                 "id",
                                 "name",
                                 "date",
-                                "venue"
+                                "venue",
+                                "image_url"
                               ]
                             },
                             "tickets": {
@@ -7226,6 +7238,11 @@
                               "items": {
                                 "type": "object",
                                 "properties": {
+                                  "ticket_id": {
+                                    "type": "string",
+                                    "example": "TKT-001",
+                                    "description": "Hanya saat PAID, setelah tiket diterbitkan (beberapa detik pertama PAID bisa tanpa ini; klien mengulang)"
+                                  },
                                   "category": {
                                     "type": "string",
                                     "example": "VIP"
@@ -7237,36 +7254,40 @@
                                   "nik_masked": {
                                     "type": "string",
                                     "example": "3171********xx22"
+                                  },
+                                  "eticket_url": {
+                                    "type": "string",
+                                    "example": "/tickets/TKT-001/eticket?t=et_9f3a2c",
+                                    "description": "Hanya saat PAID, untuk tiket VALID/USED. Membawa ?t={eticket_token} (HMAC, satu tiket, berlaku s.d. 00:00 WIB sehari setelah event): dapat dibuka tanpa akun dan tanpa email (NFR-10)"
                                   }
                                 },
                                 "x-apidog-orders": [
+                                  "ticket_id",
                                   "category",
                                   "price",
-                                  "nik_masked"
+                                  "nik_masked",
+                                  "eticket_url"
                                 ]
-                              }
+                              },
+                              "description": "Satu per kursi, urutan pilihan customer; [] sebelum HELD (tidak pernah null)"
                             },
                             "summary": {
                               "type": "object",
                               "properties": {
-                                "subtotal": {
+                                "quantity": {
                                   "type": "integer",
-                                  "example": 2350000
-                                },
-                                "service_fee": {
-                                  "type": "integer",
-                                  "example": 0
+                                  "example": 1
                                 },
                                 "total": {
                                   "type": "integer",
-                                  "example": 2350000
+                                  "example": 1500000
                                 }
                               },
                               "x-apidog-orders": [
-                                "subtotal",
-                                "service_fee",
+                                "quantity",
                                 "total"
-                              ]
+                              ],
+                              "description": "Jumlah kursi dan jumlah harganya. price_per_ticket dihapus (v2.13): harga tiap kursi ada di tickets[].price"
                             },
                             "payment_ttl": {
                               "type": "object",
@@ -7277,17 +7298,19 @@
                                 },
                                 "server_time": {
                                   "type": "string",
-                                  "example": "2026-10-23T13:15:00Z"
+                                  "example": "2026-10-23T13:19:18Z"
                                 }
                               },
                               "x-apidog-orders": [
                                 "expires_at",
                                 "server_time"
-                              ]
+                              ],
+                              "description": "Hanya saat PENDING_PAYMENT; selama grace PENDING_CANCELLATION expires_at sudah lewat tetapi pembayaran masih bisa masuk"
                             },
-                            "redirect_url": {
+                            "payment_method": {
                               "type": "string",
-                              "example": "/bookings/RB-00912/payment"
+                              "example": "Virtual Account",
+                              "description": "Hanya saat PAID. Label: Virtual Account (bank_transfer), GoPay (gopay); metode lain apa adanya"
                             }
                           },
                           "x-apidog-orders": [
@@ -7297,7 +7320,7 @@
                             "tickets",
                             "summary",
                             "payment_ttl",
-                            "redirect_url"
+                            "payment_method"
                           ]
                         }
                       },
@@ -7307,13 +7330,198 @@
                       ]
                     },
                     "itemSchema": {},
-                    "description": "Booking created",
+                    "description": "Created: kursi dan NIK di-hold, bentuk sama dengan GET /bookings/{id} PENDING_PAYMENT",
                     "contentType": "json",
                     "mediaType": "application/json",
-                    "oasExtensions": ""
+                    "oasExtensions": "",
+                    "name": null
                   },
                   {
-                    "id": "158035727",
+                    "id": "960000202",
+                    "code": "200",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 200
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Success"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons; klien menyinkronkan jamnya dari sini (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "server_time"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "booking_id": {
+                              "type": "string",
+                              "example": "RB-00912"
+                            },
+                            "status": {
+                              "type": "string",
+                              "example": "PENDING_PAYMENT",
+                              "enum": [
+                                "SELECTING",
+                                "PENDING_PAYMENT",
+                                "PAID",
+                                "EXPIRED"
+                              ],
+                              "description": "SELECTING (GRANTED, SELECTING) · PENDING_PAYMENT (HELD, AWAITING_PAYMENT, PENDING_CANCELLATION) · PAID (CONFIRMED) · EXPIRED (EXPIRED, LAPSED, ABANDONED)"
+                            },
+                            "event": {
+                              "type": "object",
+                              "properties": {
+                                "id": {
+                                  "type": "string",
+                                  "example": "evt_konser_a"
+                                },
+                                "name": {
+                                  "type": "string",
+                                  "example": "Konser A"
+                                },
+                                "date": {
+                                  "type": "string",
+                                  "example": "2026-12-25"
+                                },
+                                "venue": {
+                                  "type": "string",
+                                  "example": "GBK, Jakarta"
+                                },
+                                "image_url": {
+                                  "type": "string",
+                                  "example": "https://cdn.rusuh.id/events/konser-a.jpg"
+                                }
+                              },
+                              "x-apidog-orders": [
+                                "id",
+                                "name",
+                                "date",
+                                "venue",
+                                "image_url"
+                              ]
+                            },
+                            "tickets": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "ticket_id": {
+                                    "type": "string",
+                                    "example": "TKT-001",
+                                    "description": "Hanya saat PAID, setelah tiket diterbitkan (beberapa detik pertama PAID bisa tanpa ini; klien mengulang)"
+                                  },
+                                  "category": {
+                                    "type": "string",
+                                    "example": "VIP"
+                                  },
+                                  "price": {
+                                    "type": "integer",
+                                    "example": 1500000
+                                  },
+                                  "nik_masked": {
+                                    "type": "string",
+                                    "example": "3171********xx22"
+                                  },
+                                  "eticket_url": {
+                                    "type": "string",
+                                    "example": "/tickets/TKT-001/eticket?t=et_9f3a2c",
+                                    "description": "Hanya saat PAID, untuk tiket VALID/USED. Membawa ?t={eticket_token} (HMAC, satu tiket, berlaku s.d. 00:00 WIB sehari setelah event): dapat dibuka tanpa akun dan tanpa email (NFR-10)"
+                                  }
+                                },
+                                "x-apidog-orders": [
+                                  "ticket_id",
+                                  "category",
+                                  "price",
+                                  "nik_masked",
+                                  "eticket_url"
+                                ]
+                              },
+                              "description": "Satu per kursi, urutan pilihan customer; [] sebelum HELD (tidak pernah null)"
+                            },
+                            "summary": {
+                              "type": "object",
+                              "properties": {
+                                "quantity": {
+                                  "type": "integer",
+                                  "example": 1
+                                },
+                                "total": {
+                                  "type": "integer",
+                                  "example": 1500000
+                                }
+                              },
+                              "x-apidog-orders": [
+                                "quantity",
+                                "total"
+                              ],
+                              "description": "Jumlah kursi dan jumlah harganya. price_per_ticket dihapus (v2.13): harga tiap kursi ada di tickets[].price"
+                            },
+                            "payment_ttl": {
+                              "type": "object",
+                              "properties": {
+                                "expires_at": {
+                                  "type": "string",
+                                  "example": "2026-10-23T13:25:00Z"
+                                },
+                                "server_time": {
+                                  "type": "string",
+                                  "example": "2026-10-23T13:19:18Z"
+                                }
+                              },
+                              "x-apidog-orders": [
+                                "expires_at",
+                                "server_time"
+                              ],
+                              "description": "Hanya saat PENDING_PAYMENT; selama grace PENDING_CANCELLATION expires_at sudah lewat tetapi pembayaran masih bisa masuk"
+                            },
+                            "payment_method": {
+                              "type": "string",
+                              "example": "Virtual Account",
+                              "description": "Hanya saat PAID. Label: Virtual Account (bank_transfer), GoPay (gopay); metode lain apa adanya"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "booking_id",
+                            "status",
+                            "event",
+                            "tickets",
+                            "summary",
+                            "payment_ttl",
+                            "payment_method"
+                          ]
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "Sudah HELD atau lebih jauh: booking yang ada, tanpa hold kedua",
+                    "contentType": "json",
+                    "mediaType": "application/json",
+                    "oasExtensions": "",
+                    "name": "ALREADY_HELD"
+                  },
+                  {
+                    "id": "960000203",
                     "code": "400",
                     "headers": [],
                     "jsonSchema": {
@@ -7328,7 +7536,340 @@
                             },
                             "message": {
                               "type": "string",
-                              "example": "Maximum 3 tickets per order"
+                              "example": "X-Device-Id wajib untuk pembeli tamu"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "DEVICE_ID_REQUIRED",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "Bad Request",
+                    "contentType": "json",
+                    "oasExtensions": "",
+                    "name": "DEVICE_ID_REQUIRED",
+                    "mediaType": "application/json"
+                  },
+                  {
+                    "id": "960000204",
+                    "code": "401",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 401
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "X-Grant-Token wajib"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "GRANT_TOKEN_MISSING",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "Unauthorized",
+                    "contentType": "json",
+                    "oasExtensions": "",
+                    "name": "GRANT_TOKEN_MISSING",
+                    "mediaType": "application/json"
+                  },
+                  {
+                    "id": "960000205",
+                    "code": "401",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 401
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Grant tidak dikenal atau kedaluwarsa"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "GRANT_TOKEN_INVALID",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "Unauthorized",
+                    "contentType": "json",
+                    "oasExtensions": "",
+                    "name": "GRANT_TOKEN_INVALID",
+                    "mediaType": "application/json"
+                  },
+                  {
+                    "id": "960000206",
+                    "code": "401",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 401
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Grant terdaftar di perangkat lain"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "DEVICE_MISMATCH",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "Unauthorized",
+                    "contentType": "json",
+                    "oasExtensions": "",
+                    "name": "DEVICE_MISMATCH",
+                    "mediaType": "application/json"
+                  },
+                  {
+                    "id": "960000207",
+                    "code": "400",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 400
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Kursi 1: pilih salah satu dari nik, saved_nik_id, use_account_nik"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "VALIDATION_ERROR",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "index": {
+                              "type": "integer",
+                              "description": "Posisi kursi pada tickets[], mulai 0",
+                              "example": 1
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "index"
+                          ]
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "Bad Request",
+                    "contentType": "json",
+                    "oasExtensions": "",
+                    "name": "VALIDATION_ERROR",
+                    "mediaType": "application/json"
+                  },
+                  {
+                    "id": "960000208",
+                    "code": "400",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 400
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Maksimal 3 tiket per transaksi"
                             },
                             "error_code": {
                               "type": "string",
@@ -7371,14 +7912,298 @@
                       ]
                     },
                     "itemSchema": {},
-                    "description": "Validation error",
+                    "description": "Bad Request",
                     "contentType": "json",
-                    "mediaType": "application/json",
                     "oasExtensions": "",
-                    "name": "QTY_EXCEEDED"
+                    "name": "QTY_EXCEEDED",
+                    "mediaType": "application/json"
                   },
                   {
-                    "id": "133003445",
+                    "id": "960000209",
+                    "code": "400",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 400
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "NIK pada kursi 2 tidak terdaftar di Dukcapil"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "NIK_NOT_FOUND",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "index": {
+                              "type": "integer",
+                              "description": "Posisi kursi pada tickets[], mulai 0",
+                              "example": 1
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "index"
+                          ]
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "Bad Request",
+                    "contentType": "json",
+                    "oasExtensions": "",
+                    "name": "NIK_NOT_FOUND",
+                    "mediaType": "application/json"
+                  },
+                  {
+                    "id": "960000210",
+                    "code": "400",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 400
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "NIK pada kursi 2 tidak aktif"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "NIK_INACTIVE",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "index": {
+                              "type": "integer",
+                              "description": "Posisi kursi pada tickets[], mulai 0",
+                              "example": 1
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "index"
+                          ]
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "Bad Request",
+                    "contentType": "json",
+                    "oasExtensions": "",
+                    "name": "NIK_INACTIVE",
+                    "mediaType": "application/json"
+                  },
+                  {
+                    "id": "960000211",
+                    "code": "429",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 429
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Tunggu sebentar sebelum memverifikasi NIK lagi"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "TOO_MANY_REQUESTS",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "retry_after": {
+                              "type": "integer",
+                              "example": 5,
+                              "description": "Detik; juga dikirim sebagai header Retry-After"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "retry_after"
+                          ]
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "Too Many Requests",
+                    "contentType": "json",
+                    "oasExtensions": "",
+                    "name": "TOO_MANY_REQUESTS",
+                    "mediaType": "application/json"
+                  },
+                  {
+                    "id": "960000212",
+                    "code": "503",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 503
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Verifikasi NIK sedang gangguan, coba lagi"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "DUKCAPIL_UNAVAILABLE",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "Service Unavailable",
+                    "contentType": "json",
+                    "oasExtensions": "",
+                    "name": "DUKCAPIL_UNAVAILABLE",
+                    "mediaType": "application/json"
+                  },
+                  {
+                    "id": "960000213",
                     "code": "409",
                     "headers": [],
                     "jsonSchema": {
@@ -7393,11 +8218,11 @@
                             },
                             "message": {
                               "type": "string",
-                              "example": "NIK sudah digunakan untuk event ini"
+                              "example": "Buka halaman tiket terlebih dulu"
                             },
                             "error_code": {
                               "type": "string",
-                              "example": "NIK_ALREADY_USED",
+                              "example": "BOOKING_STATUS_INVALID",
                               "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
                             },
                             "server_time": {
@@ -7438,51 +8263,578 @@
                     "itemSchema": {},
                     "description": "Conflict",
                     "contentType": "json",
-                    "mediaType": "application/json",
                     "oasExtensions": "",
-                    "name": "NIK_ALREADY_USED"
+                    "name": "BOOKING_STATUS_INVALID",
+                    "mediaType": "application/json"
+                  },
+                  {
+                    "id": "960000214",
+                    "code": "409",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 409
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Waktu memilih tiket sudah habis"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "BOOKING_EXPIRED",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "Conflict",
+                    "contentType": "json",
+                    "oasExtensions": "",
+                    "name": "BOOKING_EXPIRED",
+                    "mediaType": "application/json"
+                  },
+                  {
+                    "id": "960000215",
+                    "code": "409",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 409
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Stok VIP tidak mencukupi"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "INSUFFICIENT_STOCK",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "category_id": {
+                              "type": "string",
+                              "example": "cat_vip"
+                            },
+                            "available": {
+                              "type": "integer",
+                              "example": 1
+                            },
+                            "requested": {
+                              "type": "integer",
+                              "example": 2
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "category_id",
+                            "available",
+                            "requested"
+                          ]
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "Conflict",
+                    "contentType": "json",
+                    "oasExtensions": "",
+                    "name": "INSUFFICIENT_STOCK",
+                    "mediaType": "application/json"
+                  },
+                  {
+                    "id": "960000216",
+                    "code": "409",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 409
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "NIK pada kursi 1 sudah digunakan untuk event ini"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "NIK_ALREADY_USED",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "index": {
+                              "type": "integer",
+                              "description": "Posisi kursi pada tickets[], mulai 0",
+                              "example": 1
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "index"
+                          ]
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "Conflict",
+                    "contentType": "json",
+                    "oasExtensions": "",
+                    "name": "NIK_ALREADY_USED",
+                    "mediaType": "application/json"
+                  },
+                  {
+                    "id": "960000217",
+                    "code": "503",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 503
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Stok belum tersedia, coba lagi"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "STOCK_UNINITIALIZED",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "Service Unavailable",
+                    "contentType": "json",
+                    "oasExtensions": "",
+                    "name": "STOCK_UNINITIALIZED",
+                    "mediaType": "application/json"
+                  },
+                  {
+                    "id": "960000218",
+                    "code": "503",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 503
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Stok sedang disesuaikan, coba lagi"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "STOCK_NEGATIVE",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "Service Unavailable",
+                    "contentType": "json",
+                    "oasExtensions": "",
+                    "name": "STOCK_NEGATIVE",
+                    "mediaType": "application/json"
+                  },
+                  {
+                    "id": "960000219",
+                    "code": "503",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 503
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Layanan sedang sibuk, coba lagi"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "INTERNAL_ERROR",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "Service Unavailable",
+                    "contentType": "json",
+                    "oasExtensions": "",
+                    "name": "INTERNAL_ERROR",
+                    "mediaType": "application/json"
                   }
                 ],
                 "responseExamples": [
                   {
-                    "name": "Success",
-                    "data": "{\"meta\": {\"code\": 201, \"message\": \"Booking created successfully\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {\"booking_id\": \"RB-00912\", \"status\": \"PENDING_PAYMENT\", \"event\": {\"id\": \"evt_konser_a\", \"name\": \"Konser A\", \"date\": \"2026-12-25\", \"venue\": \"GBK, Jakarta\"}, \"tickets\": [{\"category\": \"VIP\", \"price\": 1500000, \"nik_masked\": \"3171********xx22\"}, {\"category\": \"Festival\", \"price\": 850000, \"nik_masked\": \"3171********xx33\"}], \"summary\": {\"subtotal\": 2350000, \"service_fee\": 0, \"total\": 2350000}, \"payment_ttl\": {\"expires_at\": \"2026-10-23T13:25:00Z\", \"server_time\": \"2026-10-23T13:15:00Z\"}, \"redirect_url\": \"/bookings/RB-00912/payment\"}}",
-                    "responseId": "139987344",
+                    "name": "Created",
+                    "responseId": "960000201",
                     "description": "",
                     "oasKey": "",
-                    "oasExtensions": ""
+                    "oasExtensions": "",
+                    "data": "{\"meta\": {\"code\": 201, \"message\": \"Booking created successfully\", \"server_time\": \"2026-10-23T13:15:00.412Z\"}, \"data\": {\"booking_id\": \"RB-00912\", \"status\": \"PENDING_PAYMENT\", \"event\": {\"id\": \"evt_konser_a\", \"name\": \"Konser A — Jakarta\", \"date\": \"2026-12-25\", \"venue\": \"GBK, Jakarta\", \"image_url\": \"https://cdn.rusuh.id/events/konser-a.jpg\"}, \"tickets\": [{\"category\": \"VIP\", \"price\": 1500000, \"nik_masked\": \"3171********0022\"}, {\"category\": \"Festival\", \"price\": 850000, \"nik_masked\": \"3171********0033\"}], \"summary\": {\"quantity\": 2, \"total\": 2350000}, \"payment_ttl\": {\"expires_at\": \"2026-10-23T13:25:00Z\", \"server_time\": \"2026-10-23T13:15:00Z\"}}}"
+                  },
+                  {
+                    "name": "Already held (retry)",
+                    "responseId": "960000202",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": "",
+                    "data": "{\"meta\": {\"code\": 200, \"message\": \"Success\", \"server_time\": \"2026-10-23T13:15:00.412Z\"}, \"data\": {\"booking_id\": \"RB-00912\", \"status\": \"PENDING_PAYMENT\", \"event\": {\"id\": \"evt_konser_a\", \"name\": \"Konser A — Jakarta\", \"date\": \"2026-12-25\", \"venue\": \"GBK, Jakarta\", \"image_url\": \"https://cdn.rusuh.id/events/konser-a.jpg\"}, \"tickets\": [{\"category\": \"VIP\", \"price\": 1500000, \"nik_masked\": \"3171********0022\"}, {\"category\": \"Festival\", \"price\": 850000, \"nik_masked\": \"3171********0033\"}], \"summary\": {\"quantity\": 2, \"total\": 2350000}, \"payment_ttl\": {\"expires_at\": \"2026-10-23T13:25:00Z\", \"server_time\": \"2026-10-23T13:15:00Z\"}}}"
+                  },
+                  {
+                    "name": "DEVICE_ID_REQUIRED",
+                    "responseId": "960000203",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": "",
+                    "data": "{\"meta\": {\"code\": 400, \"message\": \"X-Device-Id wajib untuk pembeli tamu\", \"error_code\": \"DEVICE_ID_REQUIRED\", \"server_time\": \"2026-10-23T13:15:00.412Z\"}, \"data\": {}}"
+                  },
+                  {
+                    "name": "GRANT_TOKEN_MISSING",
+                    "responseId": "960000204",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": "",
+                    "data": "{\"meta\": {\"code\": 401, \"message\": \"X-Grant-Token wajib\", \"error_code\": \"GRANT_TOKEN_MISSING\", \"server_time\": \"2026-10-23T13:15:00.412Z\"}, \"data\": {}}"
+                  },
+                  {
+                    "name": "GRANT_TOKEN_INVALID",
+                    "responseId": "960000205",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": "",
+                    "data": "{\"meta\": {\"code\": 401, \"message\": \"Grant tidak dikenal atau kedaluwarsa\", \"error_code\": \"GRANT_TOKEN_INVALID\", \"server_time\": \"2026-10-23T13:15:00.412Z\"}, \"data\": {}}"
+                  },
+                  {
+                    "name": "DEVICE_MISMATCH",
+                    "responseId": "960000206",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": "",
+                    "data": "{\"meta\": {\"code\": 401, \"message\": \"Grant terdaftar di perangkat lain\", \"error_code\": \"DEVICE_MISMATCH\", \"server_time\": \"2026-10-23T13:15:00.412Z\"}, \"data\": {}}"
+                  },
+                  {
+                    "name": "VALIDATION_ERROR",
+                    "responseId": "960000207",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": "",
+                    "data": "{\"meta\": {\"code\": 400, \"message\": \"Kursi 1: pilih salah satu dari nik, saved_nik_id, use_account_nik\", \"error_code\": \"VALIDATION_ERROR\", \"server_time\": \"2026-10-23T13:15:00.412Z\"}, \"data\": {\"index\": 0}}"
                   },
                   {
                     "name": "QTY_EXCEEDED",
-                    "responseId": "158035727",
+                    "responseId": "960000208",
                     "description": "",
                     "oasKey": "",
                     "oasExtensions": "",
-                    "data": "{\"meta\":{\"code\":400,\"message\":\"Maximum 3 tickets per order\",\"error_code\":\"QTY_EXCEEDED\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{}}"
+                    "data": "{\"meta\": {\"code\": 400, \"message\": \"Maksimal 3 tiket per transaksi\", \"error_code\": \"QTY_EXCEEDED\", \"server_time\": \"2026-10-23T13:15:00.412Z\"}, \"data\": {}}"
                   },
                   {
-                    "name": "NIK_UNVERIFIED",
-                    "responseId": "158035727",
+                    "name": "NIK_NOT_FOUND",
+                    "responseId": "960000209",
                     "description": "",
                     "oasKey": "",
                     "oasExtensions": "",
-                    "data": "{\"meta\":{\"code\":400,\"message\":\"Ada NIK yang belum divalidasi\",\"error_code\":\"NIK_UNVERIFIED\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{}}"
+                    "data": "{\"meta\": {\"code\": 400, \"message\": \"NIK pada kursi 2 tidak terdaftar di Dukcapil\", \"error_code\": \"NIK_NOT_FOUND\", \"server_time\": \"2026-10-23T13:15:00.412Z\"}, \"data\": {\"index\": 1}}"
                   },
                   {
-                    "name": "NIK_ALREADY_USED",
-                    "responseId": "133003445",
+                    "name": "NIK_INACTIVE",
+                    "responseId": "960000210",
                     "description": "",
                     "oasKey": "",
                     "oasExtensions": "",
-                    "data": "{\"meta\":{\"code\":409,\"message\":\"NIK sudah digunakan untuk event ini\",\"error_code\":\"NIK_ALREADY_USED\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{}}"
+                    "data": "{\"meta\": {\"code\": 400, \"message\": \"NIK pada kursi 2 tidak aktif\", \"error_code\": \"NIK_INACTIVE\", \"server_time\": \"2026-10-23T13:15:00.412Z\"}, \"data\": {\"index\": 1}}"
+                  },
+                  {
+                    "name": "TOO_MANY_REQUESTS",
+                    "responseId": "960000211",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": "",
+                    "data": "{\"meta\": {\"code\": 429, \"message\": \"Tunggu sebentar sebelum memverifikasi NIK lagi\", \"error_code\": \"TOO_MANY_REQUESTS\", \"server_time\": \"2026-10-23T13:15:00.412Z\"}, \"data\": {\"retry_after\": 5}}"
+                  },
+                  {
+                    "name": "DUKCAPIL_UNAVAILABLE",
+                    "responseId": "960000212",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": "",
+                    "data": "{\"meta\": {\"code\": 503, \"message\": \"Verifikasi NIK sedang gangguan, coba lagi\", \"error_code\": \"DUKCAPIL_UNAVAILABLE\", \"server_time\": \"2026-10-23T13:15:00.412Z\"}, \"data\": {}}"
+                  },
+                  {
+                    "name": "BOOKING_STATUS_INVALID",
+                    "responseId": "960000213",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": "",
+                    "data": "{\"meta\": {\"code\": 409, \"message\": \"Buka halaman tiket terlebih dulu\", \"error_code\": \"BOOKING_STATUS_INVALID\", \"server_time\": \"2026-10-23T13:15:00.412Z\"}, \"data\": {}}"
+                  },
+                  {
+                    "name": "BOOKING_EXPIRED",
+                    "responseId": "960000214",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": "",
+                    "data": "{\"meta\": {\"code\": 409, \"message\": \"Waktu memilih tiket sudah habis\", \"error_code\": \"BOOKING_EXPIRED\", \"server_time\": \"2026-10-23T13:15:00.412Z\"}, \"data\": {}}"
                   },
                   {
                     "name": "INSUFFICIENT_STOCK",
-                    "responseId": "133003445",
+                    "responseId": "960000215",
                     "description": "",
                     "oasKey": "",
                     "oasExtensions": "",
-                    "data": "{\"meta\":{\"code\":409,\"message\":\"Stok tiket tidak mencukupi\",\"error_code\":\"INSUFFICIENT_STOCK\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{}}"
+                    "data": "{\"meta\": {\"code\": 409, \"message\": \"Stok VIP tidak mencukupi\", \"error_code\": \"INSUFFICIENT_STOCK\", \"server_time\": \"2026-10-23T13:15:00.412Z\"}, \"data\": {\"category_id\": \"cat_vip\", \"available\": 1, \"requested\": 2}}"
+                  },
+                  {
+                    "name": "NIK_ALREADY_USED",
+                    "responseId": "960000216",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": "",
+                    "data": "{\"meta\": {\"code\": 409, \"message\": \"NIK pada kursi 1 sudah digunakan untuk event ini\", \"error_code\": \"NIK_ALREADY_USED\", \"server_time\": \"2026-10-23T13:15:00.412Z\"}, \"data\": {\"index\": 0}}"
+                  },
+                  {
+                    "name": "STOCK_UNINITIALIZED",
+                    "responseId": "960000217",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": "",
+                    "data": "{\"meta\": {\"code\": 503, \"message\": \"Stok belum tersedia, coba lagi\", \"error_code\": \"STOCK_UNINITIALIZED\", \"server_time\": \"2026-10-23T13:15:00.412Z\"}, \"data\": {}}"
+                  },
+                  {
+                    "name": "STOCK_NEGATIVE",
+                    "responseId": "960000218",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": "",
+                    "data": "{\"meta\": {\"code\": 503, \"message\": \"Stok sedang disesuaikan, coba lagi\", \"error_code\": \"STOCK_NEGATIVE\", \"server_time\": \"2026-10-23T13:15:00.412Z\"}, \"data\": {}}"
+                  },
+                  {
+                    "name": "INTERNAL_ERROR",
+                    "responseId": "960000219",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": "",
+                    "data": "{\"meta\": {\"code\": 503, \"message\": \"Layanan sedang sibuk, coba lagi\", \"error_code\": \"INTERNAL_ERROR\", \"server_time\": \"2026-10-23T13:15:00.412Z\"}, \"data\": {}}"
                   }
                 ],
                 "requestBody": {
@@ -7562,7 +8914,7 @@
                     }
                   ]
                 },
-                "description": "Create booking.\n\nv2.14: tickets[].holder_email dihapus; seluruh e-tiket dikirim ke contact_email.\n\nv2.16: tiap kursi membawa tepat satu dari nik, saved_nik_id, use_account_nik: true.\n\nv2.17: terms_version dihapus (persetujuan dicatat saat registrasi).",
+                "description": "Create booking.\n\nv2.14: tickets[].holder_email dihapus; seluruh e-tiket dikirim ke contact_email.\n\nv2.16: tiap kursi membawa tepat satu dari nik, saved_nik_id, use_account_nik: true.\n\nv2.17: terms_version dihapus (persetujuan dicatat saat registrasi).\n\nv2.18: respons 201 sama dengan GET /bookings/{id} PENDING_PAYMENT (tanpa subtotal, service_fee, redirect_url); 200 untuk submit ulang; daftar error lengkap (api-contracts §4.3).",
                 "tags": [
                   "Booking"
                 ],
