@@ -36,6 +36,11 @@
 > Selebihnya mendokumentasikan perilaku: daftar `status` §4.4, error 400/401/503 §4.1, aturan `max_per_order`,
 > kredensial saat `EXPIRED`/`LAPSED` (§3.3). Lihat Appendix C, v2.12 → v2.13.
 >
+> **v2.13 (endpoint baru):** §1.8 **`GET /accounts/me`** — info akun untuk halaman profil
+> (`email` + `nik_masked`), dijaga `Authorization: Bearer`, dengan `401`. Definisi awalnya
+> `GET /account/info` dengan field `nik`, mask 18 karakter dan tanpa `401`; keempatnya
+> diselaraskan sebelum implementasi — alasannya di §1.8.
+>
 > **v2.12.1 (koreksi):** field `name` **dihapus dari seluruh permukaan API** — request §1.5
 > `POST /auth/register` dan respons §4.2 `POST /nik/validate`. Keduanya adalah sisa versi
 > sebelum FR-15a dipersempit menjadi "NIK saja", dan §4.2 bahkan bertentangan dengan
@@ -624,6 +629,92 @@ Mengonfirmasi kepemilikan alamat email setelah registrasi (FR-31). **Berbeda dar
 > dirujuk lintas dokumen. Nomor di akhir adalah pilihan yang tidak memecahkan rujukan apa pun.
 
 **Requirement Coverage**: FR-31
+
+---
+
+### 1.8 Get User Profile
+
+Info akun pemilik sesi untuk halaman profil: alamat email dan NIK Terdaftar dalam bentuk
+ter-mask.
+
+**Endpoint**: `GET /accounts/me`
+
+**Headers**:
+```
+Authorization: Bearer {access_token}
+```
+
+> Token **sesi akun**, bukan grant. Endpoint ini tidak menerima `X-Grant-Token`: kepemilikan
+> diselesaikan lewat `account_id` di dalam JWT, dan grant tidak membawa identitas akun apa
+> pun (§9).
+
+**Response** (200):
+```json
+{
+  "meta": {
+    "code": 200,
+    "message": "Success",
+    "server_time": "2026-11-03T09:12:00.412Z"
+  },
+  "data": {
+    "email": "Virgie_OKon@yahoo.com",
+    "nik_masked": "3171********xx22"
+  }
+}
+```
+
+| Field | Tipe | Catatan |
+|---|---|---|
+| `email` | string | Alamat email akun — tujuan tautan verifikasi (§1.7) dan default `contact_email` saat checkout |
+| `nik_masked` | string | NIK Terdaftar dalam bentuk ter-mask. NIK lengkap **tidak pernah** dikembalikan API (FR-32c) |
+
+**Response** (401 - `TOKEN_EXPIRED` / `TOKEN_INVALID`): sesi tidak valid atau kedaluwarsa.
+```json
+{
+  "meta": {
+    "code": 401,
+    "message": "Sesi tidak valid atau kedaluwarsa",
+    "error_code": "TOKEN_EXPIRED",
+    "server_time": "2026-11-03T09:12:00.412Z"
+  },
+  "data": {}
+}
+```
+
+> Klien me-refresh lewat §1.4, lalu mengulang permintaan ini. Bila refresh juga ditolak,
+> customer login ulang (§1.1).
+
+> **Tidak ada field `name`.** Akun tidak menyimpan nama: Dukcapil memvalidasi NIK saja dan
+> nama tidak dikumpulkan di titik mana pun (FR-15a, v2.12.1).
+
+> **Empat penyelarasan terhadap definisi awal**, dilakukan sebelum endpoint ini
+> diimplementasikan — `user-service` belum punya handler-nya, jadi tidak ada klien yang
+> terdampak:
+>
+> 1. **Path `/account/info` → `GET /accounts/me`.** Endpoint akun lain memakai
+>    `/accounts/me/…` (§1.6); bentuk awalnya tunggal (`account`) dan memakai `info`
+>    alih-alih `me`, menyimpang dua kali dari konvensi yang sama.
+> 2. **Field `nik` → `nik_masked`.** `nik` di seluruh dokumen ini berarti **16 digit utuh**
+>    (§1.5, §1.6, §4.2), dan bentuk ter-mask selalu bernama `nik_masked`. Perbedaannya bukan
+>    kosmetik: field bernama `nik` yang kebetulan ter-mask adalah jebakan bagi penulis klien
+>    yang mengirimkannya kembali sebagai NIK — dan nilainya akan gagal validasi 16 digit
+>    tanpa petunjuk mengapa.
+> 3. **Mask `330************777` → `3171********xx22`.** Yang pertama 6 digit + 12 asterisk =
+>    **18 karakter**, untuk NIK yang panjangnya 16. Bentuk `3171********xx22` adalah bentuk
+>    yang benar **dan** yang dominan di dokumen ini (7 kemunculan vs 2).
+> 4. **Respons `401` ditambahkan.** Endpoint ini menuntut `Authorization`, jadi ia dapat
+>    menolak. Bentuknya mengikuti pola error terbaru — `meta.error_code` di samping
+>    `meta.message` — bukan pola `200`-saja yang dipakai §1.6.
+>
+> **Sisa yang tidak disentuh, karena di luar lingkup endpoint ini**: §1.6
+> `GET /accounts/me/saved-niks` masih hanya mendefinisikan `200` meski menuntut
+> `Authorization`, dan masih memakai mask `3171********22` (14 karakter). Keduanya
+> mendahului endpoint ini dan diperbaiki terpisah.
+
+**Requirement Coverage**: tidak ada FR yang menuntut endpoint ini secara langsung. Ia
+melayani halaman profil yang FR-32a–d gambarkan dan memenuhi FR-32c pada field
+`nik_masked`-nya.
+Bila halaman profil adalah requirement tersendiri, ia perlu nomor FR — lihat catatan di atas.
 
 ---
 
@@ -3291,6 +3382,20 @@ Penyelarasan dengan ADR-005. Yang memutus kompatibilitas ditandai **BREAKING**.
 | 86 | §3.1 FR-05: join menunggu grant bagi **setiap** pendatang yang nomornya muat di tempat kosong (`ticket_no ≤ now_serving + min(free_slots, JOIN_DIRECT_MAX)`), bukan hanya `now_serving + 1` (ADR-006 §8.11) | Batch pertama saat penjualan dibuka langsung ke Detail Ticket tanpa melihat ruang tunggu sekejap |
 | 87 | §2.1: `granted: true` juga bisa menjadi jawaban untuk `JOIN_QUEUE`; klien merutekan berdasarkan respons | Halaman utama bisa masih `OPEN` saat ada tempat kosong (mis. tepat saat dibuka) |
 | 88 | admission-ctl berhenti → join tidak menunggu (`free_slots` lebih tua dari 2 detik) | Tidak menahan setiap pendatang 1 detik saat antrian memang beku. Bentuk respons tidak berubah |
+
+### v2.12.1 → v2.13
+
+| # | Perubahan | Alasan |
+|---|---|---|
+| 95 | §1.8 **baru**: `GET /accounts/me` — `email` + `nik_masked`, `Authorization: Bearer`, `200` + `401` | Halaman profil membutuhkan info akun pemilik sesi; sebelumnya tidak ada endpoint yang mengembalikannya. Ditambahkan **tanpa** field `name`, konsisten dengan v2.12.1 dan FR-15a |
+| 96 | Definisi awal endpoint itu (`GET /account/info`, field `nik`, mask `330************777`, tanpa `401`) diselaraskan pada empat titik sebelum implementasi | Keempatnya menyimpang dari konvensi yang sudah ada di dokumen ini: path akun lain memakai `/accounts/me/…`; `nik` berarti 16 digit utuh di tiap endpoint lain sementara bentuk ter-mask bernama `nik_masked`; mask awalnya 18 karakter untuk NIK 16 digit, sedangkan `3171********xx22` benar dan dominan (7 vs 2); dan endpoint ber-`Authorization` tanpa `401` tidak dapat menyatakan penolakannya. Dilakukan sekarang karena `user-service` belum punya handler-nya — tidak ada klien yang terdampak. **Tidak** termasuk: §1.6 yang juga hanya punya `200` dan masih memakai mask 14 karakter |
+
+> **Apidog disinkronkan**: endpoint ditambahkan ke folder `Accounts` dengan skema respons,
+> contoh, dan `x-apidog-orders`; `auth` dan `securityScheme` disalin dari §1.6 agar skema
+> bearer-nya identik. Berkas itu **ekspor** dari proyek Apidog (`projectSetting.id: 1406808`)
+> — endpoint yang sama harus ada di proyeknya, atau ekspor berikutnya menghapusnya kembali.
+
+---
 
 ### v2.12 → v2.12.1
 
