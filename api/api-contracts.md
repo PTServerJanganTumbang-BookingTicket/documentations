@@ -1,12 +1,16 @@
 # Rusuh Booking Tiket — API Contracts
 
-**Versi**: 2.22.0  
+**Versi**: 2.23.0  
 **Tanggal**: 11 November 2026  
 **Status**: Draft  
 **Base URL**: `https://api.my-rusuh.my.id` (tanpa versi di path untuk saat ini; v2.9). Stream: `https://events.my-rusuh.my.id`  
 **Selaras dengan**: ADR-005 (Keputusan Arsitektur Final — SSE + ECS Fargate), diamandemen ADR-006 (antrian)  
 **Pasangan mesin**: `rusuh-booking-apidog.json` (Apidog) — **sumber kebenaran bentuk respons**. Dokumen ini menjelaskan perilaku dan alasannya; keduanya wajib sinkron. `rusuh-booking-openapi.yaml` diarsipkan (`archive/`) dan tidak dipelihara lagi
 
+> **v2.23** (§1.5): **`consent.policy_version` dihapus** dari body `POST /auth/register`. Klien yang masih
+> mengirimnya **tetap diterima** — anggota tambahan diabaikan, bukan ditolak — jadi tidak ada klien yang perlu
+> berubah. Rekam consent kini memuat `account_id` dan `consented_at` saja. Lihat Appendix C, v2.22 → v2.23.
+>
 > **v2.22** (**breaking** bagi klien halaman utama dan join): (1) **`GET /events` dan `GET /events/{id}` disederhanakan**:
 > `status`, `queue_depth`, `queue_capacity`, `min_price`, `max_price`, `display.action`, `display.label_key` dan
 > `display.badge_key` dihapus; `queue_state` menjadi `SCHEDULED \| OPEN \| FULL_QUEUE \| FULL_BOOKED \| CLOSED`;
@@ -480,7 +484,7 @@ Buat akun baru dengan email dan NIK.
 {
   "email": "alex@example.com",
   "nik": "3171xxxxxxxxxx22",
-  "consent": { "accepted": true, "policy_version": "2026-10-01" }
+  "consent": { "accepted": true }
 }
 ```
 
@@ -488,6 +492,23 @@ Buat akun baru dengan email dan NIK.
 > titik mana pun (FR-15a, `requirements.md` §12). Sampai v2.12.0 contoh di sini masih memuat
 > `"name": "ALEX"`, sisa versi sebelum FR-15a dipersempit, dan contoh itu juga mendahului
 > `consent` yang kini wajib.
+
+> **Tidak ada `consent.policy_version`, dan server tidak menggantinya dengan nilainya
+> sendiri** (v2.23). Nilai itu datang dari klien lalu ditulis langsung ke rekam consent yang
+> immutable — artinya klien menjadi otoritas atas kebijakan mana yang baru saja disetujui
+> customer, untuk sebuah rekam yang seluruh tujuannya adalah bukti yang dapat dipercaya
+> (UU PDP No. 27/2022). Field semacam itu lebih buruk daripada tidak ada, karena tampak
+> seperti provenance padahal bukan.
+>
+> Yang tersisa menjawab pertanyaan yang memang ditanyakan hukum: **siapa** yang menyetujui
+> (`account_id`) dan **kapan** (`consented_at`) — keduanya dari sisi server. Teks kebijakan
+> mana yang dilihat customer dijawab oleh dokumen kebijakan berversi beserta timestamp itu,
+> bukan oleh string yang dikirimkan form.
+>
+> Klien lama yang masih mengirim `policy_version` **tetap diterima**, bukan ditolak: anggota
+> tambahan diabaikan decoder, jadi frontend yang belum diperbarui tetap dapat mendaftar.
+> Penghapusan ini sejalan dengan `terms_version` pada §4.3 (v2.17, ADR-006 §8.16): satu
+> catatan persetujuan di titik registrasi, bukan versi yang disalin klien ke tiap permintaan.
 
 **Response** (200):
 ```json
@@ -507,7 +528,6 @@ Buat akun baru dengan email dan NIK.
 | `email` | ✅ | Tujuan tautan verifikasi (§1.7). Unik per akun, dicocokkan case-insensitive |
 | `nik` | ✅ | **NIK_Terdaftar** — 16 digit, diverifikasi Dukcapil saat registrasi, terikat permanen ke akun |
 | `consent.accepted` | ✅ | Persetujuan pemrosesan NIK pihak ketiga. Checkbox **tidak boleh pre-checked** |
-| `consent.policy_version` | ✅ | Versi kebijakan privasi yang ditampilkan saat itu |
 
 > **NIK diverifikasi sekali, di sini.** Setelah itu pembelian oleh akun ini tidak memanggil
 > Dukcapil lagi untuk NIK pembeli. Itulah tujuan utama `NIK_Terdaftar`: Dukcapil berbayar
@@ -3494,3 +3514,9 @@ Penyelarasan dengan ADR-005. Yang memutus kompatibilitas ditandai **BREAKING**.
 | 122 | §3.1, Apidog: `data.queue_state` pada 409 `SALE_NOT_OPEN` menjadi `SCHEDULED`, pada 503 `QUEUE_FULL` menjadi `FULL_QUEUE` | Satu kosakata state di seluruh API |
 | 123 | §2.1, Apidog: urutan tanggal event terbaru dulu, event lampau tetap tampil; parameter `filter` dihapus (halaman dipotong di database); `400 VALIDATION_ERROR`; `sale_starts_at` nullable | Filter mengikuti `queue_state`; query tidak valid kini ditolak |
 | 124 | §2.1, §2.2, Apidog: `503 INTERNAL_ERROR` (Aurora mati); Redis mati tetap 200 dari snapshot dengan `Cache-Control` 5 detik; catatan `meta.server_time` pada respons ber-cache | Halaman utama tidak boleh mati karena Redis; jam dari respons cache bisa tertinggal 30 detik (BR-10) |
+
+### v2.22 → v2.23
+
+| # | Perubahan | Alasan |
+|---|---|---|
+| 125 | §1.5, Apidog: **`consent.policy_version` dihapus** dari body `POST /auth/register` (diabaikan bila masih dikirim, jadi **tidak breaking** bagi klien); rekam consent memuat `id`, `account_id`, `consented_at` saja | Nilainya datang dari klien dan ditulis ke rekam immutable, sehingga klien menjadi otoritas atas kebijakan yang disetujui — untuk rekam yang justru harus menjadi bukti (UU PDP No. 27/2022). `account_id` + `consented_at` dari server menjawab siapa dan kapan; dokumen kebijakan berversi menjawab sisanya. Sejalan dengan `terms_version` (#109) |

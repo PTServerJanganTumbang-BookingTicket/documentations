@@ -1488,20 +1488,15 @@
                       "consent": {
                         "type": "object",
                         "required": [
-                          "accepted",
-                          "policy_version"
+                          "accepted"
                         ],
                         "properties": {
                           "accepted": {
                             "type": "boolean"
-                          },
-                          "policy_version": {
-                            "type": "string"
                           }
                         },
                         "x-apidog-orders": [
-                          "accepted",
-                          "policy_version"
+                          "accepted"
                         ]
                       }
                     },
@@ -1517,7 +1512,7 @@
                   "additionalContentTypes": [],
                   "examples": [
                     {
-                      "value": "{\"email\":\"alex@example.com\",\"nik\":\"3171xxxxxxxxxx22\",\"consent\":{\"accepted\":true,\"policy_version\":\"2026-10-01\"}}",
+                      "value": "{\"email\":\"alex@example.com\",\"nik\":\"3171xxxxxxxxxx22\",\"consent\":{\"accepted\":true}}",
                       "mediaType": "application/json",
                       "description": ""
                     }
