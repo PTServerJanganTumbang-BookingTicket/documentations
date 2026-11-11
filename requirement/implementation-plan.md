@@ -39,6 +39,7 @@
 > | §4.2 `booking_items.holder_email`, §5.4 langkah 1, §13 `ticket.issue` / `booking.expired` (penerima email) | **ADR-006 §8.15 (10 Nov 2026):** `holder_email` dihapus; seluruh e-tiket dan email `booking.expired` hanya ke `bookings.contact_email`. `GET /events/{ev}/tickets` mengembalikan `account {email, nik_masked}` untuk customer login. Rencana build: `be-rusuh-war-ticketing/docs/05-booking/` (B4) |
 > | §4.2 `bookings.terms_*`, §5.4 langkah 1 dan 7, `TERMS_NOT_ACCEPTED` | **ADR-006 §8.16 (10 Nov 2026):** `terms_version` dan `terms_accepted_at` dihapus dari booking; tidak ada validasi syarat pada `POST /bookings` |
 > | §3.5 `pkg/grantauth`, §5, §10 (header endpoint ber-grant) | **ADR-006 §8.17 (10 Nov 2026):** grant milik akun login wajib disertai `Authorization: Bearer` milik akun yang sama (`401 UNAUTHORIZED` / `TOKEN_EXPIRED` / `TOKEN_INVALID`); grant tamu tidak berubah. Middleware memverifikasi access token (`JWT_SECRET`) |
+> | §6 `services/events` (`ResolveDisplay`, `status`, `DIRECT`, `queue_depth`) dan §3.1 join (gerbang `FULL_BOOKED`) | **ADR-006 §8.18 (11 Nov 2026):** halaman utama hanya mengirim `queue_state` (`SCHEDULED`/`OPEN`/`FULL_QUEUE`/`FULL_BOOKED`/`CLOSED`) dan `display {enabled}`; join menerima pendatang baru saat `FULL_BOOKED`. Rancangan terkini: `be-rusuh-war-ticketing/docs/03-events/` |
 
 > **Rev 2.1** — v2.0 ditulis terhadap kontrak v2.4, yang naik ke v2.5 pada sesi yang sama.
 > Tiga temuan §21.3 sudah diperbaiki di sana dan ditandai selesai; `pkg/eticket` ditambahkan

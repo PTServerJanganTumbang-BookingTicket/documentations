@@ -40,11 +40,11 @@ menangani lonjakan trafik ekstrem (flash crowd) saat penjualan tiket dibuka.
 | FR-01  | Home          | Menampilkan daftar seluruh event yang tiketnya dijual online          | MUST     |
 | FR-02  | Home          | Event available dan memiliki stok ditampilkan aktif/clickable         | MUST     |
 | FR-03  | Home          | Event sold out ditampilkan non-aktif dengan label status              | MUST     |
-| FR-03a | Home          | Menampilkan dua field terpisah: `status` (stok) dan `queue_state` (izin masuk) | MUST     |
-| FR-03c | Home          | `status`: `AVAILABLE` / `SELLING_OUT_FAST` / `SOLD_OUT`               | MUST     |
-| FR-03d | Home          | `queue_state`: `NOT_OPEN` / `DIRECT` / `OPEN` / `FULL`                | MUST     |
-| FR-03e | Home          | Server mengirim blok `display` siap-render (`enabled`, `action`, `label_key`, `badge_key`) — frontend tidak memutuskan apa pun | MUST     |
-| FR-03b | Home          | State `FULL` menonaktifkan tombol beli dengan label "Antrian Penuh" — customer tahu sebelum klik, bukan sesudah | MUST     |
+| FR-03a | Home          | Menampilkan `queue_state` (posisi penjualan); ~~field `status` (stok) dihapus, ADR-006 §8.18~~ | MUST     |
+| FR-03c | Home          | ~~`status`: `AVAILABLE` / `SELLING_OUT_FAST` / `SOLD_OUT`~~ — dihapus (ADR-006 §8.18); stok per kategori ada di detail event | MUST     |
+| FR-03d | Home          | `queue_state`: `SCHEDULED` / `OPEN` / `FULL_QUEUE` / `FULL_BOOKED` / `CLOSED` | MUST     |
+| FR-03e | Home          | Server mengirim `display.enabled` (true untuk `OPEN` dan `FULL_BOOKED`) — frontend tidak memutuskan apakah tombol aktif, dan memilih teks dari `queue_state` | MUST     |
+| FR-03b | Home          | State `FULL_QUEUE` menonaktifkan tombol beli ("Antrian Penuh") — customer tahu sebelum klik, bukan sesudah | MUST     |
 | FR-04  | Home          | Saat klik event dan ada antrian → diarahkan ke Waiting Room           | MUST     |
 | FR-05  | Home          | Jika tidak ada antrian → langsung ke Detail Ticket Page               | MUST     |
 | FR-06  | Waiting Room  | Menampilkan posisi antrian customer ("Anda antrian ke-n")             | MUST     |
@@ -167,7 +167,7 @@ menangani lonjakan trafik ekstrem (flash crowd) saat penjualan tiket dibuka.
 | Fallback interval    | Dinamis: 10s (>1000) → 5s (101–1000) → 2s (11–100) → 1s (1–10) — untuk REST fallback `/queue/{ev}/serving` saat SSE tidak tersedia |
 | Admission formula    | `canEnter = (freeSlots > 0) AND (availableTickets > 0)`. Implementasi: `deficit = min(MAX − open, ceil(stock / 3) − browsing)`, hitungan dari Aurora (ADR-006 §3) |
 | Time authority       | Server-side; `serverTime` di setiap payload SSE dan `server_time` di setiap respons REST — frontend menghitung offset jam sekali, tidak ada endpoint waktu tersendiri |
-| Queue capacity       | **300.000 per event**; `QUEUE_FULL` fail-fast. Halaman utama menampilkan `status` + `queue_state` + `display` — lihat FR-03a..e |
+| Queue capacity       | **300.000 per event**; `QUEUE_FULL` fail-fast. Halaman utama menampilkan `queue_state` + `display.enabled` — lihat FR-03a..e |
 | Payment grace        | **30 detik** `PENDING_CANCELLATION` setelah TTL Pembayaran; stok tetap di-hold, callback sukses masih diterima |
 | Queue session        | **Tidak ada TTL antrian absolut dan tidak ada grace antrian**; slot yang di-grant tapi tidak diklaim direbut kembali oleh TTL Booking itu sendiri. **Tidak ada re-admit**: `LAPSED` final, slot hilang (ADR-005 Bagian 7) |
 | Anchor TTL           | Booking dari `granted_at`, pembayaran dari `held_at` — berurutan, maksimum **15,5 menit** |

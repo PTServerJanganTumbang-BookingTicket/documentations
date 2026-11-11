@@ -3493,32 +3493,17 @@
                   "path": [],
                   "query": [
                     {
-                      "id": "SuN3WsUgfy",
-                      "name": "filter",
-                      "required": false,
-                      "enable": true,
-                      "description": "filter",
-                      "type": "string",
-                      "schema": {
-                        "type": "string",
-                        "enum": [
-                          "all",
-                          "available",
-                          "upcoming"
-                        ]
-                      }
-                    },
-                    {
                       "id": "gnnJ1tl3pt",
                       "name": "limit",
                       "required": false,
                       "enable": true,
-                      "description": "",
+                      "description": "1-50. Di luar itu: 400 VALIDATION_ERROR",
                       "type": "integer",
                       "schema": {
                         "type": "integer",
                         "default": 10,
-                        "maximum": 50
+                        "maximum": 50,
+                        "minimum": 1
                       }
                     },
                     {
@@ -3526,11 +3511,12 @@
                       "name": "offset",
                       "required": false,
                       "enable": true,
-                      "description": "",
+                      "description": ">= 0. Negatif: 400 VALIDATION_ERROR",
                       "type": "integer",
                       "schema": {
                         "type": "integer",
-                        "default": 0
+                        "default": 0,
+                        "minimum": 0
                       }
                     }
                   ],
@@ -3642,60 +3628,39 @@
                                 "type": "string",
                                 "example": "https://cdn.rusuh.id/events/konser-a.jpg"
                               },
-                              "status": {
-                                "type": "string",
-                                "example": "SELLING_OUT_FAST"
-                              },
                               "queue_state": {
                                 "type": "string",
-                                "example": "FULL"
-                              },
-                              "queue_depth": {
-                                "type": "integer",
-                                "example": 300000
-                              },
-                              "queue_capacity": {
-                                "type": "integer",
-                                "example": 300000
+                                "enum": [
+                                  "SCHEDULED",
+                                  "OPEN",
+                                  "FULL_QUEUE",
+                                  "FULL_BOOKED",
+                                  "CLOSED"
+                                ],
+                                "example": "FULL_QUEUE",
+                                "description": "SCHEDULED belum dibuka | OPEN dapat membeli | FULL_QUEUE antrian penuh | FULL_BOOKED semua kursi di-hold, tetap dapat masuk antrian | CLOSED tiket habis"
                               },
                               "sale_starts_at": {
-                                "type": "string",
-                                "example": "2026-11-10T02:00:00Z"
+                                "type": [
+                                  "string",
+                                  "null"
+                                ],
+                                "format": "date-time",
+                                "example": "2026-11-10T02:00:00Z",
+                                "description": "null bila sale belum dijadwalkan"
                               },
                               "display": {
                                 "type": "object",
                                 "properties": {
                                   "enabled": {
                                     "type": "boolean",
-                                    "example": false
-                                  },
-                                  "action": {
-                                    "type": "string",
-                                    "example": "NONE"
-                                  },
-                                  "label_key": {
-                                    "type": "string",
-                                    "example": "queue_full"
-                                  },
-                                  "badge_key": {
-                                    "type": "string",
-                                    "nullable": true
+                                    "example": false,
+                                    "description": "true untuk OPEN dan FULL_BOOKED"
                                   }
                                 },
                                 "x-apidog-orders": [
-                                  "enabled",
-                                  "action",
-                                  "label_key",
-                                  "badge_key"
+                                  "enabled"
                                 ]
-                              },
-                              "min_price": {
-                                "type": "integer",
-                                "example": 500000
-                              },
-                              "max_price": {
-                                "type": "integer",
-                                "example": 1500000
                               }
                             },
                             "x-apidog-orders": [
@@ -3705,14 +3670,9 @@
                               "location",
                               "date",
                               "image_url",
-                              "status",
                               "queue_state",
-                              "queue_depth",
-                              "queue_capacity",
                               "sale_starts_at",
-                              "display",
-                              "min_price",
-                              "max_price"
+                              "display"
                             ]
                           }
                         }
@@ -3727,16 +3687,158 @@
                     "contentType": "json",
                     "mediaType": "application/json",
                     "oasExtensions": ""
+                  },
+                  {
+                    "id": "348956898",
+                    "code": "400",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 400
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Parameter limit tidak valid"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "VALIDATION_ERROR"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "limit atau offset tidak valid",
+                    "contentType": "json",
+                    "oasExtensions": "",
+                    "name": "VALIDATION_ERROR",
+                    "mediaType": "application/json"
+                  },
+                  {
+                    "id": "776736905",
+                    "code": "503",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 503
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Layanan tidak tersedia"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "INTERNAL_ERROR"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "Aurora tidak terjangkau. Cache-Control: no-store",
+                    "contentType": "json",
+                    "oasExtensions": "",
+                    "name": "INTERNAL_ERROR",
+                    "mediaType": "application/json"
                   }
                 ],
                 "responseExamples": [
                   {
                     "name": "Success",
-                    "data": "{\"meta\":{\"code\":200,\"message\":\"Success\",\"pagination\":{\"totalData\":2,\"totalPage\":1,\"limit\":10,\"offset\":0},\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":[{\"id\":\"evt_konser_a\",\"name\":\"Konser A\",\"category\":\"LIVE MUSIC\",\"location\":{\"venue\":\"GBK\",\"city\":\"Jakarta\"},\"date\":\"2026-12-25\",\"image_url\":\"https://cdn.rusuh.id/events/konser-a.jpg\",\"status\":\"SELLING_OUT_FAST\",\"queue_state\":\"FULL\",\"queue_depth\":300000,\"queue_capacity\":300000,\"sale_starts_at\":\"2026-11-10T02:00:00Z\",\"display\":{\"enabled\":false,\"action\":\"NONE\",\"label_key\":\"queue_full\",\"badge_key\":null},\"min_price\":500000,\"max_price\":1500000}]}",
+                    "data": "{\"meta\": {\"code\": 200, \"message\": \"Success\", \"pagination\": {\"totalData\": 2, \"totalPage\": 1, \"limit\": 10, \"offset\": 0}, \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": [{\"id\": \"evt_konser_a\", \"name\": \"Konser A — Jakarta\", \"category\": \"LIVE MUSIC\", \"location\": {\"venue\": \"GBK\", \"city\": \"Jakarta\"}, \"date\": \"2026-12-25\", \"image_url\": \"https://cdn.rusuh.id/events/konser-a.jpg\", \"queue_state\": \"FULL_QUEUE\", \"sale_starts_at\": \"2026-11-10T02:00:00Z\", \"display\": {\"enabled\": false}}, {\"id\": \"evt_konser_b\", \"name\": \"Konser B — Bandung\", \"category\": \"LIVE MUSIC\", \"location\": {\"venue\": \"GOR Saparua\", \"city\": \"Bandung\"}, \"date\": \"2027-01-10\", \"image_url\": \"https://cdn.rusuh.id/events/konser-b.jpg\", \"queue_state\": \"CLOSED\", \"sale_starts_at\": \"2026-10-20T02:00:00Z\", \"display\": {\"enabled\": false}}]}",
                     "responseId": "119868031",
                     "description": "",
                     "oasKey": "",
                     "oasExtensions": ""
+                  },
+                  {
+                    "name": "VALIDATION_ERROR",
+                    "responseId": "348956898",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": "",
+                    "data": "{\"meta\": {\"code\": 400, \"message\": \"Parameter limit tidak valid\", \"error_code\": \"VALIDATION_ERROR\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}"
+                  },
+                  {
+                    "name": "INTERNAL_ERROR",
+                    "responseId": "776736905",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": "",
+                    "data": "{\"meta\": {\"code\": 503, \"message\": \"Layanan tidak tersedia\", \"error_code\": \"INTERNAL_ERROR\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}"
                   }
                 ],
                 "requestBody": {
@@ -3746,7 +3848,7 @@
                   "additionalContentTypes": [],
                   "oasExtensions": ""
                 },
-                "description": "Daftar event.",
+                "description": "Daftar event, tanggal event terbaru dulu (event lampau tetap tampil). Di-cache CDN 30 detik (5 detik bila Redis mati). meta.server_time pada respons ber-cache bisa tertinggal 30 detik: jangan dipakai menyinkronkan jam (BR-10). Tanpa parameter filter: halaman dipotong di database.",
                 "tags": [
                   "Events"
                 ],
@@ -3883,51 +3985,38 @@
                               "type": "string",
                               "example": "Energi panggung."
                             },
-                            "status": {
-                              "type": "string",
-                              "example": "AVAILABLE"
-                            },
                             "queue_state": {
                               "type": "string",
-                              "example": "OPEN"
-                            },
-                            "queue_depth": {
-                              "type": "integer",
-                              "example": 1248
-                            },
-                            "queue_capacity": {
-                              "type": "integer",
-                              "example": 300000
+                              "enum": [
+                                "SCHEDULED",
+                                "OPEN",
+                                "FULL_QUEUE",
+                                "FULL_BOOKED",
+                                "CLOSED"
+                              ],
+                              "example": "OPEN",
+                              "description": "SCHEDULED belum dibuka | OPEN dapat membeli | FULL_QUEUE antrian penuh | FULL_BOOKED semua kursi di-hold, tetap dapat masuk antrian | CLOSED tiket habis"
                             },
                             "sale_starts_at": {
-                              "type": "string",
-                              "example": "2026-11-10T02:00:00Z"
+                              "type": [
+                                "string",
+                                "null"
+                              ],
+                              "format": "date-time",
+                              "example": "2026-11-10T02:00:00Z",
+                              "description": "null bila sale belum dijadwalkan"
                             },
                             "display": {
                               "type": "object",
                               "properties": {
                                 "enabled": {
                                   "type": "boolean",
-                                  "example": true
-                                },
-                                "action": {
-                                  "type": "string",
-                                  "example": "JOIN_QUEUE"
-                                },
-                                "label_key": {
-                                  "type": "string",
-                                  "example": "join_queue"
-                                },
-                                "badge_key": {
-                                  "type": "string",
-                                  "nullable": true
+                                  "example": true,
+                                  "description": "true untuk OPEN dan FULL_BOOKED"
                                 }
                               },
                               "x-apidog-orders": [
-                                "enabled",
-                                "action",
-                                "label_key",
-                                "badge_key"
+                                "enabled"
                               ]
                             },
                             "ticket_categories": {
@@ -3998,10 +4087,7 @@
                             "time",
                             "image_url",
                             "description",
-                            "status",
                             "queue_state",
-                            "queue_depth",
-                            "queue_capacity",
                             "sale_starts_at",
                             "display",
                             "ticket_categories",
@@ -4084,12 +4170,75 @@
                     "oasExtensions": "",
                     "name": "NOT_FOUND",
                     "mediaType": "application/json"
+                  },
+                  {
+                    "id": "776736905",
+                    "code": "503",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 503
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Layanan tidak tersedia"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "INTERNAL_ERROR"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "Aurora tidak terjangkau. Cache-Control: no-store",
+                    "contentType": "json",
+                    "oasExtensions": "",
+                    "name": "INTERNAL_ERROR",
+                    "mediaType": "application/json"
                   }
                 ],
                 "responseExamples": [
                   {
                     "name": "Success",
-                    "data": "{\"meta\":{\"code\":200,\"message\":\"Success\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{\"id\":\"evt_konser_a\",\"name\":\"Konser A\",\"category\":\"LIVE MUSIC\",\"location\":{\"venue\":\"GBK\",\"city\":\"Jakarta\"},\"date\":\"2026-12-25\",\"time\":\"19:00\",\"image_url\":\"https://cdn.rusuh.id/events/konser-a.jpg\",\"description\":\"Energi panggung.\",\"status\":\"AVAILABLE\",\"queue_state\":\"OPEN\",\"queue_depth\":1248,\"queue_capacity\":300000,\"sale_starts_at\":\"2026-11-10T02:00:00Z\",\"display\":{\"enabled\":true,\"action\":\"JOIN_QUEUE\",\"label_key\":\"join_queue\",\"badge_key\":null},\"ticket_categories\":[{\"id\":\"cat_vip\",\"name\":\"VIP\",\"description\":\"Lebih dekat.\",\"price\":1500000,\"available\":12,\"status\":\"AVAILABLE\"},{\"id\":\"cat_festival\",\"name\":\"Festival\",\"description\":\"Area festival.\",\"price\":850000,\"available\":240,\"status\":\"AVAILABLE\"},{\"id\":\"cat_tribune\",\"name\":\"Tribune\",\"description\":\"Area tribun.\",\"price\":500000,\"available\":0,\"status\":\"SOLD_OUT\"}],\"captcha\":{\"provider\":\"turnstile\",\"site_key\":\"0x4AAAAAAA...\"}}}",
+                    "data": "{\"meta\": {\"code\": 200, \"message\": \"Success\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {\"id\": \"evt_konser_a\", \"name\": \"Konser A\", \"category\": \"LIVE MUSIC\", \"location\": {\"venue\": \"GBK\", \"city\": \"Jakarta\"}, \"date\": \"2026-12-25\", \"time\": \"19:00\", \"image_url\": \"https://cdn.rusuh.id/events/konser-a.jpg\", \"description\": \"Energi panggung.\", \"queue_state\": \"OPEN\", \"sale_starts_at\": \"2026-11-10T02:00:00Z\", \"display\": {\"enabled\": true}, \"ticket_categories\": [{\"id\": \"cat_vip\", \"name\": \"VIP\", \"description\": \"Lebih dekat.\", \"price\": 1500000, \"available\": 12, \"status\": \"AVAILABLE\"}, {\"id\": \"cat_festival\", \"name\": \"Festival\", \"description\": \"Area festival.\", \"price\": 850000, \"available\": 240, \"status\": \"AVAILABLE\"}, {\"id\": \"cat_tribune\", \"name\": \"Tribune\", \"description\": \"Area tribun.\", \"price\": 500000, \"available\": 0, \"status\": \"SOLD_OUT\"}], \"captcha\": {\"provider\": \"turnstile\", \"site_key\": \"0x4AAAAAAA...\"}}}",
                     "responseId": "176251152",
                     "description": "",
                     "oasKey": "",
@@ -4102,6 +4251,14 @@
                     "oasKey": "",
                     "oasExtensions": "",
                     "data": "{\"meta\":{\"code\":404,\"message\":\"Event tidak ditemukan\",\"error_code\":\"NOT_FOUND\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{}}"
+                  },
+                  {
+                    "name": "INTERNAL_ERROR",
+                    "responseId": "776736905",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": "",
+                    "data": "{\"meta\": {\"code\": 503, \"message\": \"Layanan tidak tersedia\", \"error_code\": \"INTERNAL_ERROR\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}"
                   }
                 ],
                 "requestBody": {
@@ -4111,7 +4268,7 @@
                   "additionalContentTypes": [],
                   "oasExtensions": ""
                 },
-                "description": "Detail event.",
+                "description": "Detail event. Di-cache CDN 30 detik (5 detik bila Redis mati). Kategori: available dari stok Redis (negatif tampil 0), status AVAILABLE bila available > 0, selain itu SOLD_OUT.",
                 "tags": [
                   "Events"
                 ],
@@ -4490,11 +4647,11 @@
                   {
                     "id": "409430001",
                     "code": "409",
-                    "name": "SALE_NOT_OPEN / FULL_BOOKED",
+                    "name": "SALE_NOT_OPEN",
                     "headers": [],
                     "contentType": "json",
                     "mediaType": "application/json",
-                    "description": "SALE_NOT_OPEN: state = SCHEDULED, body memuat sale_starts_at. FULL_BOOKED (v2.8): state = FULL_BOOKED, hanya pendatang baru; body memuat full_booked_at",
+                    "description": "SALE_NOT_OPEN: state = SCHEDULED, body memuat sale_starts_at.",
                     "oasExtensions": "",
                     "itemSchema": {},
                     "jsonSchema": {
@@ -4541,23 +4698,16 @@
                           "properties": {
                             "queue_state": {
                               "type": "string",
-                              "example": "NOT_OPEN",
-                              "description": "NOT_OPEN (SALE_NOT_OPEN) atau FULL_BOOKED (FULL_BOOKED)"
+                              "example": "SCHEDULED"
                             },
                             "sale_starts_at": {
                               "type": "string",
                               "format": "date-time"
-                            },
-                            "full_booked_at": {
-                              "type": "string",
-                              "format": "date-time",
-                              "description": "Hanya pada FULL_BOOKED"
                             }
                           },
                           "x-apidog-orders": [
                             "queue_state",
-                            "sale_starts_at",
-                            "full_booked_at"
+                            "sale_starts_at"
                           ]
                         }
                       },
@@ -4692,7 +4842,7 @@
                           "properties": {
                             "queue_state": {
                               "type": "string",
-                              "example": "FULL"
+                              "example": "FULL_QUEUE"
                             },
                             "queue_capacity": {
                               "type": "integer",
@@ -4971,7 +5121,7 @@
                     "description": "",
                     "oasKey": "",
                     "oasExtensions": "",
-                    "data": "{\"meta\":{\"code\":409,\"message\":\"Penjualan belum dibuka\",\"error_code\":\"SALE_NOT_OPEN\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{\"queue_state\":\"NOT_OPEN\",\"sale_starts_at\":\"2026-11-10T02:00:00Z\"}}"
+                    "data": "{\"meta\":{\"code\":409,\"message\":\"Penjualan belum dibuka\",\"error_code\":\"SALE_NOT_OPEN\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{\"queue_state\":\"SCHEDULED\",\"sale_starts_at\":\"2026-11-10T02:00:00Z\"}}"
                   },
                   {
                     "name": "TOO_MANY_REQUESTS",
@@ -4987,7 +5137,7 @@
                     "description": "",
                     "oasKey": "",
                     "oasExtensions": "",
-                    "data": "{\"meta\":{\"code\":503,\"message\":\"Antrian sedang penuh, silakan coba beberapa saat lagi\",\"error_code\":\"QUEUE_FULL\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{\"queue_state\":\"FULL\",\"queue_capacity\":300000}}"
+                    "data": "{\"meta\":{\"code\":503,\"message\":\"Antrian sedang penuh, silakan coba beberapa saat lagi\",\"error_code\":\"QUEUE_FULL\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{\"queue_state\":\"FULL_QUEUE\",\"queue_capacity\":300000}}"
                   },
                   {
                     "name": "VALIDATION_ERROR",
@@ -5020,14 +5170,6 @@
                     "oasKey": "",
                     "oasExtensions": "",
                     "data": "{\"meta\": {\"code\": 404, \"message\": \"Event tidak ditemukan\", \"error_code\": \"NOT_FOUND\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}"
-                  },
-                  {
-                    "name": "FULL_BOOKED",
-                    "responseId": "409430001",
-                    "description": "",
-                    "oasKey": "",
-                    "oasExtensions": "",
-                    "data": "{\"meta\": {\"code\": 409, \"message\": \"Tiket sedang habis\", \"error_code\": \"FULL_BOOKED\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {\"queue_state\": \"FULL_BOOKED\", \"full_booked_at\": \"2026-11-10T02:40:12Z\"}}"
                   },
                   {
                     "name": "SALE_CLOSED",
@@ -5100,7 +5242,7 @@
                     }
                   ]
                 },
-                "description": "Join queue. Dipanggil oleh tombol event dengan action JOIN_QUEUE maupun GO_TO_TICKETS (§2.1).\n\nURUTAN PEMERIKSAAN: bentuk request → identitas (Bearer tidak sah = 401, bukan tamu; tamu wajib X-Device-Id) → rate limit → CAPTCHA → state sale → pemulihan (BR-09 queue_token milik pemanggil, lalu BR-07 akun) → FULL_BOOKED → kapasitas → nomor baru. Rate limit DULU, CAPTCHA kemudian: rate limit adalah panggilan Redis lokal; verifikasi CAPTCHA adalah round trip eksternal. Penolakan apa pun tidak memakan ticket_no.\n\nCookie: queue_token=…; Domain=my-rusuh.my.id; Path=/events/{event_id}; HttpOnly; Secure; SameSite=Strict; Max-Age diturunkan dari SALE_WINDOW_SECONDS — ia harus kedaluwarsa bersamaan dengan token:{queue_token}.\n\nRespons membawa queue_token (untuk mobile, v2.7) dan sse_url absolut (host events.*, v2.8). Tidak ada estimasi waktu tunggu: frontend menghitungnya dari ratePerMin (api-contracts §3.5).\n\nqueue_token hanya berlaku bagi pemiliknya (v2.9, ADR-006 §8.9): token tamu dari perangkat lain → 401 DEVICE_MISMATCH; token akun dipakai akun lain / tamu → 401 UNAUTHORIZED. Keduanya menghapus cookie; klien menghapus token antriannya lalu join lagi tanpa token.\n\nTANPA LANGSUNG-MASUK (v2.12, ADR-006 §8.14): join tidak menunggu grant dan tidak pernah menjawab granted. Bila tempat masih kosong, tick admission-ctl berikutnya (≤ 500 ms) memasukkan customer; klien tahu lewat stream dan GET /queue/me. Join tidak pernah memberi grant sendiri.",
+                "description": "Join queue. Dipanggil oleh tombol event bila display.enabled (§2.1).\n\nURUTAN PEMERIKSAAN: bentuk request → identitas (Bearer tidak sah = 401, bukan tamu; tamu wajib X-Device-Id) → rate limit → CAPTCHA → state sale → pemulihan (BR-09 queue_token milik pemanggil, lalu BR-07 akun) → kapasitas → nomor baru. Rate limit DULU, CAPTCHA kemudian: rate limit adalah panggilan Redis lokal; verifikasi CAPTCHA adalah round trip eksternal. Penolakan apa pun tidak memakan ticket_no.\n\nCookie: queue_token=…; Domain=my-rusuh.my.id; Path=/events/{event_id}; HttpOnly; Secure; SameSite=Strict; Max-Age diturunkan dari SALE_WINDOW_SECONDS — ia harus kedaluwarsa bersamaan dengan token:{queue_token}.\n\nRespons membawa queue_token (untuk mobile, v2.7) dan sse_url absolut (host events.*, v2.8). Tidak ada estimasi waktu tunggu: frontend menghitungnya dari ratePerMin (api-contracts §3.5).\n\nqueue_token hanya berlaku bagi pemiliknya (v2.9, ADR-006 §8.9): token tamu dari perangkat lain → 401 DEVICE_MISMATCH; token akun dipakai akun lain / tamu → 401 UNAUTHORIZED. Keduanya menghapus cookie; klien menghapus token antriannya lalu join lagi tanpa token.\n\nTANPA LANGSUNG-MASUK (v2.12, ADR-006 §8.14): join tidak menunggu grant dan tidak pernah menjawab granted. Bila tempat masih kosong, tick admission-ctl berikutnya (≤ 500 ms) memasukkan customer; klien tahu lewat stream dan GET /queue/me. Join tidak pernah memberi grant sendiri.\n\nFULL_BOOKED TIDAK menolak join (v2.22, ADR-006 §8.18): customer baru tetap mendapat nomor dan menunggu kursi yang kembali. data.queue_state pada error memakai nama §2.1: SCHEDULED (SALE_NOT_OPEN), FULL_QUEUE (QUEUE_FULL).",
                 "tags": [
                   "Queue"
                 ],

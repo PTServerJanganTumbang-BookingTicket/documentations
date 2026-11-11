@@ -727,6 +727,8 @@ Antrian dibatasi `QUEUE_CAPACITY` (300.000). `POST /events/{ev}/queue/join` meno
 `QUEUE_FULL` ketika `issued − now_serving >= QUEUE_CAPACITY`, **fail fast** — tanpa buffering
 dan tanpa memberi nomor antrian yang tidak akan pernah terlayani.
 
+> ⚠️ **Diubah oleh ADR-006 §8.18** — halaman utama kini hanya mengirim `queue_state` (`SCHEDULED`/`OPEN`/`FULL_QUEUE`/`FULL_BOOKED`/`CLOSED`) dan `display {enabled}`; `status`, `DIRECT`, `queue_depth`, `queue_capacity`, harga min/max dan `display.action`/`label_key`/`badge_key` dihapus. `FULL_BOOKED` menerima pendatang baru.
+
 ### Dua sumbu, dua field: `status` dan `queue_state`
 
 `GET /events` memisahkan **stok** dari **izin masuk**, karena keduanya bergerak sendiri-sendiri

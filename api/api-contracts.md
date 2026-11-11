@@ -1,12 +1,20 @@
 # Rusuh Booking Tiket — API Contracts
 
-**Versi**: 2.21.0  
-**Tanggal**: 10 November 2026  
+**Versi**: 2.22.0  
+**Tanggal**: 11 November 2026  
 **Status**: Draft  
 **Base URL**: `https://api.my-rusuh.my.id` (tanpa versi di path untuk saat ini; v2.9). Stream: `https://events.my-rusuh.my.id`  
 **Selaras dengan**: ADR-005 (Keputusan Arsitektur Final — SSE + ECS Fargate), diamandemen ADR-006 (antrian)  
 **Pasangan mesin**: `rusuh-booking-apidog.json` (Apidog) — **sumber kebenaran bentuk respons**. Dokumen ini menjelaskan perilaku dan alasannya; keduanya wajib sinkron. `rusuh-booking-openapi.yaml` diarsipkan (`archive/`) dan tidak dipelihara lagi
 
+> **v2.22** (**breaking** bagi klien halaman utama dan join): (1) **`GET /events` dan `GET /events/{id}` disederhanakan**:
+> `status`, `queue_depth`, `queue_capacity`, `min_price`, `max_price`, `display.action`, `display.label_key` dan
+> `display.badge_key` dihapus; `queue_state` menjadi `SCHEDULED \| OPEN \| FULL_QUEUE \| FULL_BOOKED \| CLOSED`;
+> `display` hanya berisi `enabled`. (2) **`FULL_BOOKED` tidak lagi menolak join**: 409 `FULL_BOOKED` pada join dihapus.
+> (3) `data.queue_state` pada error join memakai nama baru (`SCHEDULED`, `FULL_QUEUE`). (4) Daftar event tanpa `filter`, diurutkan
+> tanggal terbaru dulu, event lampau tetap tampil; `400 VALIDATION_ERROR` pada daftar; `503 INTERNAL_ERROR` pada
+> keduanya. Lihat Appendix C, v2.21 → v2.22.
+>
 > **v2.21** (aditif, `POST /bookings`): (1) **status booking diperiksa lebih dulu**, sebelum isi body dan verifikasi
 > NIK, sehingga submit ulang pada booking `HELD` atau lebih jauh **selalu** menjawab 200, juga saat body berubah atau
 > nik-verify gangguan. (2) `nik` dinormalisasi **sama dengan §4.2** (semua karakter selain angka dibuang, lalu tepat
@@ -745,9 +753,12 @@ Menampilkan daftar event. UI: Home Page "Daftar Event".
 **Query Parameters**:
 | Param | Type | Required | Description |
 |-------|------|----------|-------------|
-| `filter` | string | No | `all`, `available` (`status != SOLD_OUT`), `upcoming` (`queue_state == NOT_OPEN`) |
-| `limit` | int | No | Default: 10, Max: 50 |
-| `offset` | int | No | Default: 0 |
+| `limit` | int | No | Default: 10, Max: 50. Di luar 1–50 atau bukan angka → `400 VALIDATION_ERROR` |
+| `offset` | int | No | Default: 0. Negatif atau bukan angka → `400 VALIDATION_ERROR` |
+
+Urutan: tanggal event **terbaru lebih dulu**, lalu `id`. Event yang sudah lewat tetap tampil (`queue_state: CLOSED`).
+
+> **Tidak ada parameter `filter`** (dihapus di v2.22). Halaman dipotong di database, sehingga `totalData` dan batas halaman tepat dan Redis hanya dibaca untuk event pada halaman itu. Frontend menampilkan semua event dan mengatur tiap kartu dari `queue_state` / `display.enabled`. Parameter `filter` dari klien lama diabaikan.
 
 **Response** (200):
 ```json
@@ -760,7 +771,8 @@ Menampilkan daftar event. UI: Home Page "Daftar Event".
       "totalPage": 1,
       "limit": 10,
       "offset": 0
-    }
+    },
+    "server_time": "2026-11-03T09:12:00.412Z"
   },
   "data": [
     {
@@ -773,19 +785,11 @@ Menampilkan daftar event. UI: Home Page "Daftar Event".
       },
       "date": "2026-12-25",
       "image_url": "https://cdn.rusuh.id/events/konser-a.jpg",
-      "status": "SELLING_OUT_FAST",
-      "queue_state": "FULL",
-      "queue_depth": 300000,
-      "queue_capacity": 300000,
+      "queue_state": "FULL_QUEUE",
       "sale_starts_at": "2026-11-10T02:00:00Z",
       "display": {
-        "enabled": false,
-        "action": "NONE",
-        "label_key": "queue_full",
-        "badge_key": null
-      },
-      "min_price": 500000,
-      "max_price": 1500000
+        "enabled": false
+      }
     },
     {
       "id": "evt_konser_b",
@@ -797,103 +801,53 @@ Menampilkan daftar event. UI: Home Page "Daftar Event".
       },
       "date": "2027-01-10",
       "image_url": "https://cdn.rusuh.id/events/konser-b.jpg",
-      "status": "SOLD_OUT",
-      "queue_state": "OPEN",
-      "queue_depth": 0,
-      "queue_capacity": 300000,
+      "queue_state": "CLOSED",
       "sale_starts_at": "2026-10-20T02:00:00Z",
       "display": {
-        "enabled": false,
-        "action": "NONE",
-        "label_key": "sold_out",
-        "badge_key": null
-      },
-      "min_price": null,
-      "max_price": null
+        "enabled": false
+      }
     }
   ]
 }
 ```
 
-**`status`** — sumbu stok saja:
+**`queue_state`** — di mana posisi penjualan saat ini (satu-satunya sumbu; stok tidak lagi dikirim di daftar):
 
-| Nilai | Kondisi |
-|---|---|
-| `AVAILABLE` | `available > threshold` |
-| `SELLING_OUT_FAST` | `0 < available <= threshold` |
-| `SOLD_OUT` | `available == 0` — **reversibel**: kursi dari booking yang kedaluwarsa dapat membuatnya `AVAILABLE` lagi |
-
-> **Catatan v2.10:** nilai ini adalah sumbu stok halaman utama dan **belum** diganti nama, padahal artinya sama dengan state antrian `FULL_BOOKED` (reversibel). Rekomendasi: ganti menjadi `FULL_BOOKED` bersama FR-03c; sementara itu klien menganggap `status: SOLD_OUT` pada daftar event sama dengan `FULL_BOOKED` pada antrian.
-
-`threshold = capacity × SELLING_FAST_THRESHOLD_PCT / 100` (bawaan 20).
-
-**`queue_state`** — sumbu izin masuk saja:
-
-| Nilai | Kondisi | Tombol |
+| Nilai | Arti | `display.enabled` |
 |---|---|---|
-| `NOT_OPEN` | sale belum dibuka (`sale_starts_at` di depan) | Nonaktif |
-| `FULL` | `queue_depth >= queue_capacity` | Nonaktif, "Antrian penuh" |
-| `DIRECT` | `queue_depth == 0` dan masih ada slot bebas | "Beli Tiket" — FR-05 (label saja, lihat catatan di bawah) |
-| `OPEN` | sisanya | "Masuk Antrian" |
+| `SCHEDULED` | sale belum dibuka (`sale_starts_at` di depan, atau belum dijadwalkan) | `false` |
+| `OPEN` | sale terbuka, customer dapat masuk antrian | `true` |
+| `FULL_QUEUE` | antrian sudah mencapai kapasitas maksimum (`QUEUE_CAPACITY`) | `false` |
+| `FULL_BOOKED` | semua kursi sedang di-hold; customer **tetap dapat masuk antrian** dan menunggu kursi yang kembali dari booking yang kedaluwarsa | `true` |
+| `CLOSED` | tiket habis, final | `false` |
 
-> **`COMING_SOON` dihapus dari `status`**, dan `CLOSED` dihapus dari `queue_state`.
-> `COMING_SOON` adalah keadaan siklus hidup sale, bukan keadaan stok — ia menjadi
-> `queue_state: NOT_OPEN` + `sale_starts_at`. `CLOSED` dulu berarti "event sold out",
-> sehingga ia melaporkan urusan `status`.
->
-> Keduanya kini dapat bernilai bebas satu terhadap yang lain, dan pada puncak sale kombinasi
-> `status: AVAILABLE` + `queue_state: FULL` (tiket masih ada, antrian sudah penuh) adalah hal
-> normal — satu enum tidak dapat menyatakannya.
+Server menurunkannya dari `queue:{ev}.state` dan panjang antrian, dengan urutan yang sama dengan gerbang join (§3.1):
+`CLOSED` lebih dulu, lalu `FULL_BOOKED`, lalu `FULL_QUEUE` (panjang antrian ≥ kapasitas), selain itu `OPEN`.
+`CLOSED` selalu tampil `CLOSED`, juga bila ada kursi yang kembali terlambat: join menjawab 410 `SALE_CLOSED`.
+`queue:{ev}` yang tidak ada atau bernilai tak dikenal tampil `SCHEDULED`.
 
-**`display`** — keputusan server, bukan frontend:
+**`sale_starts_at`** — `null` bila sale belum dijadwalkan.
 
-| Field | Nilai |
-|---|---|
-| `enabled` | bool — tombol dapat ditekan |
-| `action` | `JOIN_QUEUE` \| `GO_TO_TICKETS` \| `NONE` |
-| `label_key` | `sold_out` \| `sold_out_may_return` \| `coming_soon` \| `queue_full` \| `buy_now` \| `join_queue` |
-| `badge_key` | `selling_out_fast` \| `null` |
+**`display`** — keputusan server, bukan frontend: `enabled` = tombol dapat ditekan. Tombol selalu memanggil
+`POST …/queue/join` (§3.1). Teks tombol dipilih frontend dari `queue_state` lewat tabel terjemahan (FR-32); server
+tidak mengirim teks, karena `Accept-Language` akan memasuki cache key CDN dan memecah satu respons yang di-cache 30
+detik untuk 300.000 orang.
 
-Aturan resolusi, dijalankan **server-side**, kecocokan pertama menang:
+> **Halaman utama menampilkan waktu absolut, bukan hitung mundur.** Label pra-buka berbunyi "Buka 10 Nov 09:00".
+> Hitung mundur hidup hanya ada di ruang tunggu lewat SSE `serverTime`.
 
-```
-status == SOLD_OUT
-  dan queue state CLOSED   → enabled=false  action=NONE           label=sold_out
-status == SOLD_OUT
-  dan belum CLOSED         → enabled=false  action=NONE           label=sold_out_may_return
-queue_state == NOT_OPEN    → enabled=false  action=NONE           label=coming_soon
-queue_state == FULL        → enabled=false  action=NONE           label=queue_full
-queue_state == DIRECT      → enabled=true   action=GO_TO_TICKETS  label=buy_now
-queue_state == OPEN        → enabled=true   action=JOIN_QUEUE     label=join_queue
-```
+> **`meta.server_time` pada respons yang di-cache CDN bisa tertinggal hingga 30 detik.** Klien **tidak boleh**
+> memakai `GET /events` dan `GET /events/{id}` untuk menyinkronkan jam (BR-10); gunakan `serverTime` pada SSE.
 
-> **`GO_TO_TICKETS` tetap memanggil `POST …/queue/join` (§3.1).** Grant hanya lahir dari join: tanpa
-> join tidak ada `X-Grant-Token`, tidak ada pengikatan device dan tidak ada penegakan BR-07. Sejak v2.12 join
-> **tidak pernah** menjawab `granted: true`: untuk `GO_TO_TICKETS` maupun `JOIN_QUEUE` jawabannya `queued` atau
-> `rejoined`. Bedanya hanya layar yang ditampilkan: untuk `GO_TO_TICKETS` klien membuka stream dan menampilkan
-> "Memproses…" (bukan layar antrian); giliran tiba dalam satu tick (≤ 500 ms) bila ada tempat kosong, lalu klien
-> memanggil `/queue/me` dan pindah ke Detail Ticket.
+> `queue_state` adalah perkiraan — response ini di-cache CDN 30 detik. Penegak sebenarnya adalah pemeriksaan atomik
+> saat `POST /events/{id}/queue/join`. Bila Redis tidak terbaca, server tetap menjawab 200: `queue_state` diturunkan
+> dari `sale_starts_at` saja (`SCHEDULED` sebelum waktunya, `OPEN` sesudahnya) dan `Cache-Control` hanya 5 detik.
 
-```
-badge_key = selling_out_fast  bila status == SELLING_OUT_FAST DAN display.enabled
-          = null              selainnya
-```
+**Response** (400 - `VALIDATION_ERROR`): `limit` atau `offset` tidak valid. Boleh di-cache CDN.
 
-> **Label adalah kunci, bukan teks.** FR-32 menuntut dua bahasa; teks jadi dari server akan
-> memasukkan `Accept-Language` ke cache key CDN dan memecah satu respons yang di-cache 30
-> detik untuk 300.000 orang. Kunci + tabel terjemahan di frontend adalah pencarian, bukan
-> logika.
->
-> **Halaman utama menampilkan waktu absolut, bukan hitung mundur.** Hitung mundur pra-buka
-> menuntut frontend membandingkan `sale_starts_at` dengan jam — logika di frontend, dan
-> keliru juga karena respons ini di-cache 30 detik. Label pra-buka berbunyi
-> "Buka 10 Nov 09:00". Hitung mundur hidup hanya ada di ruang tunggu lewat SSE `serverTime`.
+**Response** (503 - `INTERNAL_ERROR`): Aurora tidak terjangkau. `Cache-Control: no-store`.
 
-> `queue_depth` adalah perkiraan — response ini di-cache CDN 30 detik. Penegak sebenarnya
-> adalah pemeriksaan atomik saat `POST /events/{id}/queue/join`. Gunanya menampilkan di sini
-> adalah agar customer melihat antrian penuh **sebelum** mengklik, bukan sesudah.
-
-**Requirement Coverage**: FR-01, FR-02, FR-03
+**Requirement Coverage**: FR-01, FR-02, FR-03, FR-03a..e
 
 ---
 
@@ -908,7 +862,8 @@ Detail event untuk sidebar info dan breadcrumb.
 {
   "meta": {
     "code": 200,
-    "message": "Success"
+    "message": "Success",
+    "server_time": "2026-11-03T09:12:00.412Z"
   },
   "data": {
     "id": "evt_konser_a",
@@ -922,16 +877,10 @@ Detail event untuk sidebar info dan breadcrumb.
     "time": "19:00",
     "image_url": "https://cdn.rusuh.id/events/konser-a.jpg",
     "description": "Energi panggung. Cerita yang kamu bawa pulang.",
-    "status": "AVAILABLE",
     "queue_state": "OPEN",
-    "queue_depth": 1248,
-    "queue_capacity": 300000,
     "sale_starts_at": "2026-11-10T02:00:00Z",
     "display": {
-      "enabled": true,
-      "action": "JOIN_QUEUE",
-      "label_key": "join_queue",
-      "badge_key": null
+      "enabled": true
     },
     "captcha": {
       "provider": "turnstile",
@@ -967,13 +916,21 @@ Detail event untuk sidebar info dan breadcrumb.
 }
 ```
 
+`queue_state`, `sale_starts_at` dan `display` sama dengan §2.1. Kategori: `available` dibaca dari stok Redis
+(nilai negatif tampil 0; kunci tidak ada → snapshot Aurora), `status` = `AVAILABLE` bila `available > 0`, selain itu
+`SOLD_OUT`.
+
 > **`captcha.site_key` ada di sini supaya token dapat diambil lebih awal.** Klien memuat
-> widget CAPTCHA pada halaman ini — termasuk saat `queue_state: NOT_OPEN` — dan menyegarkan
+> widget CAPTCHA pada halaman ini — termasuk saat `queue_state: SCHEDULED` — dan menyegarkan
 > tokennya tiap ~60 detik, sehingga pada `sale_starts_at` ia sudah memegang token segar untuk
 > dibawa ke `POST …/queue/join` (§3.1). Site key bersifat publik; secret key tidak pernah
 > dikirim ke klien.
 
-**Requirement Coverage**: FR-11, FR-12
+**Response** (404 - `NOT_FOUND`): event tidak ada, atau `event_id` tidak dapat menjadi hash tag Redis. Boleh di-cache CDN.
+
+**Response** (503 - `INTERNAL_ERROR`): Aurora tidak terjangkau. `Cache-Control: no-store`.
+
+**Requirement Coverage**: FR-11, FR-12, FR-03a..e
 
 ---
 
@@ -1022,7 +979,7 @@ X-Queue-Token: {queue_token}           # opsional (mobile): rejoin BR-09; web me
 > yang butuh tiga detik akan mendapat nomor antrian **lebih besar** daripada bot yang
 > menembus layanan pemecah dalam 200 ms. Jadi:
 >
-> 1. Halaman pra-buka (`queue_state: NOT_OPEN`, §2.1) mengambil token saat dimuat
+> 1. Halaman pra-buka (`queue_state: SCHEDULED`, §2.1) mengambil token saat dimuat
 > 2. Token disegarkan tiap ~60 detik selama menunggu — **wajib**, karena token CAPTCHA
 >    berumur pendek dan sekali pakai
 > 3. Pada `sale_starts_at` klien sudah memegang token segar; join hanya membawanya
@@ -1128,8 +1085,8 @@ X-Queue-Token: {queue_token}           # opsional (mobile): rejoin BR-09; web me
 > `acct:{ev}:{account_id}` dan membuka jalan ke dua tempat untuk satu akun (BR-07). Token dari event
 > lain, atau yang sudah tidak ada, diabaikan: join berjalan sebagai join baru.
 >
-> **Urutan pemeriksaan:** pemulihan (BR-09, lalu BR-07) dijalankan **sebelum** gerbang `FULL_BOOKED` dan
-> `QUEUE_FULL`, jadi customer yang sudah punya tempat tidak pernah ditolak oleh keduanya.
+> **Urutan pemeriksaan:** pemulihan (BR-09, lalu BR-07) dijalankan **sebelum** gerbang `QUEUE_FULL`, jadi customer yang
+> sudah punya tempat tidak pernah ditolak olehnya.
 
 **Tidak ada respons "langsung masuk"** (dicabut di v2.12, ADR-006 §8.14). Join tidak menunggu dan tidak
 menjawab `granted`; bahkan bila tempat masih kosong, jawabannya respons antre di atas dan tick admission-ctl
@@ -1140,7 +1097,7 @@ berikutnya (≤ 500 ms) memasukkan customer. Klien merutekan berdasarkan `state`
 ```json
 {
   "meta": { "code": 503, "message": "Antrian sedang penuh, silakan coba beberapa saat lagi" },
-  "data": { "queue_state": "FULL", "queue_capacity": 300000 }
+  "data": { "queue_state": "FULL_QUEUE", "queue_capacity": 300000 }
 }
 ```
 
@@ -1165,29 +1122,18 @@ melewati batas 3 join per akun per menit.
 ```json
 {
   "meta": { "code": 409, "message": "Penjualan belum dibuka" },
-  "data": { "queue_state": "NOT_OPEN", "sale_starts_at": "2026-11-10T02:00:00Z" }
+  "data": { "queue_state": "SCHEDULED", "sale_starts_at": "2026-11-10T02:00:00Z" }
 }
 ```
 
 > **Ini keadaan AWAL, bukan tepi.** 300.000 orang berkumpul **sebelum** gerbang dibuka, bukan
 > sesudah. Tanpa penolakan di sini mereka semua mendapat `ticket_no` untuk sale yang belum
-> ada. Halaman utama sudah menampilkan `queue_state: NOT_OPEN` + `sale_starts_at` (§2.1);
+> ada. Halaman utama sudah menampilkan `queue_state: SCHEDULED` + `sale_starts_at` (§2.1);
 > penolakan di sini adalah penegaknya.
 
-**Response** (409 - `FULL_BOOKED`): `queue:{ev}.state` = `FULL_BOOKED`, untuk **pendatang baru** saja.
-```json
-{
-  "meta": { "code": 409, "message": "Tiket sedang habis", "error_code": "FULL_BOOKED" },
-  "data": { "queue_state": "FULL_BOOKED", "full_booked_at": "2026-11-10T02:40:12Z" }
-}
-```
-
-> **Mengapa ditolak, padahal stok bisa kembali.** Kursi yang kembali dari booking kedaluwarsa jatuh ke
-> orang yang **sudah** di antrian lebih dulu; pendatang baru saat `FULL_BOOKED` hampir tidak mungkin
-> terlayani, dan halaman utama sudah menonaktifkan tombolnya (`sold_out_may_return`, §2.1). Sama dengan
-> alasan `QUEUE_FULL`: tidak menerbitkan nomor yang tidak akan terlayani. Yang sudah mengantri tetap
-> tersambung dan dipulihkan (§3.2 tidak menjawab 410 untuk `FULL_BOOKED`). Saat state kembali `OPEN`, join
-> diterima lagi.
+> **`FULL_BOOKED` tidak menolak join.** Saat semua kursi sedang di-hold, customer baru tetap mendapat nomor dan
+> menunggu kursi yang kembali dari booking yang kedaluwarsa, sama seperti yang sudah mengantri. Kapasitas antrian
+> (`QUEUE_FULL`) tetap membatasi panjangnya. Halaman utama menampilkan tombol aktif untuk `FULL_BOOKED` (§2.1).
 
 **Response** (410 - `SALE_CLOSED`): `queue:{ev}.state` = `CLOSED`; `data`: `{ "queue_state": "CLOSED" }`.
 Berlaku juga bagi yang rejoin.
@@ -1238,7 +1184,7 @@ Limiter yang tidak tersedia **fail-open** (alasan sama dengan CAPTCHA di bawah).
 > dialarmkan agar jendela tanpa proteksi terlihat.
 
 **Requirement Coverage**: FR-04, FR-05 (antrian kosong = ruang tunggu sekitar satu tick, ADR-006 §8.14), FR-10 (posisi konsisten saat
-refresh), FR-18 (`FULL_BOOKED`), NFR-05 (FCFS fairness), BR-07 (satu keterlibatan aktif per event untuk user
+refresh), FR-18 (`FULL_BOOKED` menerima antrian), NFR-05 (FCFS fairness), BR-07 (satu keterlibatan aktif per event untuk user
 login), BR-09 (pemulihan dengan `queue_token`)
 
 ---
@@ -2061,7 +2007,7 @@ sampai `BOOKING_EXPIRED`) diperiksa sebelum body (v2.21); booking `HELD` atau le
 > | `INSUFFICIENT_STOCK` | tetap di halaman tiket; tandai kategori `data.category_id`; sarankan kategori lain (muat ulang `GET /events/{id}/tickets`) |
 > | `TICKETS_UNAVAILABLE` | pindah ke halaman "tiket habis". `data.queue_state` `FULL_BOOKED` = semua kursi sedang di-hold dan **dapat tersedia lagi** ("habis untuk sementara", pesanan tetap `SELECTING` dengan sisa waktunya); `CLOSED` = penjualan berakhir, tidak akan tersedia lagi |
 >
-> `data` sama dengan 409 `FULL_BOOKED` pada join (§3.1), sehingga halaman "tiket habis" yang sama dapat dipakai.
+> `data.queue_state` memakai nama yang sama dengan `queue_state` pada §2.1, sehingga halaman "tiket habis" yang sama dapat dipakai.
 >
 > **Kode yang tidak muncul di endpoint ini:** `QTY_INVALID` dan `NIK_COUNT_MISMATCH` (satu kursi = satu tiket; hanya
 > penjaga di skrip Lua), `NIK_UNVERIFIED` dan `NIK_VALIDATION_FAILED` (verifikasi dilakukan server lewat nik-verify, bukan dituntut dari klien).
@@ -3098,7 +3044,6 @@ Legenda: ✅ terpenuhi di kontrak · ⚙️ di luar permukaan API (backend atau 
 | `NOT_FOUND` | **404** — resource tidak ada, atau bukan milik pemanggil (tidak dibedakan) |
 | `SALE_NOT_OPEN` | **409** — `queue:{ev}.state` masih `SCHEDULED` (§3.1, §3.2) |
 | `SALE_CLOSED` | **410** — `queue:{ev}.state` sudah `CLOSED`; join (§3.1) dan stream (§3.2) ditolak |
-| `FULL_BOOKED` | **409** — `queue:{ev}.state` = `FULL_BOOKED`; join pendatang baru ditolak, yang sudah mengantri tetap dipulihkan (§3.1) |
 | `QUEUE_NOT_READY` | **503** — `queue:{ev}.state` tidak ada atau tak dikenal: event belum di-seed (§3.1) |
 | `BOOKING_STATUS_INVALID` | **409** — booking tidak dalam status yang dibutuhkan endpoint (§5.2, §5.3) |
 | `NIK_ALREADY_USED` | NIK sudah digunakan untuk event ini |
@@ -3538,3 +3483,14 @@ Penyelarasan dengan ADR-005. Yang memutus kompatibilitas ditandai **BREAKING**.
 | 116 | §4.3: status booking diperiksa **sebelum** body dan verifikasi NIK. `HELD` atau lebih jauh → 200 dengan booking yang ada; `GRANTED` → 409 `BOOKING_STATUS_INVALID`; `SELECTING` lewat tenggat → 409 `BOOKING_EXPIRED`; booking berakhir → 401 `GRANT_TOKEN_INVALID`. Pemeriksaan diulang di dalam transaksi dengan baris terkunci. Tabel error diurutkan ulang | Janji "200 apa pun isi body-nya" (v2.18) tidak terpenuhi bila body diperiksa dan nik-verify dipanggil lebih dulu: klik ganda saat nik-verify gangguan menjadi 503, dan Dukcapil dipanggil untuk booking yang sudah di-hold |
 | 117 | §4.3 dan Apidog (`POST /bookings`, `POST /nik/validate`): `nik` dinormalisasi seperti §4.2 (karakter selain angka dibuang, lalu tepat 16 digit); `minLength`/`maxLength` 16 dihapus dari skema Apidog | Skema Apidog menolak `3171 0000 0000 0022`, padahal nik-verify menerimanya; klien yang memvalidasi dari Apidog akan menolak input yang sah |
 | 118 | §4.2 dan Apidog (`POST /nik/validate`): `name` dihapus dari contoh dan skema respons 200 | Bertentangan dengan catatan §4.2 dan FR-15a: Dukcapil hanya memvalidasi NIK, nama tidak pernah dikembalikan |
+
+### v2.21 → v2.22
+
+| # | Perubahan | Alasan |
+|---|---|---|
+| 119 | **BREAKING** §2.1, §2.2, Apidog: `status`, `queue_depth`, `queue_capacity`, `min_price`, `max_price`, `display.action`, `display.label_key`, `display.badge_key` dihapus; `display` = `{enabled}` | Satu sumbu cukup untuk halaman utama: `queue_state` menyatakan posisi penjualan, frontend memilih teks sendiri. Mengikuti FR-03a..e yang diubah |
+| 120 | **BREAKING** §2.1, §2.2, Apidog: `queue_state` = `SCHEDULED \| OPEN \| FULL_QUEUE \| FULL_BOOKED \| CLOSED` (`NOT_OPEN` → `SCHEDULED`, `FULL` → `FULL_QUEUE`, `DIRECT` dihapus, `FULL_BOOKED` dan `CLOSED` baru); `display.enabled` true untuk `OPEN` dan `FULL_BOOKED` | `DIRECT` bergantung pada `free_slots` yang dicabut ADR-006 §8.14. `FULL_BOOKED` dan `CLOSED` kini terlihat di halaman utama |
+| 121 | **BREAKING** §3.1, Appendix A, Apidog: 409 `FULL_BOOKED` pada join dihapus; join menerima pendatang baru saat `FULL_BOOKED` | Customer baru boleh menunggu kursi yang kembali (ADR-006 §8.18) |
+| 122 | §3.1, Apidog: `data.queue_state` pada 409 `SALE_NOT_OPEN` menjadi `SCHEDULED`, pada 503 `QUEUE_FULL` menjadi `FULL_QUEUE` | Satu kosakata state di seluruh API |
+| 123 | §2.1, Apidog: urutan tanggal event terbaru dulu, event lampau tetap tampil; parameter `filter` dihapus (halaman dipotong di database); `400 VALIDATION_ERROR`; `sale_starts_at` nullable | Filter mengikuti `queue_state`; query tidak valid kini ditolak |
+| 124 | §2.1, §2.2, Apidog: `503 INTERNAL_ERROR` (Aurora mati); Redis mati tetap 200 dari snapshot dengan `Cache-Control` 5 detik; catatan `meta.server_time` pada respons ber-cache | Halaman utama tidak boleh mati karena Redis; jam dari respons cache bisa tertinggal 30 detik (BR-10) |
