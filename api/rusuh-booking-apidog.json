@@ -9809,9 +9809,9 @@
                     {
                       "id": "GrantTokHdr02",
                       "name": "X-Grant-Token",
-                      "required": true,
+                      "required": false,
                       "enable": true,
-                      "description": "Grant slot dari GET /queue/me. Wajib — ini yang menjaga endpoint ini.",
+                      "description": "Grant slot dari GET /queue/me. Wajib — ini yang menjaga endpoint ini. Wajib, KECUALI di WebView pembayaran yang mengirim X-Payment-Session sebagai gantinya (v2.25, ADR-007).",
                       "example": "gt_abc123",
                       "type": "string",
                       "schema": {
@@ -9837,6 +9837,18 @@
                       "enable": true,
                       "description": "Bearer access token akun. WAJIB bila grant milik akun login (harus akun yang sama dengan grant); tamu tidak mengirimnya. Hilang/akun lain → 401 UNAUTHORIZED, kedaluwarsa → 401 TOKEN_EXPIRED, tidak sah → 401 TOKEN_INVALID",
                       "example": "Bearer eyJhbGciOi…",
+                      "type": "string",
+                      "schema": {
+                        "type": "string"
+                      }
+                    },
+                    {
+                      "id": "PaySessHdr00",
+                      "name": "X-Payment-Session",
+                      "required": false,
+                      "enable": true,
+                      "description": "Hanya di WebView pembayaran (ADR-007, v2.25): payment_session dari POST /payments/handoff/exchange. PENGGANTI X-Grant-Token + X-Device-Id + Authorization, tidak bersamaan (keduanya → 400 VALIDATION_ERROR). Tidak dikenal / grant sudah dihapus → 401 PAYMENT_SESSION_INVALID; booking lain → 404 NOT_FOUND.",
+                      "example": "ps_bTN4V1pLc0c2cWJ2Tk5yUjhYa0ZqZEw3a1R1aEVwWg",
                       "type": "string",
                       "schema": {
                         "type": "string"
@@ -10577,6 +10589,136 @@
                     "oasExtensions": "",
                     "name": "TOKEN_INVALID",
                     "mediaType": "application/json"
+                  },
+                  {
+                    "id": "961000020",
+                    "code": "401",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 401
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Sesi pembayaran tidak berlaku"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "PAYMENT_SESSION_INVALID",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "X-Payment-Session tidak dikenal, kedaluwarsa, atau grant-nya sudah dihapus",
+                    "contentType": "json",
+                    "mediaType": "application/json",
+                    "oasExtensions": "",
+                    "name": "PAYMENT_SESSION_INVALID"
+                  },
+                  {
+                    "id": "961000021",
+                    "code": "400",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 400
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Kirim X-Payment-Session atau X-Grant-Token, tidak keduanya"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "VALIDATION_ERROR",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "VALIDATION_ERROR",
+                    "contentType": "json",
+                    "mediaType": "application/json",
+                    "oasExtensions": "",
+                    "name": "VALIDATION_ERROR"
                   }
                 ],
                 "responseExamples": [
@@ -10667,6 +10809,22 @@
                     "oasKey": "",
                     "oasExtensions": "",
                     "data": "{\"meta\": {\"code\": 401, \"message\": \"Token tidak sah\", \"error_code\": \"TOKEN_INVALID\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}"
+                  },
+                  {
+                    "name": "PAYMENT_SESSION_INVALID",
+                    "data": "{\"meta\": {\"code\": 401, \"message\": \"Sesi pembayaran tidak berlaku\", \"error_code\": \"PAYMENT_SESSION_INVALID\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}",
+                    "responseId": "961000020",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": ""
+                  },
+                  {
+                    "name": "VALIDATION_ERROR",
+                    "data": "{\"meta\": {\"code\": 400, \"message\": \"Kirim X-Payment-Session atau X-Grant-Token, tidak keduanya\", \"error_code\": \"VALIDATION_ERROR\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}",
+                    "responseId": "961000021",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": ""
                   }
                 ],
                 "requestBody": {
@@ -10676,7 +10834,7 @@
                   "additionalContentTypes": [],
                   "oasExtensions": ""
                 },
-                "description": "Booking detail.\n\nSaat PAID, tickets[].eticket_url sudah membawa ?t= (token e-tiket), sehingga Success Page dapat membuka e-tiket tanpa akun dan tanpa email (NFR-10). Menggantikan GET /bookings/{id}/tickets (dihapus, ADR-006 §8.8).\n\nv2.13: summary.price_per_ticket dan paid_at dihapus; payment_method masuk skema. status: SELECTING / PENDING_PAYMENT / PAID / EXPIRED. 404 NOT_FOUND bila booking_id bukan milik grant ini (tidak dibedakan dari tidak ada).\n\nv2.20: Authorization: Bearer wajib bila grant milik akun login (401 UNAUTHORIZED / TOKEN_EXPIRED / TOKEN_INVALID).\n\nv2.23: booking yang sudah berakhir biasanya menjawab 401 GRANT_TOKEN_INVALID (sweep menghapus grant), bukan data.status EXPIRED; klien memanggil GET /queue/me.",
+                "description": "Booking detail.\n\nSaat PAID, tickets[].eticket_url sudah membawa ?t= (token e-tiket), sehingga Success Page dapat membuka e-tiket tanpa akun dan tanpa email (NFR-10). Menggantikan GET /bookings/{id}/tickets (dihapus, ADR-006 §8.8).\n\nv2.13: summary.price_per_ticket dan paid_at dihapus; payment_method masuk skema. status: SELECTING / PENDING_PAYMENT / PAID / EXPIRED. 404 NOT_FOUND bila booking_id bukan milik grant ini (tidak dibedakan dari tidak ada).\n\nv2.20: Authorization: Bearer wajib bila grant milik akun login (401 UNAUTHORIZED / TOKEN_EXPIRED / TOKEN_INVALID).\n\nv2.23: booking yang sudah berakhir biasanya menjawab 401 GRANT_TOKEN_INVALID (sweep menghapus grant), bukan data.status EXPIRED; klien memanggil GET /queue/me.\n\nv2.25: di WebView pembayaran, X-Payment-Session menggantikan X-Grant-Token (+ X-Device-Id / Authorization). Lihat api-contracts §5 dan ADR-007.",
                 "tags": [
                   "Booking"
                 ],
@@ -11481,9 +11639,9 @@
                     {
                       "id": "GrantTokHdr05",
                       "name": "X-Grant-Token",
-                      "required": true,
+                      "required": false,
                       "enable": true,
-                      "description": "Grant slot dari GET /queue/me. Wajib — ini yang menjaga endpoint ini.",
+                      "description": "Grant slot dari GET /queue/me. Wajib — ini yang menjaga endpoint ini. Wajib, KECUALI di WebView pembayaran yang mengirim X-Payment-Session sebagai gantinya (v2.25, ADR-007).",
                       "example": "gt_abc123",
                       "type": "string",
                       "schema": {
@@ -11509,6 +11667,18 @@
                       "enable": true,
                       "description": "Bearer access token akun. WAJIB bila grant milik akun login (harus akun yang sama dengan grant); tamu tidak mengirimnya. Hilang/akun lain → 401 UNAUTHORIZED, kedaluwarsa → 401 TOKEN_EXPIRED, tidak sah → 401 TOKEN_INVALID",
                       "example": "Bearer eyJhbGciOi…",
+                      "type": "string",
+                      "schema": {
+                        "type": "string"
+                      }
+                    },
+                    {
+                      "id": "PaySessHdr01",
+                      "name": "X-Payment-Session",
+                      "required": false,
+                      "enable": true,
+                      "description": "Hanya di WebView pembayaran (ADR-007, v2.25): payment_session dari POST /payments/handoff/exchange. PENGGANTI X-Grant-Token + X-Device-Id + Authorization, tidak bersamaan (keduanya → 400 VALIDATION_ERROR). Tidak dikenal / grant sudah dihapus → 401 PAYMENT_SESSION_INVALID; booking lain → 404 NOT_FOUND.",
+                      "example": "ps_bTN4V1pLc0c2cWJ2Tk5yUjhYa0ZqZEw3a1R1aEVwWg",
                       "type": "string",
                       "schema": {
                         "type": "string"
@@ -11853,6 +12023,136 @@
                     "oasExtensions": "",
                     "name": "TOKEN_INVALID",
                     "mediaType": "application/json"
+                  },
+                  {
+                    "id": "961000022",
+                    "code": "401",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 401
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Sesi pembayaran tidak berlaku"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "PAYMENT_SESSION_INVALID",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "X-Payment-Session tidak dikenal, kedaluwarsa, atau grant-nya sudah dihapus",
+                    "contentType": "json",
+                    "mediaType": "application/json",
+                    "oasExtensions": "",
+                    "name": "PAYMENT_SESSION_INVALID"
+                  },
+                  {
+                    "id": "961000023",
+                    "code": "400",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 400
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Kirim X-Payment-Session atau X-Grant-Token, tidak keduanya"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "VALIDATION_ERROR",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "VALIDATION_ERROR",
+                    "contentType": "json",
+                    "mediaType": "application/json",
+                    "oasExtensions": "",
+                    "name": "VALIDATION_ERROR"
                   }
                 ],
                 "responseExamples": [
@@ -11887,6 +12187,22 @@
                     "oasKey": "",
                     "oasExtensions": "",
                     "data": "{\"meta\": {\"code\": 401, \"message\": \"Token tidak sah\", \"error_code\": \"TOKEN_INVALID\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}"
+                  },
+                  {
+                    "name": "PAYMENT_SESSION_INVALID",
+                    "data": "{\"meta\": {\"code\": 401, \"message\": \"Sesi pembayaran tidak berlaku\", \"error_code\": \"PAYMENT_SESSION_INVALID\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}",
+                    "responseId": "961000022",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": ""
+                  },
+                  {
+                    "name": "VALIDATION_ERROR",
+                    "data": "{\"meta\": {\"code\": 400, \"message\": \"Kirim X-Payment-Session atau X-Grant-Token, tidak keduanya\", \"error_code\": \"VALIDATION_ERROR\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}",
+                    "responseId": "961000023",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": ""
                   }
                 ],
                 "requestBody": {
@@ -11896,7 +12212,7 @@
                   "additionalContentTypes": [],
                   "oasExtensions": ""
                 },
-                "description": "Payment methods.\n\nv2.20: Authorization: Bearer wajib bila grant milik akun login (401 UNAUTHORIZED / TOKEN_EXPIRED / TOKEN_INVALID).",
+                "description": "Payment methods.\n\nv2.20: Authorization: Bearer wajib bila grant milik akun login (401 UNAUTHORIZED / TOKEN_EXPIRED / TOKEN_INVALID).\n\nv2.25: di WebView pembayaran, X-Payment-Session menggantikan X-Grant-Token (+ X-Device-Id / Authorization). Lihat api-contracts §5 dan ADR-007.",
                 "tags": [
                   "Payment"
                 ],
@@ -11952,9 +12268,9 @@
                     {
                       "id": "GrantTokHdr06",
                       "name": "X-Grant-Token",
-                      "required": true,
+                      "required": false,
                       "enable": true,
-                      "description": "Grant slot dari GET /queue/me. Wajib — ini yang menjaga endpoint ini.",
+                      "description": "Grant slot dari GET /queue/me. Wajib — ini yang menjaga endpoint ini. Wajib, KECUALI di WebView pembayaran yang mengirim X-Payment-Session sebagai gantinya (v2.25, ADR-007).",
                       "example": "gt_abc123",
                       "type": "string",
                       "schema": {
@@ -11980,6 +12296,18 @@
                       "enable": true,
                       "description": "Bearer access token akun. WAJIB bila grant milik akun login (harus akun yang sama dengan grant); tamu tidak mengirimnya. Hilang/akun lain → 401 UNAUTHORIZED, kedaluwarsa → 401 TOKEN_EXPIRED, tidak sah → 401 TOKEN_INVALID",
                       "example": "Bearer eyJhbGciOi…",
+                      "type": "string",
+                      "schema": {
+                        "type": "string"
+                      }
+                    },
+                    {
+                      "id": "PaySessHdr02",
+                      "name": "X-Payment-Session",
+                      "required": false,
+                      "enable": true,
+                      "description": "Hanya di WebView pembayaran (ADR-007, v2.25): payment_session dari POST /payments/handoff/exchange. PENGGANTI X-Grant-Token + X-Device-Id + Authorization, tidak bersamaan (keduanya → 400 VALIDATION_ERROR). Tidak dikenal / grant sudah dihapus → 401 PAYMENT_SESSION_INVALID; booking lain → 404 NOT_FOUND.",
+                      "example": "ps_bTN4V1pLc0c2cWJ2Tk5yUjhYa0ZqZEw3a1R1aEVwWg",
                       "type": "string",
                       "schema": {
                         "type": "string"
@@ -12443,6 +12771,136 @@
                     "oasExtensions": "",
                     "name": "TOKEN_INVALID",
                     "mediaType": "application/json"
+                  },
+                  {
+                    "id": "961000024",
+                    "code": "401",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 401
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Sesi pembayaran tidak berlaku"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "PAYMENT_SESSION_INVALID",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "X-Payment-Session tidak dikenal, kedaluwarsa, atau grant-nya sudah dihapus",
+                    "contentType": "json",
+                    "mediaType": "application/json",
+                    "oasExtensions": "",
+                    "name": "PAYMENT_SESSION_INVALID"
+                  },
+                  {
+                    "id": "961000025",
+                    "code": "400",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 400
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Kirim X-Payment-Session atau X-Grant-Token, tidak keduanya"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "VALIDATION_ERROR",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "VALIDATION_ERROR",
+                    "contentType": "json",
+                    "mediaType": "application/json",
+                    "oasExtensions": "",
+                    "name": "VALIDATION_ERROR"
                   }
                 ],
                 "responseExamples": [
@@ -12501,6 +12959,22 @@
                     "oasKey": "",
                     "oasExtensions": "",
                     "data": "{\"meta\": {\"code\": 401, \"message\": \"Token tidak sah\", \"error_code\": \"TOKEN_INVALID\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}"
+                  },
+                  {
+                    "name": "PAYMENT_SESSION_INVALID",
+                    "data": "{\"meta\": {\"code\": 401, \"message\": \"Sesi pembayaran tidak berlaku\", \"error_code\": \"PAYMENT_SESSION_INVALID\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}",
+                    "responseId": "961000024",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": ""
+                  },
+                  {
+                    "name": "VALIDATION_ERROR",
+                    "data": "{\"meta\": {\"code\": 400, \"message\": \"Kirim X-Payment-Session atau X-Grant-Token, tidak keduanya\", \"error_code\": \"VALIDATION_ERROR\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}",
+                    "responseId": "961000025",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": ""
                   }
                 ],
                 "requestBody": {
@@ -12555,7 +13029,7 @@
                   "required": true,
                   "additionalContentTypes": []
                 },
-                "description": "Initiate payment.\n\nv2.20: Authorization: Bearer wajib bila grant milik akun login (401 UNAUTHORIZED / TOKEN_EXPIRED / TOKEN_INVALID).",
+                "description": "Initiate payment.\n\nv2.20: Authorization: Bearer wajib bila grant milik akun login (401 UNAUTHORIZED / TOKEN_EXPIRED / TOKEN_INVALID).\n\nv2.25: di WebView pembayaran, X-Payment-Session menggantikan X-Grant-Token (+ X-Device-Id / Authorization). Lihat api-contracts §5 dan ADR-007.",
                 "tags": [
                   "Payment"
                 ],
@@ -12611,9 +13085,9 @@
                     {
                       "id": "GrantTokHdr07",
                       "name": "X-Grant-Token",
-                      "required": true,
+                      "required": false,
                       "enable": true,
-                      "description": "Grant slot dari GET /queue/me. Wajib — ini yang menjaga endpoint ini.",
+                      "description": "Grant slot dari GET /queue/me. Wajib — ini yang menjaga endpoint ini. Wajib, KECUALI di WebView pembayaran yang mengirim X-Payment-Session sebagai gantinya (v2.25, ADR-007).",
                       "example": "gt_abc123",
                       "type": "string",
                       "schema": {
@@ -12639,6 +13113,18 @@
                       "enable": true,
                       "description": "Bearer access token akun. WAJIB bila grant milik akun login (harus akun yang sama dengan grant); tamu tidak mengirimnya. Hilang/akun lain → 401 UNAUTHORIZED, kedaluwarsa → 401 TOKEN_EXPIRED, tidak sah → 401 TOKEN_INVALID",
                       "example": "Bearer eyJhbGciOi…",
+                      "type": "string",
+                      "schema": {
+                        "type": "string"
+                      }
+                    },
+                    {
+                      "id": "PaySessHdr03",
+                      "name": "X-Payment-Session",
+                      "required": false,
+                      "enable": true,
+                      "description": "Hanya di WebView pembayaran (ADR-007, v2.25): payment_session dari POST /payments/handoff/exchange. PENGGANTI X-Grant-Token + X-Device-Id + Authorization, tidak bersamaan (keduanya → 400 VALIDATION_ERROR). Tidak dikenal / grant sudah dihapus → 401 PAYMENT_SESSION_INVALID; booking lain → 404 NOT_FOUND.",
+                      "example": "ps_bTN4V1pLc0c2cWJ2Tk5yUjhYa0ZqZEw3a1R1aEVwWg",
                       "type": "string",
                       "schema": {
                         "type": "string"
@@ -13211,6 +13697,136 @@
                     "oasExtensions": "",
                     "name": "TOKEN_INVALID",
                     "mediaType": "application/json"
+                  },
+                  {
+                    "id": "961000026",
+                    "code": "401",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 401
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Sesi pembayaran tidak berlaku"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "PAYMENT_SESSION_INVALID",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "X-Payment-Session tidak dikenal, kedaluwarsa, atau grant-nya sudah dihapus",
+                    "contentType": "json",
+                    "mediaType": "application/json",
+                    "oasExtensions": "",
+                    "name": "PAYMENT_SESSION_INVALID"
+                  },
+                  {
+                    "id": "961000027",
+                    "code": "400",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 400
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Kirim X-Payment-Session atau X-Grant-Token, tidak keduanya"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "VALIDATION_ERROR",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "VALIDATION_ERROR",
+                    "contentType": "json",
+                    "mediaType": "application/json",
+                    "oasExtensions": "",
+                    "name": "VALIDATION_ERROR"
                   }
                 ],
                 "responseExamples": [
@@ -13293,6 +13909,22 @@
                     "oasKey": "",
                     "oasExtensions": "",
                     "data": "{\"meta\": {\"code\": 401, \"message\": \"Token tidak sah\", \"error_code\": \"TOKEN_INVALID\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}"
+                  },
+                  {
+                    "name": "PAYMENT_SESSION_INVALID",
+                    "data": "{\"meta\": {\"code\": 401, \"message\": \"Sesi pembayaran tidak berlaku\", \"error_code\": \"PAYMENT_SESSION_INVALID\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}",
+                    "responseId": "961000026",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": ""
+                  },
+                  {
+                    "name": "VALIDATION_ERROR",
+                    "data": "{\"meta\": {\"code\": 400, \"message\": \"Kirim X-Payment-Session atau X-Grant-Token, tidak keduanya\", \"error_code\": \"VALIDATION_ERROR\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}",
+                    "responseId": "961000027",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": ""
                   }
                 ],
                 "requestBody": {
@@ -13302,7 +13934,7 @@
                   "additionalContentTypes": [],
                   "oasExtensions": ""
                 },
-                "description": "Cancel and switch payment.\n\nv2.20: Authorization: Bearer wajib bila grant milik akun login (401 UNAUTHORIZED / TOKEN_EXPIRED / TOKEN_INVALID).",
+                "description": "Cancel and switch payment.\n\nv2.20: Authorization: Bearer wajib bila grant milik akun login (401 UNAUTHORIZED / TOKEN_EXPIRED / TOKEN_INVALID).\n\nv2.25: di WebView pembayaran, X-Payment-Session menggantikan X-Grant-Token (+ X-Device-Id / Authorization). Lihat api-contracts §5 dan ADR-007.",
                 "tags": [
                   "Payment"
                 ],
@@ -13358,9 +13990,9 @@
                     {
                       "id": "GrantTokHdr08",
                       "name": "X-Grant-Token",
-                      "required": true,
+                      "required": false,
                       "enable": true,
-                      "description": "Grant slot dari GET /queue/me. Wajib — ini yang menjaga endpoint ini.",
+                      "description": "Grant slot dari GET /queue/me. Wajib — ini yang menjaga endpoint ini. Wajib, KECUALI di WebView pembayaran yang mengirim X-Payment-Session sebagai gantinya (v2.25, ADR-007).",
                       "example": "gt_abc123",
                       "type": "string",
                       "schema": {
@@ -13386,6 +14018,18 @@
                       "enable": true,
                       "description": "Bearer access token akun. WAJIB bila grant milik akun login (harus akun yang sama dengan grant); tamu tidak mengirimnya. Hilang/akun lain → 401 UNAUTHORIZED, kedaluwarsa → 401 TOKEN_EXPIRED, tidak sah → 401 TOKEN_INVALID",
                       "example": "Bearer eyJhbGciOi…",
+                      "type": "string",
+                      "schema": {
+                        "type": "string"
+                      }
+                    },
+                    {
+                      "id": "PaySessHdr04",
+                      "name": "X-Payment-Session",
+                      "required": false,
+                      "enable": true,
+                      "description": "Hanya di WebView pembayaran (ADR-007, v2.25): payment_session dari POST /payments/handoff/exchange. PENGGANTI X-Grant-Token + X-Device-Id + Authorization, tidak bersamaan (keduanya → 400 VALIDATION_ERROR). Tidak dikenal / grant sudah dihapus → 401 PAYMENT_SESSION_INVALID; booking lain → 404 NOT_FOUND.",
+                      "example": "ps_bTN4V1pLc0c2cWJ2Tk5yUjhYa0ZqZEw3a1R1aEVwWg",
                       "type": "string",
                       "schema": {
                         "type": "string"
@@ -13685,6 +14329,136 @@
                     "oasExtensions": "",
                     "name": "TOKEN_INVALID",
                     "mediaType": "application/json"
+                  },
+                  {
+                    "id": "961000028",
+                    "code": "401",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 401
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Sesi pembayaran tidak berlaku"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "PAYMENT_SESSION_INVALID",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "X-Payment-Session tidak dikenal, kedaluwarsa, atau grant-nya sudah dihapus",
+                    "contentType": "json",
+                    "mediaType": "application/json",
+                    "oasExtensions": "",
+                    "name": "PAYMENT_SESSION_INVALID"
+                  },
+                  {
+                    "id": "961000029",
+                    "code": "400",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 400
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Kirim X-Payment-Session atau X-Grant-Token, tidak keduanya"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "VALIDATION_ERROR",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "VALIDATION_ERROR",
+                    "contentType": "json",
+                    "mediaType": "application/json",
+                    "oasExtensions": "",
+                    "name": "VALIDATION_ERROR"
                   }
                 ],
                 "responseExamples": [
@@ -13735,6 +14509,22 @@
                     "oasKey": "",
                     "oasExtensions": "",
                     "data": "{\"meta\": {\"code\": 401, \"message\": \"Token tidak sah\", \"error_code\": \"TOKEN_INVALID\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}"
+                  },
+                  {
+                    "name": "PAYMENT_SESSION_INVALID",
+                    "data": "{\"meta\": {\"code\": 401, \"message\": \"Sesi pembayaran tidak berlaku\", \"error_code\": \"PAYMENT_SESSION_INVALID\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}",
+                    "responseId": "961000028",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": ""
+                  },
+                  {
+                    "name": "VALIDATION_ERROR",
+                    "data": "{\"meta\": {\"code\": 400, \"message\": \"Kirim X-Payment-Session atau X-Grant-Token, tidak keduanya\", \"error_code\": \"VALIDATION_ERROR\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}",
+                    "responseId": "961000029",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": ""
                   }
                 ],
                 "requestBody": {
@@ -13744,7 +14534,7 @@
                   "additionalContentTypes": [],
                   "oasExtensions": ""
                 },
-                "description": "Payment status.\n\nreason adalah PASSTHROUGH status_message dari penyedia, untuk support — bukan teks tampilan. Kartu kredit tidak dibuka di POC ini, jadi contoh bernuansa kartu menyesatkan.\n\nv2.20: Authorization: Bearer wajib bila grant milik akun login (401 UNAUTHORIZED / TOKEN_EXPIRED / TOKEN_INVALID).",
+                "description": "Payment status.\n\nreason adalah PASSTHROUGH status_message dari penyedia, untuk support — bukan teks tampilan. Kartu kredit tidak dibuka di POC ini, jadi contoh bernuansa kartu menyesatkan.\n\nv2.20: Authorization: Bearer wajib bila grant milik akun login (401 UNAUTHORIZED / TOKEN_EXPIRED / TOKEN_INVALID).\n\nv2.25: di WebView pembayaran, X-Payment-Session menggantikan X-Grant-Token (+ X-Device-Id / Authorization). Lihat api-contracts §5 dan ADR-007.",
                 "tags": [
                   "Payment"
                 ],
@@ -13753,6 +14543,1666 @@
                 "operationId": "getPaymentStatus",
                 "sourceUrl": "",
                 "ordering": 24,
+                "cases": [],
+                "mocks": [],
+                "customApiFields": "{}",
+                "advancedSettings": {
+                  "disabledSystemHeaders": {}
+                },
+                "mockScript": {},
+                "codeSamples": [],
+                "commonResponseStatus": {},
+                "responseChildren": [],
+                "visibility": "INHERITED",
+                "moduleId": 1505827,
+                "oasExtensions": "",
+                "type": "http",
+                "preProcessors": [],
+                "postProcessors": [],
+                "inheritPostProcessors": {},
+                "inheritPreProcessors": {}
+              }
+            },
+            {
+              "name": "Create Payment Handoff Code",
+              "api": {
+                "id": "46280800",
+                "method": "post",
+                "path": "/payments/{booking_id}/handoff",
+                "parameters": {
+                  "path": [
+                    {
+                      "id": "booking_id#0",
+                      "name": "booking_id",
+                      "required": true,
+                      "enable": true,
+                      "description": "",
+                      "example": "RB-00912",
+                      "type": "string",
+                      "schema": {
+                        "type": "string"
+                      }
+                    }
+                  ],
+                  "query": [],
+                  "cookie": [],
+                  "header": [
+                    {
+                      "id": "GrantTokHdr06HO",
+                      "name": "X-Grant-Token",
+                      "required": true,
+                      "enable": true,
+                      "description": "Grant slot dari GET /queue/me. Wajib — ini yang menjaga endpoint ini.",
+                      "example": "gt_abc123",
+                      "type": "string",
+                      "schema": {
+                        "type": "string"
+                      }
+                    },
+                    {
+                      "name": "X-Device-Id",
+                      "required": false,
+                      "enable": true,
+                      "description": "Pengikatan device untuk grant anonim — WAJIB bila pemanggil tidak login. Acak 128 bit dari klien; server menyimpan HMAC-nya. Tidak cocok → 401 DEVICE_MISMATCH.",
+                      "example": "d3f1a9c4b70e42f88a1c5e6072b9d4af",
+                      "type": "string",
+                      "schema": {
+                        "type": "string"
+                      },
+                      "id": "DevIdHdr06HO"
+                    },
+                    {
+                      "id": "Auth000421HO",
+                      "name": "Authorization",
+                      "required": false,
+                      "enable": true,
+                      "description": "Bearer access token akun. WAJIB bila grant milik akun login (harus akun yang sama dengan grant); tamu tidak mengirimnya. Hilang/akun lain → 401 UNAUTHORIZED, kedaluwarsa → 401 TOKEN_EXPIRED, tidak sah → 401 TOKEN_INVALID",
+                      "example": "Bearer eyJhbGciOi…",
+                      "type": "string",
+                      "schema": {
+                        "type": "string"
+                      }
+                    }
+                  ]
+                },
+                "auth": {},
+                "securityScheme": {
+                  "schemeGroups": [
+                    {
+                      "id": "8nuaPrgjLBTBEsaxFP8hG",
+                      "schemeIds": [
+                        632523
+                      ]
+                    }
+                  ],
+                  "required": true,
+                  "use": {
+                    "id": "8nuaPrgjLBTBEsaxFP8hG",
+                    "configs": {
+                      "632523": {
+                        "authConfigs": {
+                          "x-apidog": {
+                            "token": "{{bearerToken}}"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "scopes": {
+                    "8nuaPrgjLBTBEsaxFP8hG": {
+                      "632523": []
+                    }
+                  }
+                },
+                "commonParameters": {},
+                "responses": [
+                  {
+                    "id": "961000001",
+                    "code": "201",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 201
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Handoff code created"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "booking_id": {
+                              "type": "string",
+                              "example": "RB-00912"
+                            },
+                            "handoff_code": {
+                              "type": "string",
+                              "example": "hc_Q2h4b0x3TjVtV3pYc1RkV2xBZ0p1cG9mQ2t1dlhZ",
+                              "description": "Acak 256 bit, sekali pakai, 60 detik, hanya untuk booking_id ini. Dibawa ke WebView di #fragment: https://rush-my-ticket.my.id/pay/{booking_id}#code={handoff_code}"
+                            },
+                            "expires_at": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-10-25T10:16:30Z",
+                              "description": "Batas tukar kode di POST /payments/handoff/exchange"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "booking_id",
+                            "handoff_code",
+                            "expires_at"
+                          ],
+                          "required": [
+                            "booking_id",
+                            "handoff_code",
+                            "expires_at"
+                          ]
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "Handoff code created",
+                    "contentType": "json",
+                    "mediaType": "application/json",
+                    "oasExtensions": ""
+                  },
+                  {
+                    "id": "961000002",
+                    "code": "400",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 400
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "X-Device-Id wajib untuk customer yang tidak login"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "DEVICE_ID_REQUIRED",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "DEVICE_ID_REQUIRED",
+                    "contentType": "json",
+                    "mediaType": "application/json",
+                    "oasExtensions": "",
+                    "name": "DEVICE_ID_REQUIRED"
+                  },
+                  {
+                    "id": "961000003",
+                    "code": "400",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 400
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "X-Payment-Session tidak diterima di endpoint ini"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "VALIDATION_ERROR",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "VALIDATION_ERROR",
+                    "contentType": "json",
+                    "mediaType": "application/json",
+                    "oasExtensions": "",
+                    "name": "VALIDATION_ERROR"
+                  },
+                  {
+                    "id": "961000004",
+                    "code": "401",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 401
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "X-Grant-Token wajib"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "GRANT_TOKEN_MISSING",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "GRANT_TOKEN_MISSING",
+                    "contentType": "json",
+                    "mediaType": "application/json",
+                    "oasExtensions": "",
+                    "name": "GRANT_TOKEN_MISSING"
+                  },
+                  {
+                    "id": "961000005",
+                    "code": "401",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 401
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Sesi booking sudah berakhir"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "GRANT_TOKEN_INVALID",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "GRANT_TOKEN_INVALID",
+                    "contentType": "json",
+                    "mediaType": "application/json",
+                    "oasExtensions": "",
+                    "name": "GRANT_TOKEN_INVALID"
+                  },
+                  {
+                    "id": "961000006",
+                    "code": "401",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 401
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Grant ini milik perangkat lain"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "DEVICE_MISMATCH",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "DEVICE_MISMATCH",
+                    "contentType": "json",
+                    "mediaType": "application/json",
+                    "oasExtensions": "",
+                    "name": "DEVICE_MISMATCH"
+                  },
+                  {
+                    "id": "961000007",
+                    "code": "401",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 401
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Authorization diperlukan untuk grant milik akun login"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "UNAUTHORIZED",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "UNAUTHORIZED",
+                    "contentType": "json",
+                    "mediaType": "application/json",
+                    "oasExtensions": "",
+                    "name": "UNAUTHORIZED"
+                  },
+                  {
+                    "id": "961000008",
+                    "code": "401",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 401
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Sesi kedaluwarsa"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "TOKEN_EXPIRED",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "TOKEN_EXPIRED",
+                    "contentType": "json",
+                    "mediaType": "application/json",
+                    "oasExtensions": "",
+                    "name": "TOKEN_EXPIRED"
+                  },
+                  {
+                    "id": "961000009",
+                    "code": "401",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 401
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Token tidak sah"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "TOKEN_INVALID",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "TOKEN_INVALID",
+                    "contentType": "json",
+                    "mediaType": "application/json",
+                    "oasExtensions": "",
+                    "name": "TOKEN_INVALID"
+                  },
+                  {
+                    "id": "961000010",
+                    "code": "404",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 404
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Booking tidak ditemukan"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "NOT_FOUND",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "NOT_FOUND",
+                    "contentType": "json",
+                    "mediaType": "application/json",
+                    "oasExtensions": "",
+                    "name": "NOT_FOUND"
+                  },
+                  {
+                    "id": "961000011",
+                    "code": "409",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 409
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Booking belum siap dibayar"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "BOOKING_STATUS_INVALID",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "example": "SELECTING",
+                              "description": "Status API booking saat ini"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "status"
+                          ]
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "BOOKING_STATUS_INVALID",
+                    "contentType": "json",
+                    "mediaType": "application/json",
+                    "oasExtensions": "",
+                    "name": "BOOKING_STATUS_INVALID"
+                  },
+                  {
+                    "id": "961000012",
+                    "code": "409",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 409
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Waktu pembayaran sudah habis"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "PAYMENT_WINDOW_CLOSED",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "payment_expires_at": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-10-25T10:25:00Z"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "payment_expires_at"
+                          ]
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "PAYMENT_WINDOW_CLOSED",
+                    "contentType": "json",
+                    "mediaType": "application/json",
+                    "oasExtensions": "",
+                    "name": "PAYMENT_WINDOW_CLOSED"
+                  },
+                  {
+                    "id": "961000013",
+                    "code": "429",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 429
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Terlalu banyak permintaan"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "TOO_MANY_REQUESTS",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "retry_after": {
+                              "type": "integer",
+                              "example": 30,
+                              "description": "Detik"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "retry_after"
+                          ]
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "TOO_MANY_REQUESTS",
+                    "contentType": "json",
+                    "mediaType": "application/json",
+                    "oasExtensions": "",
+                    "name": "TOO_MANY_REQUESTS"
+                  },
+                  {
+                    "id": "961000014",
+                    "code": "503",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 503
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Layanan sedang gangguan, coba lagi"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "INTERNAL_ERROR",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "INTERNAL_ERROR",
+                    "contentType": "json",
+                    "mediaType": "application/json",
+                    "oasExtensions": "",
+                    "name": "INTERNAL_ERROR"
+                  }
+                ],
+                "responseExamples": [
+                  {
+                    "name": "Created",
+                    "data": "{\"meta\": {\"code\": 201, \"message\": \"Handoff code created\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {\"booking_id\": \"RB-00912\", \"handoff_code\": \"hc_Q2h4b0x3TjVtV3pYc1RkV2xBZ0p1cG9mQ2t1dlhZ\", \"expires_at\": \"2026-10-25T10:16:30Z\"}}",
+                    "responseId": "961000001",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": ""
+                  },
+                  {
+                    "name": "DEVICE_ID_REQUIRED",
+                    "data": "{\"meta\": {\"code\": 400, \"message\": \"X-Device-Id wajib untuk customer yang tidak login\", \"error_code\": \"DEVICE_ID_REQUIRED\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}",
+                    "responseId": "961000002",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": ""
+                  },
+                  {
+                    "name": "VALIDATION_ERROR",
+                    "data": "{\"meta\": {\"code\": 400, \"message\": \"X-Payment-Session tidak diterima di endpoint ini\", \"error_code\": \"VALIDATION_ERROR\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}",
+                    "responseId": "961000003",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": ""
+                  },
+                  {
+                    "name": "GRANT_TOKEN_MISSING",
+                    "data": "{\"meta\": {\"code\": 401, \"message\": \"X-Grant-Token wajib\", \"error_code\": \"GRANT_TOKEN_MISSING\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}",
+                    "responseId": "961000004",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": ""
+                  },
+                  {
+                    "name": "GRANT_TOKEN_INVALID",
+                    "data": "{\"meta\": {\"code\": 401, \"message\": \"Sesi booking sudah berakhir\", \"error_code\": \"GRANT_TOKEN_INVALID\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}",
+                    "responseId": "961000005",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": ""
+                  },
+                  {
+                    "name": "DEVICE_MISMATCH",
+                    "data": "{\"meta\": {\"code\": 401, \"message\": \"Grant ini milik perangkat lain\", \"error_code\": \"DEVICE_MISMATCH\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}",
+                    "responseId": "961000006",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": ""
+                  },
+                  {
+                    "name": "UNAUTHORIZED",
+                    "data": "{\"meta\": {\"code\": 401, \"message\": \"Authorization diperlukan untuk grant milik akun login\", \"error_code\": \"UNAUTHORIZED\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}",
+                    "responseId": "961000007",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": ""
+                  },
+                  {
+                    "name": "TOKEN_EXPIRED",
+                    "data": "{\"meta\": {\"code\": 401, \"message\": \"Sesi kedaluwarsa\", \"error_code\": \"TOKEN_EXPIRED\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}",
+                    "responseId": "961000008",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": ""
+                  },
+                  {
+                    "name": "TOKEN_INVALID",
+                    "data": "{\"meta\": {\"code\": 401, \"message\": \"Token tidak sah\", \"error_code\": \"TOKEN_INVALID\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}",
+                    "responseId": "961000009",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": ""
+                  },
+                  {
+                    "name": "NOT_FOUND",
+                    "data": "{\"meta\": {\"code\": 404, \"message\": \"Booking tidak ditemukan\", \"error_code\": \"NOT_FOUND\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}",
+                    "responseId": "961000010",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": ""
+                  },
+                  {
+                    "name": "BOOKING_STATUS_INVALID",
+                    "data": "{\"meta\": {\"code\": 409, \"message\": \"Booking belum siap dibayar\", \"error_code\": \"BOOKING_STATUS_INVALID\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {\"status\": \"SELECTING\"}}",
+                    "responseId": "961000011",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": ""
+                  },
+                  {
+                    "name": "PAYMENT_WINDOW_CLOSED",
+                    "data": "{\"meta\": {\"code\": 409, \"message\": \"Waktu pembayaran sudah habis\", \"error_code\": \"PAYMENT_WINDOW_CLOSED\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {\"payment_expires_at\": \"2026-10-25T10:25:00Z\"}}",
+                    "responseId": "961000012",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": ""
+                  },
+                  {
+                    "name": "TOO_MANY_REQUESTS",
+                    "data": "{\"meta\": {\"code\": 429, \"message\": \"Terlalu banyak permintaan\", \"error_code\": \"TOO_MANY_REQUESTS\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {\"retry_after\": 30}}",
+                    "responseId": "961000013",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": ""
+                  },
+                  {
+                    "name": "INTERNAL_ERROR",
+                    "data": "{\"meta\": {\"code\": 503, \"message\": \"Layanan sedang gangguan, coba lagi\", \"error_code\": \"INTERNAL_ERROR\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}",
+                    "responseId": "961000014",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": ""
+                  }
+                ],
+                "description": "Aplikasi mobile meminta kode sekali pakai (60 detik) untuk membuka halaman pembayaran web di WebView (ADR-007, api-contracts §5.6, v2.25). Kredensial grant lengkap wajib; X-Payment-Session tidak diterima. Tanpa body. Status yang diterima: HELD, AWAITING_PAYMENT, PENDING_CANCELLATION. Buka WebView ke https://rush-my-ticket.my.id/pay/{booking_id}#code={handoff_code} (fragment, bukan query).",
+                "tags": [
+                  "Payment"
+                ],
+                "status": "released",
+                "serverId": "",
+                "operationId": "createPaymentHandoff",
+                "sourceUrl": "",
+                "ordering": 25,
+                "cases": [],
+                "mocks": [],
+                "customApiFields": "{}",
+                "advancedSettings": {
+                  "disabledSystemHeaders": {}
+                },
+                "mockScript": {},
+                "codeSamples": [],
+                "commonResponseStatus": {},
+                "responseChildren": [],
+                "visibility": "INHERITED",
+                "moduleId": 1505827,
+                "oasExtensions": "",
+                "type": "http",
+                "preProcessors": [],
+                "postProcessors": [],
+                "inheritPostProcessors": {},
+                "inheritPreProcessors": {},
+                "requestBody": {
+                  "type": "none",
+                  "parameters": [],
+                  "jsonSchema": {},
+                  "examples": []
+                }
+              }
+            },
+            {
+              "name": "Exchange Payment Handoff Code",
+              "api": {
+                "id": "46280801",
+                "method": "post",
+                "path": "/payments/handoff/exchange",
+                "parameters": {
+                  "path": [],
+                  "query": [],
+                  "cookie": [],
+                  "header": []
+                },
+                "auth": {},
+                "securityScheme": {},
+                "commonParameters": {},
+                "responses": [
+                  {
+                    "id": "961000015",
+                    "code": "200",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 200
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Payment session created"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "booking_id": {
+                              "type": "string",
+                              "example": "RB-00912"
+                            },
+                            "payment_session": {
+                              "type": "string",
+                              "example": "ps_bTN4V1pLc0c2cWJ2Tk5yUjhYa0ZqZEw3a1R1aEVwWg",
+                              "description": "Kirim sebagai X-Payment-Session pada GET /bookings/{id} dan /payments/{id}/… . Simpan di memori saja"
+                            },
+                            "expires_at": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-10-25T10:34:00Z",
+                              "description": "Batas atas umur session (= umur grant). Bukan tenggat pembayaran"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "booking_id",
+                            "payment_session",
+                            "expires_at"
+                          ],
+                          "required": [
+                            "booking_id",
+                            "payment_session",
+                            "expires_at"
+                          ]
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "Payment session created",
+                    "contentType": "json",
+                    "mediaType": "application/json",
+                    "oasExtensions": ""
+                  },
+                  {
+                    "id": "961000016",
+                    "code": "400",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 400
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "booking_id dan handoff_code wajib"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "VALIDATION_ERROR",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "VALIDATION_ERROR",
+                    "contentType": "json",
+                    "mediaType": "application/json",
+                    "oasExtensions": "",
+                    "name": "VALIDATION_ERROR"
+                  },
+                  {
+                    "id": "961000017",
+                    "code": "401",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 401
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Kode pembayaran tidak berlaku"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "HANDOFF_CODE_INVALID",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "Kode tidak dikenal, sudah dipakai, kedaluwarsa, atau bukan untuk booking_id ini. Kode habis pada percobaan pertama",
+                    "contentType": "json",
+                    "mediaType": "application/json",
+                    "oasExtensions": "",
+                    "name": "HANDOFF_CODE_INVALID"
+                  },
+                  {
+                    "id": "961000018",
+                    "code": "401",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 401
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Sesi booking sudah berakhir"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "GRANT_TOKEN_INVALID",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "Kode sah, tetapi booking sudah berakhir",
+                    "contentType": "json",
+                    "mediaType": "application/json",
+                    "oasExtensions": "",
+                    "name": "GRANT_TOKEN_INVALID"
+                  },
+                  {
+                    "id": "961000019",
+                    "code": "503",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "example": 503
+                            },
+                            "message": {
+                              "type": "string",
+                              "example": "Layanan sedang gangguan, coba lagi"
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "example": "INTERNAL_ERROR",
+                              "description": "Kode mesin (Appendix A api-contracts). Hanya pada error"
+                            },
+                            "server_time": {
+                              "type": "string",
+                              "format": "date-time",
+                              "example": "2026-11-03T09:12:00.412Z",
+                              "description": "Jam server, ada di SETIAP respons (BR-10)"
+                            }
+                          },
+                          "x-apidog-orders": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ],
+                          "required": [
+                            "code",
+                            "message",
+                            "server_time",
+                            "error_code"
+                          ]
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {},
+                          "x-apidog-orders": []
+                        }
+                      },
+                      "x-apidog-orders": [
+                        "meta",
+                        "data"
+                      ],
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "itemSchema": {},
+                    "description": "INTERNAL_ERROR",
+                    "contentType": "json",
+                    "mediaType": "application/json",
+                    "oasExtensions": "",
+                    "name": "INTERNAL_ERROR"
+                  }
+                ],
+                "responseExamples": [
+                  {
+                    "name": "OK",
+                    "data": "{\"meta\": {\"code\": 200, \"message\": \"Payment session created\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {\"booking_id\": \"RB-00912\", \"payment_session\": \"ps_bTN4V1pLc0c2cWJ2Tk5yUjhYa0ZqZEw3a1R1aEVwWg\", \"expires_at\": \"2026-10-25T10:34:00Z\"}}",
+                    "responseId": "961000015",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": ""
+                  },
+                  {
+                    "name": "VALIDATION_ERROR",
+                    "data": "{\"meta\": {\"code\": 400, \"message\": \"booking_id dan handoff_code wajib\", \"error_code\": \"VALIDATION_ERROR\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}",
+                    "responseId": "961000016",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": ""
+                  },
+                  {
+                    "name": "HANDOFF_CODE_INVALID",
+                    "data": "{\"meta\": {\"code\": 401, \"message\": \"Kode pembayaran tidak berlaku\", \"error_code\": \"HANDOFF_CODE_INVALID\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}",
+                    "responseId": "961000017",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": ""
+                  },
+                  {
+                    "name": "GRANT_TOKEN_INVALID",
+                    "data": "{\"meta\": {\"code\": 401, \"message\": \"Sesi booking sudah berakhir\", \"error_code\": \"GRANT_TOKEN_INVALID\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}",
+                    "responseId": "961000018",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": ""
+                  },
+                  {
+                    "name": "INTERNAL_ERROR",
+                    "data": "{\"meta\": {\"code\": 503, \"message\": \"Layanan sedang gangguan, coba lagi\", \"error_code\": \"INTERNAL_ERROR\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {}}",
+                    "responseId": "961000019",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": ""
+                  }
+                ],
+                "requestBody": {
+                  "type": "application/json",
+                  "parameters": [],
+                  "jsonSchema": {
+                    "type": "object",
+                    "required": [
+                      "booking_id",
+                      "handoff_code"
+                    ],
+                    "properties": {
+                      "booking_id": {
+                        "type": "string",
+                        "example": "RB-00912",
+                        "description": "Dari path halaman /pay/{booking_id}"
+                      },
+                      "handoff_code": {
+                        "type": "string",
+                        "example": "hc_Q2h4b0x3TjVtV3pYc1RkV2xBZ0p1cG9mQ2t1dlhZ",
+                        "description": "Dari #code= ; awalan hc_"
+                      }
+                    },
+                    "x-apidog-orders": [
+                      "booking_id",
+                      "handoff_code"
+                    ]
+                  },
+                  "examples": [
+                    {
+                      "name": "Exchange",
+                      "value": "{\"booking_id\": \"RB-00912\", \"handoff_code\": \"hc_Q2h4b0x3TjVtV3pYc1RkV2xBZ0p1cG9mQ2t1dlhZ\"}",
+                      "oasKey": "exchange",
+                      "oasExtensions": "",
+                      "mediaType": "application/json"
+                    }
+                  ]
+                },
+                "description": "Halaman pembayaran web di WebView menukar kode dari §5.6 dengan payment_session (ADR-007, api-contracts §5.7, v2.25). Tanpa header kredensial: kode di body adalah kredensialnya. Kode habis pada percobaan pertama (berhasil maupun gagal).",
+                "tags": [
+                  "Payment"
+                ],
+                "status": "released",
+                "serverId": "",
+                "operationId": "exchangePaymentHandoff",
+                "sourceUrl": "",
+                "ordering": 26,
                 "cases": [],
                 "mocks": [],
                 "customApiFields": "{}",

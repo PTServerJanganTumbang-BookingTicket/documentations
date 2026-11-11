@@ -2748,6 +2748,11 @@ BR-07, bukan sebagai jalur normal.
 
 ### Empat kredensial, empat slot
 
+> ⚠️ **Diubah oleh ADR-007** — kredensial kelima: **payment session** (`X-Payment-Session`, opaque `ps_…`,
+> `paymentsession:{session}` di Redis) untuk halaman pembayaran web di WebView aplikasi mobile, diperoleh dengan menukar
+> kode sekali pakai (`hc_…`, 60 detik). Ia **menggantikan** grant di WebView (tidak bersamaan), hanya untuk satu
+> booking, dan mati bersama grant. Teks asli di bawah dibiarkan apa adanya.
+
 Perjalanan ini memakai empat kredensial yang berbeda jenis, dan **tidak ada satu slot
 transport pun yang membawa lebih dari satu**:
 

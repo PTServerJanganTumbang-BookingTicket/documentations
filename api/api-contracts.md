@@ -1,12 +1,19 @@
 # Rusuh Booking Tiket — API Contracts
 
-**Versi**: 2.24.0  
-**Tanggal**: 11 November 2026  
+**Versi**: 2.25.0  
+**Tanggal**: 12 November 2026  
 **Status**: Draft  
 **Base URL**: `https://api.my-rusuh.my.id` (tanpa versi di path untuk saat ini; v2.9). Stream: `https://events.my-rusuh.my.id`  
-**Selaras dengan**: ADR-005 (Keputusan Arsitektur Final — SSE + ECS Fargate), diamandemen ADR-006 (antrian)  
+**Selaras dengan**: ADR-005 (Keputusan Arsitektur Final — SSE + ECS Fargate), diamandemen ADR-006 (antrian) dan ADR-007 (serah-terima pembayaran WebView)  
 **Pasangan mesin**: `rusuh-booking-apidog.json` (Apidog) — **sumber kebenaran bentuk respons**. Dokumen ini menjelaskan perilaku dan alasannya; keduanya wajib sinkron. `rusuh-booking-openapi.yaml` diarsipkan (`archive/`) dan tidak dipelihara lagi
 
+> **v2.25** (aditif, ADR-007): **halaman pembayaran web di dalam WebView aplikasi mobile.** Dua endpoint baru:
+> **`POST /payments/{booking_id}/handoff`** (§5.6, aplikasi meminta kode sekali pakai 60 detik) dan
+> **`POST /payments/handoff/exchange`** (§5.7, halaman web menukar kode dengan `payment_session`). Header baru
+> **`X-Payment-Session`** diterima §4.4 dan §5.1–§5.4 **sebagai pengganti** `X-Grant-Token` (+ `X-Device-Id` /
+> `Authorization`), tidak bersamaan. Kode error baru: `401 HANDOFF_CODE_INVALID`, `401 PAYMENT_SESSION_INVALID`.
+> Web desktop tidak berubah. Lihat Appendix C, v2.24 → v2.25.
+>
 > **v2.24** (format tampilan, tidak mengubah struktur): **`nik_masked` selalu 16 karakter: 4 digit awal, 10 asterisk, 2
 > digit akhir** (`3171**********22`), sama dengan yang dikembalikan nik-verify dan disimpan di `accounts`, `saved_niks`,
 > `booking_items` dan `tickets`. Contoh sebelumnya memakai tiga bentuk berbeda (`3171********22`, `3171********xx22`,
@@ -2056,9 +2063,15 @@ Detail booking untuk Payment Page dan Success Page.
 X-Grant-Token: {grant_token}
 X-Device-Id: {device_id}               # wajib bila customer TIDAK login
 Authorization: Bearer {access_token}   # wajib bila grant milik akun login
+
+# atau, hanya di WebView pembayaran (ADR-007), sebagai pengganti tiga header di atas:
+X-Payment-Session: {payment_session}
 ```
 
 > `Authorization` wajib bila grant milik akun login — lihat tabel di awal §4.
+
+> **Di WebView pembayaran (ADR-007):** ganti ketiga header di atas dengan `X-Payment-Session: {payment_session}`
+> dari §5.7. Aturannya ada di awal §5.
 
 **Response** (200 - Pending Payment):
 ```json
@@ -2184,6 +2197,24 @@ Authorization: Bearer {access_token}   # wajib bila grant milik akun login
 Header dan aturannya sama dengan §4: `X-Grant-Token` wajib, `X-Device-Id` wajib bila tidak login,
 `Authorization: Bearer` wajib bila grant milik akun login.
 
+**Halaman pembayaran di WebView aplikasi mobile (v2.25, ADR-007).** Aplikasi tidak memberikan kredensialnya ke
+halaman web. Ia meminta kode sekali pakai (§5.6), membuka WebView ke
+`https://rush-my-ticket.my.id/pay/{booking_id}#code={handoff_code}`, dan halaman itu menukar kode dengan
+`payment_session` (§5.7). Sesudahnya §4.4 dan §5.1–§5.4 dipanggil dengan **satu** header:
+
+```
+X-Payment-Session: {payment_session}
+```
+
+| Aturan | Isi |
+|---|---|
+| Satu kredensial | `X-Payment-Session` **atau** `X-Grant-Token` (+ `X-Device-Id` / `Authorization`), tidak keduanya → `400 VALIDATION_ERROR` |
+| Lingkup | Hanya `GET /bookings/{booking_id}` dan `/payments/{booking_id}/…` (§5.1–§5.4), dan hanya `booking_id` miliknya; lainnya → `404 NOT_FOUND` |
+| Umur | Selama grant hidup (TTL = sisa TTL grant). **PAID**: webhook tidak menghapus grant, jadi session tetap berlaku dan `/status` menjawab `PAID` sampai grant habis. **EXPIRED / dibatalkan**: grant dihapus, session ikut mati (`401 PAYMENT_SESSION_INVALID`) |
+| Tidak dikenal / kedaluwarsa | `401 PAYMENT_SESSION_INVALID`. Klien WebView berhenti polling dan mengirim `HANDOFF_EXPIRED` ke aplikasi, yang meminta kode baru (§5.6); bila §5.6 menjawab `401 GRANT_TOKEN_INVALID`, booking sudah berakhir |
+| Penyimpanan klien | Memori halaman saja. Tidak di `localStorage`, cookie, atau URL |
+| Web desktop | Tidak berubah: tetap `X-Grant-Token` |
+
 ### 5.1 Get Payment Methods
 
 Metode pembayaran yang tersedia beserta **parameter yang dibutuhkan klien**. UI: Payment
@@ -2196,6 +2227,9 @@ Method selection.
 X-Grant-Token: {grant_token}
 X-Device-Id: {device_id}               # wajib bila customer TIDAK login
 Authorization: Bearer {access_token}   # wajib bila grant milik akun login
+
+# atau, hanya di WebView pembayaran (ADR-007), sebagai pengganti tiga header di atas:
+X-Payment-Session: {payment_session}
 ```
 
 > `Authorization` wajib bila grant milik akun login — lihat tabel di awal §4.
@@ -2273,6 +2307,9 @@ Memulai pembayaran dengan metode terpilih. UI: tombol "Bayar Sekarang".
 X-Grant-Token: {grant_token}
 X-Device-Id: {device_id}               # wajib bila customer TIDAK login
 Authorization: Bearer {access_token}   # wajib bila grant milik akun login
+
+# atau, hanya di WebView pembayaran (ADR-007), sebagai pengganti tiga header di atas:
+X-Payment-Session: {payment_session}
 ```
 
 > `Authorization` wajib bila grant milik akun login — lihat tabel di awal §4.
@@ -2389,6 +2426,9 @@ metode — misalnya sudah menerima VA BCA lalu memilih GoPay.
 X-Grant-Token: {grant_token}
 X-Device-Id: {device_id}               # wajib bila customer TIDAK login
 Authorization: Bearer {access_token}   # wajib bila grant milik akun login
+
+# atau, hanya di WebView pembayaran (ADR-007), sebagai pengganti tiga header di atas:
+X-Payment-Session: {payment_session}
 ```
 
 > `Authorization` wajib bila grant milik akun login — lihat tabel di awal §4.
@@ -2455,6 +2495,9 @@ Polling status pembayaran. UI: Payment Page polling.
 X-Grant-Token: {grant_token}
 X-Device-Id: {device_id}               # wajib bila customer TIDAK login
 Authorization: Bearer {access_token}   # wajib bila grant milik akun login
+
+# atau, hanya di WebView pembayaran (ADR-007), sebagai pengganti tiga header di atas:
+X-Payment-Session: {payment_session}
 ```
 
 > `Authorization` wajib bila grant milik akun login — lihat tabel di awal §4.
@@ -2488,6 +2531,11 @@ Authorization: Bearer {access_token}   # wajib bila grant milik akun login
   }
 }
 ```
+
+> **Di WebView pembayaran (ADR-007):** `redirect_url` diabaikan. Halaman mengirim
+> `postMessage({type: "PAYMENT_DONE", booking_id})` ke aplikasi, yang memastikan status lewat
+> `GET /bookings/{booking_id}`. Session tetap berlaku setelah `PAID` (grant tidak dihapus webhook), jadi
+> polling berikutnya tetap menjawab `PAID`.
 
 **Response** (200 - Expired):
 ```json
@@ -2678,6 +2726,173 @@ memicu unique violation, seluruh transaksi batal, dan endpoint tetap menjawab `2
 ```
 
 **Requirement Coverage**: FR-25 (idempoten callback), FR-22, FR-23, FR-26, NFR-07 (PCI-DSS via gateway)
+
+---
+
+### 5.6 Create Payment Handoff Code (Mobile → WebView)
+
+Aplikasi mobile meminta kode sekali pakai untuk membuka halaman pembayaran web di WebView (ADR-007).
+UI: tombol "Bayar" di halaman booking aplikasi.
+
+**Endpoint**: `POST /payments/{booking_id}/handoff`
+
+**Headers**:
+```
+X-Grant-Token: {grant_token}
+X-Device-Id: {device_id}               # wajib bila customer TIDAK login
+Authorization: Bearer {access_token}   # wajib bila grant milik akun login
+```
+
+> Kredensial lengkap **wajib** di sini; `X-Payment-Session` tidak diterima. Pengikatan device (tamu) dan
+> pemeriksaan Bearer (login) terjadi pada endpoint ini, sekali, sebelum kode diterbitkan.
+
+**Request**: tanpa body (`{}` atau kosong).
+
+**Response** (201):
+```json
+{
+  "meta": { "code": 201, "message": "Handoff code created" },
+  "data": {
+    "booking_id": "RB-00912",
+    "handoff_code": "hc_Q2h4b0x3TjVtV3pYc1RkV2xBZ0p1cG9mQ2t1dlhZ",
+    "expires_at": "2026-10-25T10:16:30Z"
+  }
+}
+```
+
+| Field | Arti |
+|---|---|
+| `handoff_code` | Acak 256 bit, awalan `hc_`. **Sekali pakai**, berlaku 60 detik, hanya untuk `booking_id` ini |
+| `expires_at` | Batas tukar kode (§5.7). Aplikasi membuka WebView segera; bila lewat, minta kode baru |
+
+Aplikasi lalu membuka WebView ke:
+
+```
+https://rush-my-ticket.my.id/pay/{booking_id}#code={handoff_code}
+```
+
+Kode **wajib** di `#fragment`, tidak di query string: fragment tidak dikirim ke server, jadi tidak tercatat di log
+maupun `Referer`. Meminta kode baru tidak membatalkan kode lama; masing-masing tetap sekali pakai.
+
+**Status booking yang menerima handoff**: `HELD`, `AWAITING_PAYMENT`, `PENDING_CANCELLATION` (status API
+`PENDING_PAYMENT` / `PENDING` / `FAILED`). Booking yang sudah berakhir biasanya menjawab `401 GRANT_TOKEN_INVALID`
+karena grant-nya sudah dihapus.
+
+**Response** (409 - `BOOKING_STATUS_INVALID`): booking belum di-submit (`GRANTED` / `SELECTING`), atau sudah lunas.
+```json
+{
+  "meta": { "code": 409, "message": "Booking belum siap dibayar", "error_code": "BOOKING_STATUS_INVALID" },
+  "data": { "status": "SELECTING" }
+}
+```
+
+**Response** (409 - `PAYMENT_WINDOW_CLOSED`): `payment_expires_at` sudah lewat.
+```json
+{
+  "meta": { "code": 409, "message": "Waktu pembayaran sudah habis", "error_code": "PAYMENT_WINDOW_CLOSED" },
+  "data": { "payment_expires_at": "2026-10-25T10:25:00Z" }
+}
+```
+
+**Response** (429 - `TOO_MANY_REQUESTS`): lebih dari 10 kode per menit untuk satu grant.
+```json
+{
+  "meta": { "code": 429, "message": "Terlalu banyak permintaan", "error_code": "TOO_MANY_REQUESTS" },
+  "data": { "retry_after": 30 }
+}
+```
+
+**Semua error**:
+
+| HTTP | `error_code` | Kapan | Klien |
+|---|---|---|---|
+| 400 | `DEVICE_ID_REQUIRED` | Tamu tanpa `X-Device-Id` | Bug klien |
+| 400 | `VALIDATION_ERROR` | `X-Payment-Session` dikirim ke endpoint ini | Bug klien |
+| 401 | `GRANT_TOKEN_MISSING` | Tanpa `X-Grant-Token` | Bug klien |
+| 401 | `GRANT_TOKEN_INVALID` | Grant tidak dikenal, kedaluwarsa, atau dicabut (booking sudah berakhir) | Cek `GET /queue/me` / layar kedaluwarsa |
+| 401 | `DEVICE_MISMATCH` | Grant tamu dari perangkat lain | Layar sesi tidak berlaku |
+| 401 | `UNAUTHORIZED` / `TOKEN_EXPIRED` / `TOKEN_INVALID` | Grant akun login tanpa Bearer / Bearer akun lain / kedaluwarsa / tidak sah | Refresh (§1.4) atau login ulang |
+| 404 | `NOT_FOUND` | `booking_id` tidak ada atau bukan milik grant ini | Kembali ke beranda |
+| 409 | `BOOKING_STATUS_INVALID` | Status tidak menerima pembayaran; `data.status` | `SELECTING` → halaman tiket; `PAID` → halaman tiket terbit |
+| 409 | `PAYMENT_WINDOW_CLOSED` | Tenggat pembayaran lewat | Layar kedaluwarsa |
+| 429 | `TOO_MANY_REQUESTS` | > 10 kode / menit / grant; `data.retry_after` | Tunggu `retry_after` detik |
+| 503 | `INTERNAL_ERROR` | Redis / Aurora tidak dapat dihubungi | Coba lagi |
+
+**Requirement Coverage**: FR-21 (pembayaran), NFR-02 (re-entrancy: kode baru kapan saja selama grant hidup), NFR-11 (kredensial tidak di URL)
+
+---
+
+### 5.7 Exchange Payment Handoff Code (WebView)
+
+Halaman pembayaran web di WebView menukar kode dari §5.6 dengan `payment_session` (ADR-007). UI: saat
+`/pay/{booking_id}` dimuat dengan `#code=`.
+
+**Endpoint**: `POST /payments/handoff/exchange`
+
+**Headers**: tidak ada kredensial. Kode di body adalah kredensialnya.
+
+**Request**:
+```json
+{
+  "booking_id": "RB-00912",
+  "handoff_code": "hc_Q2h4b0x3TjVtV3pYc1RkV2xBZ0p1cG9mQ2t1dlhZ"
+}
+```
+
+| Field | Wajib | Aturan |
+|---|---|---|
+| `booking_id` | ✅ | Dari path halaman `/pay/{booking_id}`; harus sama dengan booking kode |
+| `handoff_code` | ✅ | Dari `#code=`; awalan `hc_` |
+
+**Response** (200):
+```json
+{
+  "meta": { "code": 200, "message": "Payment session created" },
+  "data": {
+    "booking_id": "RB-00912",
+    "payment_session": "ps_bTN4V1pLc0c2cWJ2Tk5yUjhYa0ZqZEw3a1R1aEVwWg",
+    "expires_at": "2026-10-25T10:34:00Z"
+  }
+}
+```
+
+| Field | Arti |
+|---|---|
+| `payment_session` | Acak 256 bit, awalan `ps_`. Dikirim sebagai `X-Payment-Session` pada §4.4 dan §5.1–§5.4. **Simpan di memori saja** |
+| `expires_at` | Batas atas umur session (= umur grant). Session dapat mati lebih cepat bila booking berakhir. **Bukan** tenggat pembayaran: countdown tetap dari `payment_ttl.expires_at` (§4.4) |
+
+> **Kode habis pada percobaan pertama**, berhasil maupun gagal (`GETDEL`). `booking_id` yang salah juga
+> menghabiskan kode. Halaman tidak boleh mengulang exchange dengan kode yang sama; ia meminta kode baru ke
+> aplikasi (`HANDOFF_EXPIRED`).
+
+**Response** (401 - `HANDOFF_CODE_INVALID`): kode tidak dikenal, sudah dipakai, kedaluwarsa, atau bukan untuk
+`booking_id` ini. Satu kode untuk semua penyebab, agar penebak tidak tahu bagian mana yang hampir benar.
+```json
+{
+  "meta": { "code": 401, "message": "Kode pembayaran tidak berlaku", "error_code": "HANDOFF_CODE_INVALID" },
+  "data": {}
+}
+```
+
+**Response** (401 - `GRANT_TOKEN_INVALID`): kode sah, tetapi booking sudah berakhir di antara §5.6 dan §5.7
+(grant dihapus).
+```json
+{
+  "meta": { "code": 401, "message": "Sesi booking sudah berakhir", "error_code": "GRANT_TOKEN_INVALID" },
+  "data": {}
+}
+```
+
+**Semua error**:
+
+| HTTP | `error_code` | Kapan | Klien (WebView) |
+|---|---|---|---|
+| 400 | `VALIDATION_ERROR` | `booking_id` / `handoff_code` kosong atau format salah | Kirim `HANDOFF_EXPIRED` |
+| 401 | `HANDOFF_CODE_INVALID` | Kode tidak dikenal, dipakai, kedaluwarsa, atau booking lain | Kirim `HANDOFF_EXPIRED`; aplikasi meminta kode baru |
+| 401 | `GRANT_TOKEN_INVALID` | Booking sudah berakhir | Kirim `PAYMENT_EXPIRED`; aplikasi memastikan lewat `GET /bookings/{id}` |
+| 503 | `INTERNAL_ERROR` | Redis tidak dapat dihubungi | Coba lagi sekali; kode **tidak** habis bila Redis tidak menjawab |
+
+**Requirement Coverage**: FR-21, NFR-11
 
 ---
 
@@ -2944,6 +3159,9 @@ Bagian per endpoint menulis error yang khas. Error umum berikut juga berlaku dan
 | `GET /bookings/{booking_id}` | 400 `DEVICE_ID_REQUIRED` · 404 `NOT_FOUND` · 503 `INTERNAL_ERROR` (§4.4) |
 | `GET /tickets/{ticket_id}/eticket` | 401 `ETICKET_TOKEN_INVALID` · 404 `NOT_FOUND` |
 | semua endpoint ber-grant (§4, §5) | 400 `DEVICE_ID_REQUIRED` · 401 `GRANT_TOKEN_MISSING` / `GRANT_TOKEN_INVALID` / `DEVICE_MISMATCH` · grant akun login: 401 `UNAUTHORIZED` / `TOKEN_EXPIRED` / `TOKEN_INVALID` |
+| §4.4, §5.1–§5.4 dengan `X-Payment-Session` (v2.25) | 400 `VALIDATION_ERROR` (dua kredensial sekaligus) · 401 `PAYMENT_SESSION_INVALID` · 404 `NOT_FOUND` (booking lain) |
+| `POST /payments/{booking_id}/handoff` | lengkap di §5.6 |
+| `POST /payments/handoff/exchange` | lengkap di §5.7: 400 `VALIDATION_ERROR` · 401 `HANDOFF_CODE_INVALID` / `GRANT_TOKEN_INVALID` · 503 `INTERNAL_ERROR` |
 
 > `GET /bookings/{booking_id}/tickets` **dihapus** (v2.7, ADR-006 §8.8): §4.4 sudah mengembalikan
 > `tickets[]` dengan `eticket_url` bertoken saat `PAID`.
@@ -3052,6 +3270,9 @@ Legenda: ✅ terpenuhi di kontrak · ⚙️ di luar permukaan API (backend atau 
 | **Atribusi akun** | `bookings.account_id` ditulis pada INSERT saat GRANT dari `token:{uuid}`, **tidak** dari kredensial yang dibawa klien saat checkout. Keterlibatan mengetahui identitasnya sejak join, ketika sesi masih pasti segar; bergantung pada token saat checkout berarti sesi yang kedaluwarsa menurunkan pembelian customer login menjadi pembelian tamu tanpa satu pun error |
 | **Pengikatan device (grant anonim)** | `X-Device-Id` — acak 128 bit yang dibuat klien (format tidak divalidasi), disimpan server sebagai `HMAC(DEVICE_PEPPER, device_id)`, dicocokkan pada join (rejoin), `/queue/me` dan setiap panggilan ber-grant. Tidak cocok → **401** `DEVICE_MISMATCH`, **tanpa rebind** (ADR-006 §8.9). Token akun dicocokkan ke `account_id`. **Bukan** fingerprint pasif: canvas/WebGL rapuh dan memanen karakteristik perangkat tanpa dasar persetujuan (NFR-11). **Non-goal**: ia menghentikan jual-beli slot, bukan penyerang yang menyalin `localStorage` korban |
 | SSE Auth | `queue_token` cookie (web) atau `X-Queue-Token` (mobile) divalidasi saat koneksi stream. `Authorization` tidak dipakai di sini |
+| **Handoff code (v2.25)** | Opaque acak 256 bit (`hc_…`), `paymenthandoff:{code}` di Redis, **60 detik, sekali pakai** (`GETDEL`), terikat satu `booking_id`. Diterbitkan §5.6 setelah grant guard lengkap; dibawa ke WebView di `#fragment` (tidak terkirim ke server, tidak masuk log / `Referer`), ditukar di §5.7 (ADR-007) |
+| **Payment session (v2.25)** | Opaque acak 256 bit (`ps_…`), header `X-Payment-Session`, `paymentsession:{session}` di Redis → `{booking_id, grant_token}`. Hanya §4.4 dan §5.1–§5.4 untuk satu booking. Setiap request memeriksa `grant:{token}` masih ada, jadi session mati bersama grant. Disimpan di memori halaman saja (tanpa cookie → tanpa CSRF). Kredensial ini **pengganti** grant di WebView, tidak pernah bersamaan dengannya |
+| **WebView pembayaran (v2.25)** | Dikunci ke `https://rush-my-ticket.my.id`; domain lain dan deeplink GoPay dibuka di luar aplikasi; kembali lewat App Link / Universal Link. Pesan `postMessage` dari halaman hanya sinyal: aplikasi selalu memastikan status lewat `GET /bookings/{id}` (ADR-007) |
 
 ---
 
@@ -3101,6 +3322,8 @@ Legenda: ✅ terpenuhi di kontrak · ⚙️ di luar permukaan API (backend atau 
 | `GRANT_TOKEN_INVALID` | **401** — grant tidak dikenal, kedaluwarsa, atau sudah dicabut. Beda dari `BOOKING_EXPIRED`: yang ini soal kredensial, bukan soal TTL booking. Keduanya dapat terjadi berurutan dan frontend merutekannya berbeda |
 | `DEVICE_ID_REQUIRED` | **400** — `X-Device-Id` tidak disertakan oleh pemanggil anonim pada `POST …/queue/join` atau endpoint ber-grant. Ditolak di join, bukan nanti: grant tanpa pengikatan tidak dapat diikat belakangan |
 | `DEVICE_MISMATCH` | **401** — `queue_token` tamu atau grant dipakai dari perangkat yang bukan penerimanya (v2.9: **tanpa rebind**, ADR-006 §8.9). Di join respons juga menghapus cookie `queue_token`; klien menghapus token antriannya (§3.1) |
+| `HANDOFF_CODE_INVALID` | **401** — kode serah-terima pada `POST /payments/handoff/exchange` tidak dikenal, sudah dipakai, kedaluwarsa (60 detik), atau bukan untuk `booking_id` di body (§5.7, v2.25). Satu kode untuk semua penyebab. WebView meminta kode baru ke aplikasi |
+| `PAYMENT_SESSION_INVALID` | **401** — `X-Payment-Session` tidak dikenal, kedaluwarsa, atau grant di belakangnya sudah dihapus (§5, v2.25). WebView meminta kode baru ke aplikasi; bila §5.6 menjawab `GRANT_TOKEN_INVALID`, booking sudah berakhir |
 | `ETICKET_TOKEN_INVALID` | **401** — token `?t=` pada tautan e-tiket tidak sah, kedaluwarsa, atau tidak cocok dengan `ticket_id` di path. Satu kode untuk ketiganya: membedakannya memberi tahu penebak mana bagian yang hampir benar |
 
 ---
@@ -3529,3 +3752,12 @@ Penyelarasan dengan ADR-005. Yang memutus kompatibilitas ditandai **BREAKING**.
 | # | Perubahan | Alasan |
 |---|---|---|
 | 129 | §1.6, §1.8, §4.1, §4.3, §4.4, §6.2, §9, Apidog: semua contoh `nik_masked` memakai `3171**********22` (4 digit awal, 10 asterisk, 2 digit akhir, total 16 karakter); aturan ditegaskan di catatan v2.24 | Tiga bentuk beredar di dokumen (14 karakter `3171********22`, `3171********xx22`, dan `3171********0022` yang menampilkan 4 digit akhir). Kode (`nik-verify`, `valueobject.Mask`) selalu mengembalikan bentuk 16 karakter dengan 2 digit akhir, dan itulah yang tersimpan; contoh yang berbeda membuat klien menulis pengujian dan tata letak untuk bentuk yang tidak pernah dikirim server |
+
+### v2.24 → v2.25
+
+| # | Perubahan | Alasan |
+|---|---|---|
+| 130 | §5.6 baru: `POST /payments/{booking_id}/handoff` → `201 {booking_id, handoff_code, expires_at}`; kode 256 bit, 60 detik, sekali pakai; errors 400/401/404/409/429/503 | Aplikasi mobile membuka halaman pembayaran web di WebView tanpa menaruh grant atau Bearer di URL (ADR-007) |
+| 131 | §5.7 baru: `POST /payments/handoff/exchange` `{booking_id, handoff_code}` → `200 {booking_id, payment_session, expires_at}`; kode habis pada percobaan pertama | Pola *authorization code*: kode yang tersalin tidak berguna setelah dipakai atau 60 detik |
+| 132 | §4.4, §5 (intro, §5.1–§5.4): header `X-Payment-Session` sebagai **pengganti** `X-Grant-Token` (+ `X-Device-Id` / `Authorization`); dua kredensial sekaligus → `400 VALIDATION_ERROR`; booking lain → `404 NOT_FOUND` | WebView hanya memegang kredensial untuk satu booking yang mati bersama grant, bukan sesi akun penuh |
+| 133 | Appendix A: `HANDOFF_CODE_INVALID`, `PAYMENT_SESSION_INVALID`; §7 tabel error per endpoint; §9 tiga baris keamanan | Kode baru dari §5.6, §5.7 |
