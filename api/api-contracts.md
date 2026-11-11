@@ -1,12 +1,20 @@
 # Rusuh Booking Tiket — API Contracts
 
-**Versi**: 2.22.0  
+**Versi**: 2.23.0  
 **Tanggal**: 11 November 2026  
 **Status**: Draft  
 **Base URL**: `https://api.my-rusuh.my.id` (tanpa versi di path untuk saat ini; v2.9). Stream: `https://events.my-rusuh.my.id`  
 **Selaras dengan**: ADR-005 (Keputusan Arsitektur Final — SSE + ECS Fargate), diamandemen ADR-006 (antrian)  
 **Pasangan mesin**: `rusuh-booking-apidog.json` (Apidog) — **sumber kebenaran bentuk respons**. Dokumen ini menjelaskan perilaku dan alasannya; keduanya wajib sinkron. `rusuh-booking-openapi.yaml` diarsipkan (`archive/`) dan tidak dipelihara lagi
 
+> **v2.23** (`POST /bookings`, `GET /bookings/{id}`): (1) **`429 TOO_MANY_REQUESTS` dihapus dari `POST /bookings`**:
+> booking memverifikasi NIK lewat pemanggilan internal ke nik-verify, tanpa batas per customer; batas laju Dukcapil
+> bersama menjawab `503 DUKCAPIL_UNAVAILABLE`. (2) **`409 BOOKING_EXPIRED` untuk setiap booking yang 5 menitnya habis
+> sebelum Bayar** (`GRANTED` maupun `SELECTING`); `409 BOOKING_STATUS_INVALID` hanya untuk `GRANTED` yang masih dalam
+> waktu. (3) `TICKETS_UNAVAILABLE.data.queue_state` selalu `FULL_BOOKED` atau `CLOSED`, juga sebelum admission-ctl
+> mengubah state antrian; `full_booked_at` dapat `null`. (4) §4.4: booking yang sudah berakhir biasanya menjawab
+> `401 GRANT_TOKEN_INVALID`, bukan `data.status` `EXPIRED`. Lihat Appendix C, v2.22 → v2.23.
+>
 > **v2.22** (**breaking** bagi klien halaman utama dan join): (1) **`GET /events` dan `GET /events/{id}` disederhanakan**:
 > `status`, `queue_depth`, `queue_capacity`, `min_price`, `max_price`, `display.action`, `display.label_key` dan
 > `display.badge_key` dihapus; `queue_state` menjadi `SCHEDULED \| OPEN \| FULL_QUEUE \| FULL_BOOKED \| CLOSED`;
@@ -1977,13 +1985,12 @@ sampai `BOOKING_EXPIRED`) diperiksa sebelum body (v2.21); booking `HELD` atau le
 | 401 | `GRANT_TOKEN_MISSING` / `GRANT_TOKEN_INVALID` / `DEVICE_MISMATCH` | grant hilang, tidak dikenal, dari perangkat lain, atau `event_id` event lain | — | tidak berubah |
 | 401 | `UNAUTHORIZED` / `TOKEN_EXPIRED` / `TOKEN_INVALID` | grant milik akun login: `Authorization` hilang atau milik akun lain / kedaluwarsa / tidak sah (kursi `saved_nik_id` dan `use_account_nik` hanya berlaku bagi akun yang terbukti) | — | tidak berubah |
 | 401 | `GRANT_TOKEN_INVALID` | tidak ada booking untuk grant ini, atau booking sudah berakhir (`LAPSED`, `EXPIRED`, `ABANDONED`; grant-nya sudah dihapus) | — | berakhir |
-| 409 | `BOOKING_STATUS_INVALID` | halaman tiket belum pernah dibuka (`GRANTED`): belum ada pilihan untuk dikirim | — | `GRANTED` |
-| 409 | `BOOKING_EXPIRED` | 5 menit habis saat booking masih `SELECTING` (sweep belum berjalan) | — | segera `EXPIRED` |
+| 409 | `BOOKING_STATUS_INVALID` | halaman tiket belum pernah dibuka (`GRANTED`) dan 5 menit belum habis: belum ada pilihan untuk dikirim | — | `GRANTED` |
+| 409 | `BOOKING_EXPIRED` | 5 menit habis sebelum Bayar ditekan, booking masih `GRANTED` atau `SELECTING` (sweep belum berjalan) | — | segera `LAPSED` / `EXPIRED` |
 | 400 | `VALIDATION_ERROR` | JSON rusak, `tickets` kosong, `contact_email` tidak valid, `category_id` tidak dikenal, kursi dengan nol atau lebih dari satu dari `nik` / `saved_nik_id` / `use_account_nik`, format NIK, `saved_nik_id` / `use_account_nik` tidak berlaku (bukan milik akun ini, sudah dihapus, tamu, akun tanpa NIK, `use_account_nik` di dua kursi), NIK sama di dua kursi (dibandingkan lewat hash) | `{index}` bila tentang satu kursi | tidak berubah |
 | 400 | `QTY_EXCEEDED` | lebih dari 3 kursi **secara total** (lintas kategori, BR-01) | — | tidak berubah |
 | 400 | `NIK_NOT_FOUND` / `NIK_INACTIVE` | nik-verify menyatakan NIK tidak terdaftar / tidak aktif | `{index}` | tidak berubah |
-| 429 | `TOO_MANY_REQUESTS` | verifikasi NIK dibatasi (§4.2); disertai header `Retry-After` | `{retry_after}` (detik) | tidak berubah |
-| 503 | `DUKCAPIL_UNAVAILABLE` | nik-verify atau Dukcapil tidak dapat menjawab (fail closed: tidak ada hold tanpa bukti) | — | tidak berubah |
+| 503 | `DUKCAPIL_UNAVAILABLE` | nik-verify atau Dukcapil tidak dapat menjawab, termasuk batas laju Dukcapil bersama yang habis (fail closed: tidak ada hold tanpa bukti) | — | tidak berubah |
 | 409 | `INSUFFICIENT_STOCK` | **habis sebagian**: stok sebuah kategori yang dipesan tidak cukup, tetapi **masih ada kategori lain** yang tersedia | `{category_id, available, requested}` | tetap `SELECTING`, sisa waktu berjalan |
 | 409 | `TICKETS_UNAVAILABLE` | **habis total**: setiap kategori event ini sudah 0 | `{queue_state, full_booked_at}` | tetap `SELECTING`, sisa waktu berjalan |
 | 409 | `NIK_ALREADY_USED` | NIK sudah memegang kursi untuk event ini (juga bila Redis terlewat dan basis data menolaknya) | `{index}` | tetap `SELECTING` |
@@ -2008,6 +2015,9 @@ sampai `BOOKING_EXPIRED`) diperiksa sebelum body (v2.21); booking `HELD` atau le
 > | `TICKETS_UNAVAILABLE` | pindah ke halaman "tiket habis". `data.queue_state` `FULL_BOOKED` = semua kursi sedang di-hold dan **dapat tersedia lagi** ("habis untuk sementara", pesanan tetap `SELECTING` dengan sisa waktunya); `CLOSED` = penjualan berakhir, tidak akan tersedia lagi |
 >
 > `data.queue_state` memakai nama yang sama dengan `queue_state` pada §2.1, sehingga halaman "tiket habis" yang sama dapat dipakai.
+> Nilainya **hanya** `FULL_BOOKED` atau `CLOSED`: stok adalah sumber kebenaran "habis", dan state antrian baru berubah
+> pada tick admission-ctl berikutnya (≤ 500 ms). Selama itu state antrian masih `OPEN`, dan server tetap menjawab
+> `FULL_BOOKED`. `data.full_booked_at` `null` bila admission-ctl belum mencatatnya.
 >
 > **Kode yang tidak muncul di endpoint ini:** `QTY_INVALID` dan `NIK_COUNT_MISMATCH` (satu kursi = satu tiket; hanya
 > penjaga di skrip Lua), `NIK_UNVERIFIED` dan `NIK_VALIDATION_FAILED` (verifikasi dilakukan server lewat nik-verify, bukan dituntut dari klien).
@@ -2146,6 +2156,11 @@ Authorization: Bearer {access_token}   # wajib bila grant milik akun login
 | 401 | `UNAUTHORIZED` / `TOKEN_EXPIRED` / `TOKEN_INVALID` | grant milik akun login: `Authorization` hilang atau milik akun lain / kedaluwarsa / tidak sah |
 | 404 | `NOT_FOUND` | `booking_id` bukan milik grant ini atau tidak ada (tidak dibedakan, ADR-005 Bagian 12) |
 | 503 | `INTERNAL_ERROR` | basis data atau Redis tidak dapat dihubungi |
+
+> **Booking yang sudah berakhir biasanya menjawab `401 GRANT_TOKEN_INVALID`, bukan `data.status` `EXPIRED`.** Setiap
+> sweep yang mengakhiri booking (`LAPSED`, `EXPIRED`) juga menghapus grant-nya, dan grant diperiksa sebelum booking
+> dibaca. `EXPIRED` hanya terlihat di jeda singkat antara keduanya. Customer di halaman pembayaran yang 10 menitnya habis
+> karena itu menerima 401: klien memanggil `GET /queue/me`, yang menjawab `EXPIRED`, lalu menampilkan layar kedaluwarsa.
 
 > **`eticket_url` sudah membawa token e-tiket (`?t=`) saat `PAID`.** Token yang sama dengan
 > tautan email (§6.2): HMAC atas satu `ticket_id`, berlaku sampai pukul 00:00 WIB sehari setelah event,
@@ -2920,7 +2935,7 @@ Bagian per endpoint menulis error yang khas. Error umum berikut juga berlaku dan
 | `GET /events/{event_id}/queue/me` | 401 `UNAUTHORIZED` (tidak ada kredensial, atau Bearer tanpa `acct` untuk event ini) |
 | `GET /events/{event_id}/tickets` | 400 `DEVICE_ID_REQUIRED` · 401 `GRANT_TOKEN_MISSING` / `GRANT_TOKEN_INVALID` / `DEVICE_MISMATCH` · 404 `NOT_FOUND` · 503 `STOCK_UNINITIALIZED` / `INTERNAL_ERROR` (§4.1) |
 | `POST /nik/validate` | 400 `VALIDATION_ERROR` · 429 `TOO_MANY_REQUESTS` · 503 `DUKCAPIL_UNAVAILABLE` |
-| `POST /bookings` | lengkap di §4.3: 400 `VALIDATION_ERROR` / `QTY_EXCEEDED` / `NIK_NOT_FOUND` / `NIK_INACTIVE` / `DEVICE_ID_REQUIRED` · 401 · 409 `INSUFFICIENT_STOCK` / `TICKETS_UNAVAILABLE` / `NIK_ALREADY_USED` / `BOOKING_STATUS_INVALID` / `BOOKING_EXPIRED` · 429 · 503 `DUKCAPIL_UNAVAILABLE` / `STOCK_UNINITIALIZED` / `STOCK_NEGATIVE` / `INTERNAL_ERROR` |
+| `POST /bookings` | lengkap di §4.3: 400 `VALIDATION_ERROR` / `QTY_EXCEEDED` / `NIK_NOT_FOUND` / `NIK_INACTIVE` / `DEVICE_ID_REQUIRED` · 401 · 409 `INSUFFICIENT_STOCK` / `TICKETS_UNAVAILABLE` / `NIK_ALREADY_USED` / `BOOKING_STATUS_INVALID` / `BOOKING_EXPIRED` · 503 `DUKCAPIL_UNAVAILABLE` / `STOCK_UNINITIALIZED` / `STOCK_NEGATIVE` / `INTERNAL_ERROR` |
 | `GET /bookings/{booking_id}` | 400 `DEVICE_ID_REQUIRED` · 404 `NOT_FOUND` · 503 `INTERNAL_ERROR` (§4.4) |
 | `GET /tickets/{ticket_id}/eticket` | 401 `ETICKET_TOKEN_INVALID` · 404 `NOT_FOUND` |
 | semua endpoint ber-grant (§4, §5) | 400 `DEVICE_ID_REQUIRED` · 401 `GRANT_TOKEN_MISSING` / `GRANT_TOKEN_INVALID` / `DEVICE_MISMATCH` · grant akun login: 401 `UNAUTHORIZED` / `TOKEN_EXPIRED` / `TOKEN_INVALID` |
@@ -3057,7 +3072,7 @@ Legenda: ✅ terpenuhi di kontrak · ⚙️ di luar permukaan API (backend atau 
 | `STOCK_UNINITIALIZED` | **503** — kunci stok hilang dari Redis (flush/failover). Bukan "habis": stok tidak diketahui |
 | `STOCK_NEGATIVE` | **503** — guard terakhir menyala; seluruh pengurangan dikembalikan |
 | `INSUFFICIENT_STOCK` | Stok tiket tidak mencukupi |
-| `TICKETS_UNAVAILABLE` | **409** — habis total: setiap kategori event sudah 0 (`POST /bookings`, §4.3). `data {queue_state, full_booked_at}`; `queue_state` `FULL_BOOKED` = dapat tersedia lagi, `CLOSED` = penjualan berakhir. Habis sebagian: `INSUFFICIENT_STOCK` |
+| `TICKETS_UNAVAILABLE` | **409** — habis total: setiap kategori event sudah 0 (`POST /bookings`, §4.3). `data {queue_state, full_booked_at}`; `queue_state` hanya `FULL_BOOKED` (dapat tersedia lagi) atau `CLOSED` (penjualan berakhir); `full_booked_at` dapat `null`. Habis sebagian: `INSUFFICIENT_STOCK` |
 | `PAYMENT_ALREADY_INITIATED` | Charge sudah berjalan; respons sebelumnya diputar ulang |
 | `BANK_NOT_SUPPORTED` | Bank di luar bca/bni/bri/cimb |
 | `MAX_ATTEMPTS_EXCEEDED` | Melewati batas percobaan pembayaran per booking |
@@ -3072,7 +3087,7 @@ Legenda: ✅ terpenuhi di kontrak · ⚙️ di luar permukaan API (backend atau 
 | `MAX_SAVED_NIKS_REACHED` | Daftar NIK Teman sudah mencapai 5 entri |
 | `CONSENT_REQUIRED` | Persetujuan pemrosesan data pribadi pihak ketiga belum diberikan |
 | `PAYMENT_GATEWAY_UNAVAILABLE` | **503** — breaker payment gateway terbuka; dapat di-retry. Menggantikan `ADMISSION_PAUSED` (v2.7, pause dihapus) |
-| `BOOKING_EXPIRED` | **409** — 5 menit habis saat booking masih `SELECTING` (§4.3). Booking yang sudah berakhir dan grant-nya dihapus menjawab `401 GRANT_TOKEN_INVALID` |
+| `BOOKING_EXPIRED` | **409** — 5 menit habis sebelum Bayar ditekan, saat booking masih `GRANTED` atau `SELECTING` (§4.3). Booking yang sudah berakhir dan grant-nya dihapus menjawab `401 GRANT_TOKEN_INVALID` |
 | `PAYMENT_EXPIRED` | TTL pembayaran habis |
 | `TOO_MANY_REQUESTS` | Rate limited |
 | `TOKEN_EXPIRED` | **Hanya tentang sesi akun.** Access token kedaluwarsa, atau refresh token kedaluwarsa/dicabut/tidak dikenal — klien me-refresh (§1.4) atau login ulang |
@@ -3494,3 +3509,12 @@ Penyelarasan dengan ADR-005. Yang memutus kompatibilitas ditandai **BREAKING**.
 | 122 | §3.1, Apidog: `data.queue_state` pada 409 `SALE_NOT_OPEN` menjadi `SCHEDULED`, pada 503 `QUEUE_FULL` menjadi `FULL_QUEUE` | Satu kosakata state di seluruh API |
 | 123 | §2.1, Apidog: urutan tanggal event terbaru dulu, event lampau tetap tampil; parameter `filter` dihapus (halaman dipotong di database); `400 VALIDATION_ERROR`; `sale_starts_at` nullable | Filter mengikuti `queue_state`; query tidak valid kini ditolak |
 | 124 | §2.1, §2.2, Apidog: `503 INTERNAL_ERROR` (Aurora mati); Redis mati tetap 200 dari snapshot dengan `Cache-Control` 5 detik; catatan `meta.server_time` pada respons ber-cache | Halaman utama tidak boleh mati karena Redis; jam dari respons cache bisa tertinggal 30 detik (BR-10) |
+
+### v2.22 → v2.23
+
+| # | Perubahan | Alasan |
+|---|---|---|
+| 125 | §4.3, Apidog: `429 TOO_MANY_REQUESTS` dihapus dari `POST /bookings`; batas laju Dukcapil bersama menjawab `503 DUKCAPIL_UNAVAILABLE` | Booking memverifikasi NIK lewat pemanggilan Lambda internal ke nik-verify, bukan lewat `POST /nik/validate`; tidak ada batas per customer yang diteruskan |
+| 126 | §4.3, Appendix A, Apidog: `409 BOOKING_EXPIRED` juga untuk `GRANTED` yang 5 menitnya habis; `BOOKING_STATUS_INVALID` hanya untuk `GRANTED` yang masih dalam waktu | Halaman yang dibuka setelah tenggat tidak meng-claim (§4.1), jadi booking tetap `GRANTED`; customer kehabisan waktu dan harus melihat "waktu habis", bukan "buka halaman tiket" |
+| 127 | §4.3, Appendix A, Apidog: `TICKETS_UNAVAILABLE.data.queue_state` hanya `FULL_BOOKED` atau `CLOSED`; `full_booked_at` dapat `null` | Stok mencapai 0 sebelum admission-ctl mengubah state antrian (≤ 500 ms); menyalin state apa adanya akan mengirim `OPEN` ke halaman "tiket habis" |
+| 128 | §4.4: catatan bahwa booking yang sudah berakhir biasanya menjawab `401 GRANT_TOKEN_INVALID` | Sweep menghapus grant; klien tidak boleh menunggu `EXPIRED` dari endpoint ini |
