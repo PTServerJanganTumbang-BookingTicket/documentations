@@ -1,12 +1,19 @@
 # Rusuh Booking Tiket — API Contracts
 
-**Versi**: 2.23.0  
+**Versi**: 2.24.0  
 **Tanggal**: 11 November 2026  
 **Status**: Draft  
 **Base URL**: `https://api.my-rusuh.my.id` (tanpa versi di path untuk saat ini; v2.9). Stream: `https://events.my-rusuh.my.id`  
 **Selaras dengan**: ADR-005 (Keputusan Arsitektur Final — SSE + ECS Fargate), diamandemen ADR-006 (antrian)  
 **Pasangan mesin**: `rusuh-booking-apidog.json` (Apidog) — **sumber kebenaran bentuk respons**. Dokumen ini menjelaskan perilaku dan alasannya; keduanya wajib sinkron. `rusuh-booking-openapi.yaml` diarsipkan (`archive/`) dan tidak dipelihara lagi
 
+> **v2.24** (§1.7): **`GET /auth/verify-email` menerima token di cookie `magic_token`**, bukan query
+> parameter `?token=`. Ini **koreksi dokumen, bukan perubahan perilaku**: handler sudah membaca cookie
+> sejak endpoint ini ada (`1417f00`, 3 Nov 09:26), dan tabel query di v2.4 — ditulis 12 jam kemudian —
+> men-transkrip bentuk **tautan email**, yang menunjuk ke `APP_BASE_URL` (frontend), bukan ke API.
+> Klien yang mengirim `?token=` selalu mendapat `400 TOKEN_INVALID`, jadi tidak ada klien yang bekerja
+> hari ini yang rusak. Sejajar dengan §1.3. Lihat Appendix C, v2.23 → v2.24.
+>
 > **v2.23** (§1.5): **`consent.policy_version` dihapus** dari body `POST /auth/register`. Klien yang masih
 > mengirimnya **tetap diterima** — anggota tambahan diabaikan, bukan ditolak — jadi tidak ada klien yang perlu
 > berubah. Rekam consent kini memuat `account_id` dan `consented_at` saja. Lihat Appendix C, v2.22 → v2.23.
@@ -628,10 +635,26 @@ Mengonfirmasi kepemilikan alamat email setelah registrasi (FR-31). **Berbeda dar
 
 **Endpoint**: `GET /auth/verify-email`
 
-**Query Parameters**:
-| Param | Type | Required | Description |
-|-------|------|----------|-------------|
-| `token` | string | Yes | Token dari tautan email `account.verify`; berlaku **15 menit**, sekali pakai. Sama dengan TTL tautan login — `magic_tokens` memakai satu konstanta untuk kedua `purpose` |
+**Cookies** (sama seperti §1.3):
+| Cookie | Type | Required | Description |
+|--------|------|----------|-------------|
+| `magic_token` | string | Yes | Token dari tautan email `account.verify`; berlaku **15 menit**, sekali pakai. Sama dengan TTL tautan login — `magic_tokens` memakai satu konstanta untuk kedua `purpose` |
+
+> **Mengapa cookie, bukan `?token=`.** Alur pengirimannya sama dengan §1.3. `notification-service`
+> membangun tautan sebagai `APP_BASE_URL + "/auth/verify-email?token=" + token` — `APP_BASE_URL`
+> adalah **frontend** (default `http://localhost:3000`), bukan API. Halaman frontend membaca token
+> dari query string miliknya sendiri, memasang cookie `magic_token`, lalu memanggil endpoint ini.
+> Bahwa `APP_BASE_URL` menunjuk ke frontend terbaca jelas pada email login, yang menunjuk ke
+> `/auth/login` — rute yang **tidak ada** di API; rute API-nya `GET /auth/verify` (§1.3).
+>
+> Query parameter pada endpoint ini akan menyalin kredensial sekali-pakai ke log akses
+> `user-service`, log load balancer, dan CloudWatch, serta ke `Referer` dari apa pun yang ditautkan
+> respons. Token memang tetap melewati satu URL — URL frontend, yang tidak terhindarkan untuk tautan
+> email apa pun — tetapi berhenti di sana. `HttpOnly` menjauhkannya dari script di halaman berikutnya
+> dan `SameSite=Strict` menahan origin lain mengirimkannya.
+>
+> Cookie **dihapus** (`Max-Age=-1`) setelah dipakai: tokennya sekali pakai, dan bila dibiarkan
+> terpasang, kredensial yang sudah mati ikut terkirim pada setiap request berikutnya ke origin ini.
 
 **Response** (200):
 ```json
@@ -3520,3 +3543,9 @@ Penyelarasan dengan ADR-005. Yang memutus kompatibilitas ditandai **BREAKING**.
 | # | Perubahan | Alasan |
 |---|---|---|
 | 125 | §1.5, Apidog: **`consent.policy_version` dihapus** dari body `POST /auth/register` (diabaikan bila masih dikirim, jadi **tidak breaking** bagi klien); rekam consent memuat `id`, `account_id`, `consented_at` saja | Nilainya datang dari klien dan ditulis ke rekam immutable, sehingga klien menjadi otoritas atas kebijakan yang disetujui — untuk rekam yang justru harus menjadi bukti (UU PDP No. 27/2022). `account_id` + `consented_at` dari server menjawab siapa dan kapan; dokumen kebijakan berversi menjawab sisanya. Sejalan dengan `terms_version` (#109) |
+
+### v2.23 → v2.24
+
+| # | Perubahan | Alasan |
+|---|---|---|
+| 126 | §1.7, Apidog: `GET /auth/verify-email` menerima token di **cookie `magic_token`**, bukan query parameter `?token=`. **Koreksi dokumen, bukan perubahan perilaku** | Handler membaca cookie sejak endpoint ini lahir (`1417f00`, 3 Nov 09:26). Tabel query ditulis 12 jam kemudian (#55) dan men-transkrip bentuk **tautan email**, bukan request ke API — tautan itu menunjuk ke `APP_BASE_URL`, yaitu frontend, yang terbaca jelas dari email login yang menunjuk ke `/auth/login`, rute yang tidak ada di API. Jadi kontrak mendokumentasikan endpoint yang katanya "sudah berjalan" dengan kanal yang tidak pernah dibacanya. Tidak breaking: `?token=` selalu dijawab `400 TOKEN_INVALID`, jadi tidak ada klien yang bekerja hari ini yang bergantung padanya. Query parameter juga kanal yang lebih buruk untuk kredensial sekali-pakai — ia masuk log akses, log load balancer, CloudWatch, dan `Referer` — sementara cookie `HttpOnly`/`SameSite=Strict` berhenti di frontend dan dihapus setelah dipakai. Kini sejajar dengan §1.3 |

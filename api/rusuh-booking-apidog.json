@@ -1555,22 +1555,22 @@
                 "path": "/auth/verify-email",
                 "parameters": {
                   "path": [],
-                  "cookie": [],
-                  "header": [],
-                  "query": [
+                  "cookie": [
                     {
                       "id": "VerifyEmailTok1",
-                      "name": "token",
+                      "name": "magic_token",
                       "required": true,
                       "enable": true,
-                      "description": "Token dari tautan email account.verify; berlaku 15 MENIT, sekali pakai — sama dengan TTL tautan login, karena magic_tokens memakai satu konstanta untuk kedua purpose.",
+                      "description": "Token dari tautan email account.verify; berlaku 15 MENIT, sekali pakai — sama dengan TTL tautan login, karena magic_tokens memakai satu konstanta untuk kedua purpose. Dipasang oleh halaman frontend yang menerima tautan email (APP_BASE_URL), kanal yang sama dengan GET /auth/verify; dihapus setelah dipakai.",
                       "example": "",
                       "type": "string",
                       "schema": {
                         "type": "string"
                       }
                     }
-                  ]
+                  ],
+                  "header": [],
+                  "query": []
                 },
                 "auth": {},
                 "securityScheme": {},
