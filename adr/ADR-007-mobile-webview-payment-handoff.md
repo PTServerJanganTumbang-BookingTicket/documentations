@@ -110,14 +110,28 @@ sequenceDiagram
 
 ## Konsekuensi
 
-- **Positif:** kredensial jangka panjang tidak pernah meninggalkan aplikasi; kode yang tersalin tidak berguna
-  setelah 60 detik atau sekali dipakai; session yang tersalin hanya bisa melihat dan membayar booking itu, dan mati
-  bersama grant (paling lama `GRANT_TOKEN_TTL_SECONDS`).
-- **Diterima:** setelah `PAID` session masih bisa membaca status dan detail booking itu sampai grant habis.
-  Sama dengan grant hari ini; tidak ada yang bisa dibayar atau diubah lagi.
-- **Negatif:** dua endpoint baru, satu header baru di grant guard, dua kunci Redis baru (`paymenthandoff:`, `paymentsession:`),
-  dan satu putaran jaringan tambahan sebelum halaman pembayaran tampil (≈ 100 ms).
-- **Tidak berubah:** alur Midtrans, webhook, status booking, dan web desktop.
+Diurutkan dari yang paling menentukan.
+
+### Kelebihan
+
+| # | Kelebihan | Mengapa penting |
+|---|---|---|
+| 1 | **Tidak ada kredensial di URL** | Grant dan Bearer tidak pernah masuk log CDN / API Gateway, riwayat WebView, `Referer`, atau screenshot. Kode dibawa di `#fragment`, yang tidak dikirim ke server |
+| 2 | **Kode yang bocor tidak berguna** | Sekali pakai (`GETDEL`), 60 detik, hanya untuk satu booking. URL WebView yang tersalin tidak membuka apa pun |
+| 3 | **Dampak kebocoran kecil** | Session hanya bisa melihat dan membayar **satu** booking. Bearer akun tidak pernah sampai ke halaman web, jadi XSS di halaman pembayaran tidak dapat mengambil alih akun |
+| 4 | **Memenuhi requirement** | Satu halaman pembayaran web dipakai ulang di WebView mobile (`requirements.md` §8 Dalam Lingkup), memakai API pembayaran yang sama (FR-24, NFR-08), dan halaman tetap dijaga token (NFR-07) |
+| 5 | **Perubahan backend kecil** | Tanpa migrasi; handler dan query pembayaran tidak berubah (guard mengubah session kembali menjadi grant). Session mati sendiri bersama grant, tanpa kode pembersihan |
+
+### Kekurangan
+
+| # | Kekurangan | Mitigasi |
+|---|---|---|
+| 1 | **Tiga tim harus berkoordinasi**: backend, web, dan mobile berubah, dan pesan `postMessage` menjadi kontrak baru antara web dan mobile | Pesan dan langkah per anggota tertulis di ADR ini; web dan mobile dapat mulai dengan mock Apidog |
+| 2 | **Muat ulang WebView menghilangkan session** (disimpan di memori saja), sehingga aplikasi harus meminta kode baru | Alur `HANDOFF_EXPIRED` → kode baru → muat ulang. Grant tetap sama, jadi BR-09 terpenuhi |
+| 3 | **Lebih banyak bagian**: dua endpoint baru, kredensial kelima (`X-Payment-Session`), dan dua guard yang dipilih per rute | Memakai ulang grant guard dan `pkg/ratelimit`; tabel rute di `07-payment/06-grant-guard.md` §12, diuji per rute |
+| 4 | **Session masih berlaku setelah `PAID`** sampai grant habis (paling lama `GRANT_TOKEN_TTL_SECONDS` sejak `granted_at`) | Hanya bisa membaca status dan detail booking itu; tidak ada yang bisa dibayar atau diubah. Sama dengan perilaku grant hari ini |
+
+**Tidak berubah:** alur Midtrans, webhook, status booking, dan web desktop.
 
 ## Rencana per anggota
 
