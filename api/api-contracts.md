@@ -1,12 +1,17 @@
 # Rusuh Booking Tiket — API Contracts
 
-**Versi**: 2.23.0  
+**Versi**: 2.24.0  
 **Tanggal**: 11 November 2026  
 **Status**: Draft  
 **Base URL**: `https://api.my-rusuh.my.id` (tanpa versi di path untuk saat ini; v2.9). Stream: `https://events.my-rusuh.my.id`  
 **Selaras dengan**: ADR-005 (Keputusan Arsitektur Final — SSE + ECS Fargate), diamandemen ADR-006 (antrian)  
 **Pasangan mesin**: `rusuh-booking-apidog.json` (Apidog) — **sumber kebenaran bentuk respons**. Dokumen ini menjelaskan perilaku dan alasannya; keduanya wajib sinkron. `rusuh-booking-openapi.yaml` diarsipkan (`archive/`) dan tidak dipelihara lagi
 
+> **v2.24** (format tampilan, tidak mengubah struktur): **`nik_masked` selalu 16 karakter: 4 digit awal, 10 asterisk, 2
+> digit akhir** (`3171**********22`), sama dengan yang dikembalikan nik-verify dan disimpan di `accounts`, `saved_niks`,
+> `booking_items` dan `tickets`. Contoh sebelumnya memakai tiga bentuk berbeda (`3171********22`, `3171********xx22`,
+> `3171********0022`); klien tidak boleh mengurai isinya, hanya menampilkannya. Lihat Appendix C, v2.23 → v2.24.
+>
 > **v2.23** (`POST /bookings`, `GET /bookings/{id}`): (1) **`429 TOO_MANY_REQUESTS` dihapus dari `POST /bookings`**:
 > booking memverifikasi NIK lewat pemanggilan internal ke nik-verify, tanpa batas per customer; batas laju Dukcapil
 > bersama menjawab `503 DUKCAPIL_UNAVAILABLE`. (2) **`409 BOOKING_EXPIRED` untuk setiap booking yang 5 menitnya habis
@@ -557,7 +562,7 @@ memanggil Dukcapil lagi**. Maksimal 5 per akun. Tidak tersedia untuk guest.
   "data": {
     "max_entries": 5,
     "saved_niks": [
-      { "id": "snk_1", "nik_masked": "3171********22", "label": "Budi",
+      { "id": "snk_1", "nik_masked": "3171**********22", "label": "Budi",
         "verified_at": "2026-10-20T08:11:00Z", "status": "VERIFIED" }
     ]
   }
@@ -690,7 +695,7 @@ Authorization: Bearer {access_token}
   },
   "data": {
     "email": "Virgie_OKon@yahoo.com",
-    "nik_masked": "3171********xx22"
+    "nik_masked": "3171**********22"
   }
 }
 ```
@@ -731,17 +736,17 @@ Authorization: Bearer {access_token}
 >    kosmetik: field bernama `nik` yang kebetulan ter-mask adalah jebakan bagi penulis klien
 >    yang mengirimkannya kembali sebagai NIK — dan nilainya akan gagal validasi 16 digit
 >    tanpa petunjuk mengapa.
-> 3. **Mask `330************777` → `3171********xx22`.** Yang pertama 6 digit + 12 asterisk =
->    **18 karakter**, untuk NIK yang panjangnya 16. Bentuk `3171********xx22` adalah bentuk
->    yang benar **dan** yang dominan di dokumen ini (7 kemunculan vs 2).
+> 3. **Mask `330************777` → 16 karakter.** Yang pertama 6 digit + 12 asterisk =
+>    **18 karakter**, untuk NIK yang panjangnya 16. Bentuk akhirnya (v2.24) `3171**********22`:
+>    4 digit awal, 10 asterisk, 2 digit akhir.
 > 4. **Respons `401` ditambahkan.** Endpoint ini menuntut `Authorization`, jadi ia dapat
 >    menolak. Bentuknya mengikuti pola error terbaru — `meta.error_code` di samping
 >    `meta.message` — bukan pola `200`-saja yang dipakai §1.6.
 >
 > **Sisa yang tidak disentuh, karena di luar lingkup endpoint ini**: §1.6
 > `GET /accounts/me/saved-niks` masih hanya mendefinisikan `200` meski menuntut
-> `Authorization`, dan masih memakai mask `3171********22` (14 karakter). Keduanya
-> mendahului endpoint ini dan diperbaiki terpisah.
+> `Authorization`. Itu mendahului endpoint ini dan diperbaiki terpisah. (Mask-nya sudah
+> diselaraskan ke 16 karakter pada v2.24.)
 
 **Requirement Coverage**: tidak ada FR yang menuntut endpoint ini secara langsung. Ia
 melayani halaman profil yang FR-32a–d gambarkan dan memenuhi FR-32c pada field
@@ -1659,7 +1664,7 @@ Authorization: Bearer {access_token}   # wajib bila grant milik akun login
     },
     "account": {
       "email": "buyer@example.com",
-      "nik_masked": "3171********0022"
+      "nik_masked": "3171**********22"
     }
   }
 }
@@ -1954,8 +1959,8 @@ lewat hash NIK).
       "image_url": "https://cdn.rusuh.id/events/konser-a.jpg"
     },
     "tickets": [
-      { "category": "VIP", "price": 1500000, "nik_masked": "3171********0022" },
-      { "category": "Festival", "price": 850000, "nik_masked": "3171********0033" }
+      { "category": "VIP", "price": 1500000, "nik_masked": "3171**********22" },
+      { "category": "Festival", "price": 850000, "nik_masked": "3171**********33" }
     ],
     "summary": { "quantity": 2, "total": 2350000 },
     "payment_ttl": { "expires_at": "2026-10-23T13:25:00Z", "server_time": "2026-10-23T13:15:00Z" }
@@ -2076,7 +2081,7 @@ Authorization: Bearer {access_token}   # wajib bila grant milik akun login
       {
         "category": "VIP",
         "price": 1500000,
-        "nik_masked": "3171********xx22"
+        "nik_masked": "3171**********22"
       }
     ],
     "summary": {
@@ -2113,7 +2118,7 @@ Authorization: Bearer {access_token}   # wajib bila grant milik akun login
         "ticket_id": "TKT-001",
         "category": "VIP",
         "price": 1500000,
-        "nik_masked": "3171********xx22",
+        "nik_masked": "3171**********22",
         "eticket_url": "/tickets/TKT-001/eticket?t=et_9f3a2c"
       }
     ],
@@ -2797,7 +2802,7 @@ Authorization: Bearer {access_token}
     },
     "category": "VIP",
     "holder": {
-      "nik_masked": "3171********xx22"
+      "nik_masked": "3171**********22"
     },
     "qr_code": "data:image/png;base64,iVBORw0KGgo...",
     "qr_value": "TKT-001|evt_konser_a|3171xxxxxxxxxx22",
@@ -3038,7 +3043,7 @@ Legenda: ✅ terpenuhi di kontrak · ⚙️ di luar permukaan API (backend atau 
 | E-ticket Token | HMAC bertanda tangan atas satu `ticket_id` + kedaluwarsa, dikirim sebagai query `?t=` pada tautan email (§6.2). Stateless, tanpa identitas akun, lingkup satu tiket, berlaku sampai tanggal event + 1 hari. Kunci khusus — bukan signing secret JWT, bukan `DEVICE_PEPPER`. Ada karena FR-26 mengirim tiket ke pemegang NIK yang umumnya tidak punya akun; tanpa ini tombol di email mereka menjawab 401 |
 | Refresh Token | **Opaque acak 256-bit, bukan JWT**, 30 hari, disimpan server sebagai hash SHA-256. Sekali pakai dengan **rotasi**; pemutaran ulang mencabut seluruh keluarga (§1.4). Klien menyimpannya aman (Keychain/Keystore/memory) dan menggantinya setiap refresh |
 | Signing secret | Terpisah dari pepper HMAC NIK, dan **berbeda sifatnya**: signing secret dapat dan sebaiknya dirotasi, pepper tidak pernah (ADR-005 §8) |
-| NIK | Masked in responses (3171********xx22), stored encrypted |
+| NIK | Masked in responses (3171**********22), stored encrypted |
 | Payment | Via payment gateway (PCI-DSS compliant), no card data stored |
 | Rate Limiting | Per IP on queue join, per user on auth |
 | CSRF | `SameSite=Strict` on queue cookie; Origin validation on state-changing endpoints |
@@ -3398,7 +3403,7 @@ Penyelarasan dengan ADR-005. Yang memutus kompatibilitas ditandai **BREAKING**.
 | # | Perubahan | Alasan |
 |---|---|---|
 | 95 | §1.8 **baru**: `GET /accounts/me` — `email` + `nik_masked`, `Authorization: Bearer`, `200` + `401` | Halaman profil membutuhkan info akun pemilik sesi; sebelumnya tidak ada endpoint yang mengembalikannya. Ditambahkan **tanpa** field `name`, konsisten dengan v2.12.1 dan FR-15a |
-| 96 | Definisi awal endpoint itu (`GET /account/info`, field `nik`, mask `330************777`, tanpa `401`) diselaraskan pada empat titik sebelum implementasi | Keempatnya menyimpang dari konvensi yang sudah ada di dokumen ini: path akun lain memakai `/accounts/me/…`; `nik` berarti 16 digit utuh di tiap endpoint lain sementara bentuk ter-mask bernama `nik_masked`; mask awalnya 18 karakter untuk NIK 16 digit, sedangkan `3171********xx22` benar dan dominan (7 vs 2); dan endpoint ber-`Authorization` tanpa `401` tidak dapat menyatakan penolakannya. Dilakukan sekarang karena `user-service` belum punya handler-nya — tidak ada klien yang terdampak. **Tidak** termasuk: §1.6 yang juga hanya punya `200` dan masih memakai mask 14 karakter |
+| 96 | Definisi awal endpoint itu (`GET /account/info`, field `nik`, mask `330************777`, tanpa `401`) diselaraskan pada empat titik sebelum implementasi | Keempatnya menyimpang dari konvensi yang sudah ada di dokumen ini: path akun lain memakai `/accounts/me/…`; `nik` berarti 16 digit utuh di tiap endpoint lain sementara bentuk ter-mask bernama `nik_masked`; mask awalnya 18 karakter untuk NIK 16 digit, sedangkan `3171**********22` benar dan dominan (7 vs 2); dan endpoint ber-`Authorization` tanpa `401` tidak dapat menyatakan penolakannya. Dilakukan sekarang karena `user-service` belum punya handler-nya — tidak ada klien yang terdampak. **Tidak** termasuk: §1.6 yang juga hanya punya `200` dan masih memakai mask 14 karakter |
 
 > **Apidog disinkronkan**: endpoint ditambahkan ke folder `Accounts` dengan skema respons,
 > contoh, dan `x-apidog-orders`; `auth` dan `securityScheme` disalin dari §1.6 agar skema
@@ -3518,3 +3523,9 @@ Penyelarasan dengan ADR-005. Yang memutus kompatibilitas ditandai **BREAKING**.
 | 126 | §4.3, Appendix A, Apidog: `409 BOOKING_EXPIRED` juga untuk `GRANTED` yang 5 menitnya habis; `BOOKING_STATUS_INVALID` hanya untuk `GRANTED` yang masih dalam waktu | Halaman yang dibuka setelah tenggat tidak meng-claim (§4.1), jadi booking tetap `GRANTED`; customer kehabisan waktu dan harus melihat "waktu habis", bukan "buka halaman tiket" |
 | 127 | §4.3, Appendix A, Apidog: `TICKETS_UNAVAILABLE.data.queue_state` hanya `FULL_BOOKED` atau `CLOSED`; `full_booked_at` dapat `null` | Stok mencapai 0 sebelum admission-ctl mengubah state antrian (≤ 500 ms); menyalin state apa adanya akan mengirim `OPEN` ke halaman "tiket habis" |
 | 128 | §4.4: catatan bahwa booking yang sudah berakhir biasanya menjawab `401 GRANT_TOKEN_INVALID` | Sweep menghapus grant; klien tidak boleh menunggu `EXPIRED` dari endpoint ini |
+
+### v2.23 → v2.24
+
+| # | Perubahan | Alasan |
+|---|---|---|
+| 129 | §1.6, §1.8, §4.1, §4.3, §4.4, §6.2, §9, Apidog: semua contoh `nik_masked` memakai `3171**********22` (4 digit awal, 10 asterisk, 2 digit akhir, total 16 karakter); aturan ditegaskan di catatan v2.24 | Tiga bentuk beredar di dokumen (14 karakter `3171********22`, `3171********xx22`, dan `3171********0022` yang menampilkan 4 digit akhir). Kode (`nik-verify`, `valueobject.Mask`) selalu mengembalikan bentuk 16 karakter dengan 2 digit akhir, dan itulah yang tersimpan; contoh yang berbeda membuat klien menulis pengujian dan tata letak untuk bentuk yang tidak pernah dikirim server |

@@ -1887,7 +1887,7 @@
                                   },
                                   "nik_masked": {
                                     "type": "string",
-                                    "example": "3171********22"
+                                    "example": "3171**********22"
                                   },
                                   "label": {
                                     "type": "string",
@@ -1933,7 +1933,7 @@
                 "responseExamples": [
                   {
                     "name": "Success",
-                    "data": "{\"meta\":{\"code\":200,\"message\":\"Success\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{\"max_entries\":5,\"saved_niks\":[{\"id\":\"snk_1\",\"nik_masked\":\"3171********22\",\"label\":\"Budi\",\"verified_at\":\"2026-10-20T08:11:00Z\",\"status\":\"VERIFIED\"}]}}",
+                    "data": "{\"meta\":{\"code\":200,\"message\":\"Success\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{\"max_entries\":5,\"saved_niks\":[{\"id\":\"snk_1\",\"nik_masked\":\"3171**********22\",\"label\":\"Budi\",\"verified_at\":\"2026-10-20T08:11:00Z\",\"status\":\"VERIFIED\"}]}}",
                     "responseId": "145025221",
                     "description": "",
                     "oasKey": "",
@@ -2066,7 +2066,7 @@
                             },
                             "nik_masked": {
                               "type": "string",
-                              "example": "3171********22"
+                              "example": "3171**********22"
                             },
                             "label": {
                               "type": "string",
@@ -2308,7 +2308,7 @@
                     "description": "",
                     "oasKey": "",
                     "oasExtensions": "",
-                    "data": "{\"meta\":{\"code\":201,\"message\":\"NIK saved\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{\"id\":\"snk_1\",\"nik_masked\":\"3171********22\",\"label\":\"Budi\",\"verified_at\":\"2026-10-20T08:11:00Z\",\"status\":\"VERIFIED\"}}"
+                    "data": "{\"meta\":{\"code\":201,\"message\":\"NIK saved\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{\"id\":\"snk_1\",\"nik_masked\":\"3171**********22\",\"label\":\"Budi\",\"verified_at\":\"2026-10-20T08:11:00Z\",\"status\":\"VERIFIED\"}}"
                   },
                   {
                     "name": "MAX_SAVED_NIKS_REACHED",
@@ -2611,7 +2611,7 @@
                             },
                             "nik_masked": {
                               "type": "string",
-                              "example": "3171********xx22",
+                              "example": "3171**********22",
                               "description": "NIK TER-MASK. NIK lengkap tidak pernah dikembalikan API (FR-32c)"
                             }
                           },
@@ -2701,7 +2701,7 @@
                 "responseExamples": [
                   {
                     "name": "Success",
-                    "data": "{\"meta\":{\"code\":200,\"message\":\"Success\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{\"email\":\"Virgie_OKon@yahoo.com\",\"nik_masked\":\"3171********xx22\"}}",
+                    "data": "{\"meta\":{\"code\":200,\"message\":\"Success\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{\"email\":\"Virgie_OKon@yahoo.com\",\"nik_masked\":\"3171**********22\"}}",
                     "responseId": "145025299",
                     "description": "",
                     "oasKey": "",
@@ -3209,7 +3209,7 @@
                                   "properties": {
                                     "nik_masked": {
                                       "type": "string",
-                                      "example": "3171********xx22"
+                                      "example": "3171**********22"
                                     }
                                   },
                                   "x-apidog-orders": [
@@ -3385,7 +3385,7 @@
                     "responseExamples": [
                       {
                         "name": "Success",
-                        "data": "{\"meta\":{\"code\":200,\"message\":\"Success\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{\"ticket_id\":\"TKT-001\",\"event\":{\"name\":\"Konser A\",\"date\":\"2026-12-25\",\"time\":\"19:00\",\"venue\":\"GBK, Jakarta\"},\"category\":\"VIP\",\"holder\":{\"nik_masked\":\"3171********xx22\"},\"qr_code\":\"data:image/png;base64,iVBORw0KGgo...\",\"qr_value\":\"TKT-001|evt_konser_a|3171xxxxxxxxxx22\",\"instructions\":\"Tunjukkan QR code dan identitas pemegang saat masuk venue.\"}}",
+                        "data": "{\"meta\":{\"code\":200,\"message\":\"Success\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{\"ticket_id\":\"TKT-001\",\"event\":{\"name\":\"Konser A\",\"date\":\"2026-12-25\",\"time\":\"19:00\",\"venue\":\"GBK, Jakarta\"},\"category\":\"VIP\",\"holder\":{\"nik_masked\":\"3171**********22\"},\"qr_code\":\"data:image/png;base64,iVBORw0KGgo...\",\"qr_value\":\"TKT-001|evt_konser_a|3171xxxxxxxxxx22\",\"instructions\":\"Tunjukkan QR code dan identitas pemegang saat masuk venue.\"}}",
                         "responseId": "190393879",
                         "description": "",
                         "oasKey": "",
@@ -6930,7 +6930,7 @@
                                     "string",
                                     "null"
                                   ],
-                                  "example": "3171********0022",
+                                  "example": "3171**********22",
                                   "description": "null bila akun belum punya NIK terverifikasi"
                                 }
                               },
@@ -7549,7 +7549,7 @@
                 "responseExamples": [
                   {
                     "name": "Success (logged in)",
-                    "data": "{\"meta\": {\"code\": 200, \"message\": \"Success\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {\"event\": {\"id\": \"evt_konser_a\", \"name\": \"Konser A\", \"date\": \"2026-12-25\", \"venue\": \"GBK, Jakarta\", \"image_url\": \"https://cdn.rusuh.id/events/konser-a.jpg\"}, \"session\": {\"expires_at\": \"2026-10-23T13:15:00Z\", \"server_time\": \"2026-10-23T13:10:13Z\"}, \"categories\": [{\"id\": \"cat_vip\", \"name\": \"VIP\", \"description\": \"Lebih dekat.\", \"price\": 1500000, \"available\": 12, \"max_per_order\": 3}, {\"id\": \"cat_festival\", \"name\": \"Festival\", \"description\": \"Area festival.\", \"price\": 850000, \"available\": 240, \"max_per_order\": 3}, {\"id\": \"cat_tribune\", \"name\": \"Tribune\", \"description\": \"Area tribun.\", \"price\": 500000, \"available\": 0, \"max_per_order\": 0}], \"rules\": {\"max_tickets_per_order\": 3, \"one_nik_per_ticket\": true}, \"account\": {\"email\": \"buyer@example.com\", \"nik_masked\": \"3171********0022\"}}}",
+                    "data": "{\"meta\": {\"code\": 200, \"message\": \"Success\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {\"event\": {\"id\": \"evt_konser_a\", \"name\": \"Konser A\", \"date\": \"2026-12-25\", \"venue\": \"GBK, Jakarta\", \"image_url\": \"https://cdn.rusuh.id/events/konser-a.jpg\"}, \"session\": {\"expires_at\": \"2026-10-23T13:15:00Z\", \"server_time\": \"2026-10-23T13:10:13Z\"}, \"categories\": [{\"id\": \"cat_vip\", \"name\": \"VIP\", \"description\": \"Lebih dekat.\", \"price\": 1500000, \"available\": 12, \"max_per_order\": 3}, {\"id\": \"cat_festival\", \"name\": \"Festival\", \"description\": \"Area festival.\", \"price\": 850000, \"available\": 240, \"max_per_order\": 3}, {\"id\": \"cat_tribune\", \"name\": \"Tribune\", \"description\": \"Area tribun.\", \"price\": 500000, \"available\": 0, \"max_per_order\": 0}], \"rules\": {\"max_tickets_per_order\": 3, \"one_nik_per_ticket\": true}, \"account\": {\"email\": \"buyer@example.com\", \"nik_masked\": \"3171**********22\"}}}",
                     "responseId": "168132602",
                     "description": "",
                     "oasKey": "",
@@ -7861,7 +7861,7 @@
                                   },
                                   "nik_masked": {
                                     "type": "string",
-                                    "example": "3171********xx22"
+                                    "example": "3171**********22"
                                   },
                                   "eticket_url": {
                                     "type": "string",
@@ -8045,7 +8045,7 @@
                                   },
                                   "nik_masked": {
                                     "type": "string",
-                                    "example": "3171********xx22"
+                                    "example": "3171**********22"
                                   },
                                   "eticket_url": {
                                     "type": "string",
@@ -9507,7 +9507,7 @@
                     "description": "",
                     "oasKey": "",
                     "oasExtensions": "",
-                    "data": "{\"meta\": {\"code\": 201, \"message\": \"Booking created successfully\", \"server_time\": \"2026-10-23T13:15:00.412Z\"}, \"data\": {\"booking_id\": \"RB-00912\", \"status\": \"PENDING_PAYMENT\", \"event\": {\"id\": \"evt_konser_a\", \"name\": \"Konser A — Jakarta\", \"date\": \"2026-12-25\", \"venue\": \"GBK, Jakarta\", \"image_url\": \"https://cdn.rusuh.id/events/konser-a.jpg\"}, \"tickets\": [{\"category\": \"VIP\", \"price\": 1500000, \"nik_masked\": \"3171********0022\"}, {\"category\": \"Festival\", \"price\": 850000, \"nik_masked\": \"3171********0033\"}], \"summary\": {\"quantity\": 2, \"total\": 2350000}, \"payment_ttl\": {\"expires_at\": \"2026-10-23T13:25:00Z\", \"server_time\": \"2026-10-23T13:15:00Z\"}}}"
+                    "data": "{\"meta\": {\"code\": 201, \"message\": \"Booking created successfully\", \"server_time\": \"2026-10-23T13:15:00.412Z\"}, \"data\": {\"booking_id\": \"RB-00912\", \"status\": \"PENDING_PAYMENT\", \"event\": {\"id\": \"evt_konser_a\", \"name\": \"Konser A — Jakarta\", \"date\": \"2026-12-25\", \"venue\": \"GBK, Jakarta\", \"image_url\": \"https://cdn.rusuh.id/events/konser-a.jpg\"}, \"tickets\": [{\"category\": \"VIP\", \"price\": 1500000, \"nik_masked\": \"3171**********22\"}, {\"category\": \"Festival\", \"price\": 850000, \"nik_masked\": \"3171**********33\"}], \"summary\": {\"quantity\": 2, \"total\": 2350000}, \"payment_ttl\": {\"expires_at\": \"2026-10-23T13:25:00Z\", \"server_time\": \"2026-10-23T13:15:00Z\"}}}"
                   },
                   {
                     "name": "Already held (retry)",
@@ -9515,7 +9515,7 @@
                     "description": "",
                     "oasKey": "",
                     "oasExtensions": "",
-                    "data": "{\"meta\": {\"code\": 200, \"message\": \"Success\", \"server_time\": \"2026-10-23T13:15:00.412Z\"}, \"data\": {\"booking_id\": \"RB-00912\", \"status\": \"PENDING_PAYMENT\", \"event\": {\"id\": \"evt_konser_a\", \"name\": \"Konser A — Jakarta\", \"date\": \"2026-12-25\", \"venue\": \"GBK, Jakarta\", \"image_url\": \"https://cdn.rusuh.id/events/konser-a.jpg\"}, \"tickets\": [{\"category\": \"VIP\", \"price\": 1500000, \"nik_masked\": \"3171********0022\"}, {\"category\": \"Festival\", \"price\": 850000, \"nik_masked\": \"3171********0033\"}], \"summary\": {\"quantity\": 2, \"total\": 2350000}, \"payment_ttl\": {\"expires_at\": \"2026-10-23T13:25:00Z\", \"server_time\": \"2026-10-23T13:15:00Z\"}}}"
+                    "data": "{\"meta\": {\"code\": 200, \"message\": \"Success\", \"server_time\": \"2026-10-23T13:15:00.412Z\"}, \"data\": {\"booking_id\": \"RB-00912\", \"status\": \"PENDING_PAYMENT\", \"event\": {\"id\": \"evt_konser_a\", \"name\": \"Konser A — Jakarta\", \"date\": \"2026-12-25\", \"venue\": \"GBK, Jakarta\", \"image_url\": \"https://cdn.rusuh.id/events/konser-a.jpg\"}, \"tickets\": [{\"category\": \"VIP\", \"price\": 1500000, \"nik_masked\": \"3171**********22\"}, {\"category\": \"Festival\", \"price\": 850000, \"nik_masked\": \"3171**********33\"}], \"summary\": {\"quantity\": 2, \"total\": 2350000}, \"payment_ttl\": {\"expires_at\": \"2026-10-23T13:25:00Z\", \"server_time\": \"2026-10-23T13:15:00Z\"}}}"
                   },
                   {
                     "name": "DEVICE_ID_REQUIRED",
@@ -9976,7 +9976,7 @@
                                   },
                                   "nik_masked": {
                                     "type": "string",
-                                    "example": "3171********xx22"
+                                    "example": "3171**********22"
                                   },
                                   "eticket_url": {
                                     "type": "string",
@@ -10582,7 +10582,7 @@
                 "responseExamples": [
                   {
                     "name": "Pending payment",
-                    "data": "{\"meta\": {\"code\": 200, \"message\": \"Success\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {\"booking_id\": \"RB-00912\", \"status\": \"PENDING_PAYMENT\", \"event\": {\"id\": \"evt_konser_a\", \"name\": \"Konser A\", \"date\": \"2026-12-25\", \"venue\": \"GBK, Jakarta\", \"image_url\": \"https://cdn.rusuh.id/events/konser-a.jpg\"}, \"tickets\": [{\"category\": \"VIP\", \"price\": 1500000, \"nik_masked\": \"3171********xx22\"}], \"summary\": {\"quantity\": 1, \"total\": 1500000}, \"payment_ttl\": {\"expires_at\": \"2026-10-23T13:25:00Z\", \"server_time\": \"2026-10-23T13:19:18Z\"}}}",
+                    "data": "{\"meta\": {\"code\": 200, \"message\": \"Success\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {\"booking_id\": \"RB-00912\", \"status\": \"PENDING_PAYMENT\", \"event\": {\"id\": \"evt_konser_a\", \"name\": \"Konser A\", \"date\": \"2026-12-25\", \"venue\": \"GBK, Jakarta\", \"image_url\": \"https://cdn.rusuh.id/events/konser-a.jpg\"}, \"tickets\": [{\"category\": \"VIP\", \"price\": 1500000, \"nik_masked\": \"3171**********22\"}], \"summary\": {\"quantity\": 1, \"total\": 1500000}, \"payment_ttl\": {\"expires_at\": \"2026-10-23T13:25:00Z\", \"server_time\": \"2026-10-23T13:19:18Z\"}}}",
                     "responseId": "136154444",
                     "description": "",
                     "oasKey": "pending_payment",
@@ -10590,7 +10590,7 @@
                   },
                   {
                     "name": "Paid",
-                    "data": "{\"meta\": {\"code\": 200, \"message\": \"Success\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {\"booking_id\": \"RB-00912\", \"status\": \"PAID\", \"event\": {\"id\": \"evt_konser_a\", \"name\": \"Konser A\", \"date\": \"2026-12-25\", \"venue\": \"GBK, Jakarta\", \"image_url\": \"https://cdn.rusuh.id/events/konser-a.jpg\"}, \"tickets\": [{\"ticket_id\": \"TKT-001\", \"category\": \"VIP\", \"price\": 1500000, \"nik_masked\": \"3171********xx22\", \"eticket_url\": \"/tickets/TKT-001/eticket?t=et_9f3a2c\"}], \"summary\": {\"quantity\": 1, \"total\": 1500000}, \"payment_method\": \"Virtual Account\"}}",
+                    "data": "{\"meta\": {\"code\": 200, \"message\": \"Success\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {\"booking_id\": \"RB-00912\", \"status\": \"PAID\", \"event\": {\"id\": \"evt_konser_a\", \"name\": \"Konser A\", \"date\": \"2026-12-25\", \"venue\": \"GBK, Jakarta\", \"image_url\": \"https://cdn.rusuh.id/events/konser-a.jpg\"}, \"tickets\": [{\"ticket_id\": \"TKT-001\", \"category\": \"VIP\", \"price\": 1500000, \"nik_masked\": \"3171**********22\", \"eticket_url\": \"/tickets/TKT-001/eticket?t=et_9f3a2c\"}], \"summary\": {\"quantity\": 1, \"total\": 1500000}, \"payment_method\": \"Virtual Account\"}}",
                     "responseId": "136154444",
                     "description": "",
                     "oasKey": "paid",
@@ -10602,7 +10602,7 @@
                     "description": "Beberapa detik setelah webhook: tiket belum diterbitkan, klien mengulang",
                     "oasKey": "",
                     "oasExtensions": "",
-                    "data": "{\"meta\": {\"code\": 200, \"message\": \"Success\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {\"booking_id\": \"RB-00912\", \"status\": \"PAID\", \"event\": {\"id\": \"evt_konser_a\", \"name\": \"Konser A\", \"date\": \"2026-12-25\", \"venue\": \"GBK, Jakarta\", \"image_url\": \"https://cdn.rusuh.id/events/konser-a.jpg\"}, \"tickets\": [{\"category\": \"VIP\", \"price\": 1500000, \"nik_masked\": \"3171********xx22\"}], \"summary\": {\"quantity\": 1, \"total\": 1500000}, \"payment_method\": \"Virtual Account\"}}"
+                    "data": "{\"meta\": {\"code\": 200, \"message\": \"Success\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {\"booking_id\": \"RB-00912\", \"status\": \"PAID\", \"event\": {\"id\": \"evt_konser_a\", \"name\": \"Konser A\", \"date\": \"2026-12-25\", \"venue\": \"GBK, Jakarta\", \"image_url\": \"https://cdn.rusuh.id/events/konser-a.jpg\"}, \"tickets\": [{\"category\": \"VIP\", \"price\": 1500000, \"nik_masked\": \"3171**********22\"}], \"summary\": {\"quantity\": 1, \"total\": 1500000}, \"payment_method\": \"Virtual Account\"}}"
                   },
                   {
                     "name": "NOT_FOUND",

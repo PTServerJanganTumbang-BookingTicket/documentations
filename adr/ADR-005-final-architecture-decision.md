@@ -654,6 +654,8 @@ Tiap tick ke-20 (≈10 detik):
 
 ### Rekonsiliasi stok
 
+> ⚠️ **Diubah oleh ADR-006 §8.19** — `PENDING_CANCELLATION` ikut menghitung kursi yang dipegang; koreksi "kursi hilang" (Redis di bawah yang diharapkan) hanya bila penghitung Redis bernilai sama persis pada dua tick dan pada kedua sisi pembacaan Aurora yang baru, sebesar selisih terkecil (hold yang berjalan menurunkan Redis sebelum commit, sehingga dua pembacaan tidak membedakannya dari kebocoran). Kategori diambil dari Aurora; kunci stok yang hilang dipulihkan segera; `nik:used` dipulihkan hanya bila hilang pada dua run berturut-turut.
+
 `slots:open` bukan satu-satunya hitungan Redis yang dapat menyimpang dari Aurora. `EVALSHA
 hold_booking.lua` berjalan **di dalam** transaksi Aurora tetapi Redis tidak ikut transaksi itu:
 bila Lua berhasil lalu `UPDATE`/`INSERT` gagal dan transaksi di-rollback, stok sudah berkurang
