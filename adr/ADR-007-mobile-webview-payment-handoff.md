@@ -44,13 +44,13 @@ sequenceDiagram
 
     App->>API: POST /payments/{booking_id}/handoff<br/>X-Grant-Token + X-Device-Id / Authorization
     API->>API: grant guard + kepemilikan booking + status bisa dibayar
-    API->>R: SET paymenthandoff:{code} {booking_id, grant_token} NX EX 60
+    API->>R: SET paymenthandoff:{code} = grant_token, NX, EX 60
     API-->>App: 201 { handoff_code, expires_at }
     App->>WV: buka https://rush-my-ticket.my.id/pay/{booking_id}#code={handoff_code}
     WV->>WV: baca #code, hapus dari URL (history.replaceState)
     WV->>API: POST /payments/handoff/exchange { booking_id, handoff_code }
-    API->>R: GETDEL paymenthandoff:{code} (sekali pakai)
-    API->>R: SET paymentsession:{session} {booking_id, grant_token} EX = sisa TTL grant
+    API->>R: baca + hapus paymenthandoff:{code} sekaligus (sekali pakai)
+    API->>R: SET paymentsession:{session} = grant_token, TTL = sisa TTL grant
     API-->>WV: 200 { payment_session, expires_at }
     WV->>API: §4.4, §5.1–§5.4 dengan X-Payment-Session
     API->>R: paymentsession → grant_token → grant:{token} masih ada?
@@ -62,11 +62,11 @@ sequenceDiagram
 
 1. **Token tidak pernah ada di URL.** URL WebView hanya membawa `booking_id` dan `#code=`. Bagian `#fragment`
    tidak dikirim ke server mana pun, sehingga tidak masuk log maupun `Referer`; halaman menghapusnya segera.
-2. **Kode serah-terima**: acak 256 bit (`hc_…`), **sekali pakai** (`GETDEL`, termasuk saat percobaan gagal),
+2. **Kode serah-terima**: acak 256 bit (`hc_…`), **sekali pakai** (dibaca dan dihapus sekaligus, juga saat percobaan gagal),
    **60 detik**, terikat ke satu `booking_id`. Diterbitkan hanya setelah grant guard yang sama dengan §5 lolos,
    jadi pengikatan device (tamu) dan pemeriksaan Bearer (login) terjadi **di sini**, sekali.
 3. **Payment session**: opaque acak 256 bit (`ps_…`), dikirim lewat header **`X-Payment-Session`**.
-   Ia hanya menunjuk ke `{booking_id, grant_token}` dan **hidup selama grant hidup**: setiap request
+   Isinya hanya `grant_token` (booking diambil dari grant), dan ia **hidup selama grant hidup**: setiap request
    memeriksa `grant:{token}` masih ada, dan TTL-nya = sisa TTL grant.
    - **PAID:** webhook **tidak** menghapus grant (hanya `token:` dan `acct:`), jadi session tetap berlaku sampai
      grant habis (`GRANT_TOKEN_TTL_SECONDS`, 1080 detik sejak `granted_at`). Polling `/status` menjawab `PAID`.
@@ -75,8 +75,9 @@ sequenceDiagram
 4. **Lingkup sempit**: session hanya diterima pada `GET /bookings/{booking_id}` dan `/payments/{booking_id}/…`
    (§5.1–§5.4), dan hanya untuk `booking_id` miliknya. `booking_id` lain → `404 NOT_FOUND` (sama dengan aturan
    kepemilikan ADR-005 §12).
-5. **Satu slot, satu kredensial**: request membawa `X-Payment-Session` **atau** `X-Grant-Token` (+ device/Bearer),
-   tidak keduanya → `400 VALIDATION_ERROR`. Web desktop tetap memakai `X-Grant-Token` seperti sekarang.
+5. **Satu kredensial per request**: `X-Payment-Session` **atau** `X-Grant-Token`. Keduanya dikirim bersamaan →
+   `400 VALIDATION_ERROR`. `X-Device-Id` atau `Authorization` yang ikut terkirim bersama session diabaikan.
+   Web desktop tetap memakai `X-Grant-Token` seperti sekarang.
 6. **Web menyimpan session di memori saja** (bukan `localStorage`/cookie). Tanpa cookie tidak ada CSRF.
    Bila halaman dimuat ulang, session hilang: web meminta kode baru ke aplikasi (`HANDOFF_EXPIRED`).
    Hal yang sama untuk setiap `401 PAYMENT_SESSION_INVALID`: web **tidak** menebak penyebabnya, aplikasi yang
@@ -117,7 +118,7 @@ Diurutkan dari yang paling menentukan.
 | # | Kelebihan | Mengapa penting |
 |---|---|---|
 | 1 | **Tidak ada kredensial di URL** | Grant dan Bearer tidak pernah masuk log CDN / API Gateway, riwayat WebView, `Referer`, atau screenshot. Kode dibawa di `#fragment`, yang tidak dikirim ke server |
-| 2 | **Kode yang bocor tidak berguna** | Sekali pakai (`GETDEL`), 60 detik, hanya untuk satu booking. URL WebView yang tersalin tidak membuka apa pun |
+| 2 | **Kode yang bocor tidak berguna** | Sekali pakai, 60 detik, hanya untuk satu booking. URL WebView yang tersalin tidak membuka apa pun |
 | 3 | **Dampak kebocoran kecil** | Session hanya bisa melihat dan membayar **satu** booking. Bearer akun tidak pernah sampai ke halaman web, jadi XSS di halaman pembayaran tidak dapat mengambil alih akun |
 | 4 | **Memenuhi requirement** | Satu halaman pembayaran web dipakai ulang di WebView mobile (`requirements.md` §8 Dalam Lingkup), memakai API pembayaran yang sama (FR-24, NFR-08), dan halaman tetap dijaga token (NFR-07) |
 | 5 | **Perubahan backend kecil** | Tanpa migrasi; handler dan query pembayaran tidak berubah (guard mengubah session kembali menjadi grant). Session mati sendiri bersama grant, tanpa kode pembersihan |
@@ -152,12 +153,12 @@ Web dan mobile dapat mulai paralel memakai mock Apidog sebelum backend selesai.
 
 1. Plan `be-rusuh-war-ticketing/docs/07-payment/07-webview-handoff.md`; tambah `paymenthandoff:` dan `paymentsession:` ke `redis-keys.md`.
 2. `POST /payments/{booking_id}/handoff` (§5.6): grant guard, kepemilikan, status bisa dibayar, batas 10 kode/menit per grant, `SET NX EX 60`.
-3. `POST /payments/handoff/exchange` (§5.7): `GETDEL`, cocokkan `booking_id`, cek grant masih ada, buat session dengan TTL = sisa TTL grant.
-4. Grant guard: jalur `X-Payment-Session` → `grant_token` → jalur kepemilikan SQL yang sama; tolak dua kredensial sekaligus.
+3. `POST /payments/handoff/exchange` (§5.7): baca dan hapus kode sekaligus, cocokkan `booking_id`, cek grant masih ada, buat session dengan TTL = sisa TTL grant.
+4. Grant guard: jalur `X-Payment-Session` → `grant_token` → jalur kepemilikan SQL yang sama; tolak session yang dikirim bersama `X-Grant-Token`.
 5. Pasang guard baru di §4.4 (`services/booking`) dan §5.1–§5.4; CORS mengizinkan header `X-Payment-Session` dari `https://rush-my-ticket.my.id`.
 6. Uji (unit + integrasi Redis): kode hanya sekali; kode kedaluwarsa ditolak; kode booking A tidak membuka booking B;
    session mati saat grant dihapus (EXPIRED); session **masih** menjawab `/status` = `PAID` setelah webhook;
-   session tidak membuka booking lain; dua kredensial sekaligus → 400.
+   session tidak membuka booking lain; session + `X-Grant-Token` → 400.
 7. `make verify` + review independen (menyentuh grant token).
 
 ### Web (Muzaki, Akbar) — Next.js `/pay/[booking_id]`

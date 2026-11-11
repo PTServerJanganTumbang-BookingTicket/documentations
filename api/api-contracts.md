@@ -11,7 +11,7 @@
 > **`POST /payments/{booking_id}/handoff`** (§5.6, aplikasi meminta kode sekali pakai 60 detik) dan
 > **`POST /payments/handoff/exchange`** (§5.7, halaman web menukar kode dengan `payment_session`). Header baru
 > **`X-Payment-Session`** diterima §4.4 dan §5.1–§5.4 **sebagai pengganti** `X-Grant-Token` (+ `X-Device-Id` /
-> `Authorization`), tidak bersamaan. Kode error baru: `401 HANDOFF_CODE_INVALID`, `401 PAYMENT_SESSION_INVALID`.
+> `Authorization`); tidak boleh dikirim bersama `X-Grant-Token`. Kode error baru: `401 HANDOFF_CODE_INVALID`, `401 PAYMENT_SESSION_INVALID`.
 > Web desktop tidak berubah. Lihat Appendix C, v2.24 → v2.25.
 >
 > **v2.24** (format tampilan, tidak mengubah struktur): **`nik_masked` selalu 16 karakter: 4 digit awal, 10 asterisk, 2
@@ -2208,7 +2208,7 @@ X-Payment-Session: {payment_session}
 
 | Aturan | Isi |
 |---|---|
-| Satu kredensial | `X-Payment-Session` **atau** `X-Grant-Token` (+ `X-Device-Id` / `Authorization`), tidak keduanya → `400 VALIDATION_ERROR` |
+| Satu kredensial | `X-Payment-Session` **atau** `X-Grant-Token`. Keduanya dikirim bersamaan → `400 VALIDATION_ERROR`. `X-Device-Id` / `Authorization` yang ikut terkirim bersama session diabaikan |
 | Lingkup | Hanya `GET /bookings/{booking_id}` dan `/payments/{booking_id}/…` (§5.1–§5.4), dan hanya `booking_id` miliknya; lainnya → `404 NOT_FOUND` |
 | Umur | Selama grant hidup (TTL = sisa TTL grant). **PAID**: webhook tidak menghapus grant, jadi session tetap berlaku dan `/status` menjawab `PAID` sampai grant habis. **EXPIRED / dibatalkan**: grant dihapus, session ikut mati (`401 PAYMENT_SESSION_INVALID`) |
 | Tidak dikenal / kedaluwarsa | `401 PAYMENT_SESSION_INVALID`. Klien WebView berhenti polling dan mengirim `HANDOFF_EXPIRED` ke aplikasi, yang meminta kode baru (§5.6); bila §5.6 menjawab `401 GRANT_TOKEN_INVALID`, booking sudah berakhir |
@@ -2861,7 +2861,7 @@ Halaman pembayaran web di WebView menukar kode dari §5.6 dengan `payment_sessio
 | `payment_session` | Acak 256 bit, awalan `ps_`. Dikirim sebagai `X-Payment-Session` pada §4.4 dan §5.1–§5.4. **Simpan di memori saja** |
 | `expires_at` | Batas atas umur session (= umur grant). Session dapat mati lebih cepat bila booking berakhir. **Bukan** tenggat pembayaran: countdown tetap dari `payment_ttl.expires_at` (§4.4) |
 
-> **Kode habis pada percobaan pertama**, berhasil maupun gagal (`GETDEL`). `booking_id` yang salah juga
+> **Kode habis pada percobaan pertama**, berhasil maupun gagal. `booking_id` yang salah juga
 > menghabiskan kode. Halaman tidak boleh mengulang exchange dengan kode yang sama; ia meminta kode baru ke
 > aplikasi (`HANDOFF_EXPIRED`).
 
@@ -3159,7 +3159,7 @@ Bagian per endpoint menulis error yang khas. Error umum berikut juga berlaku dan
 | `GET /bookings/{booking_id}` | 400 `DEVICE_ID_REQUIRED` · 404 `NOT_FOUND` · 503 `INTERNAL_ERROR` (§4.4) |
 | `GET /tickets/{ticket_id}/eticket` | 401 `ETICKET_TOKEN_INVALID` · 404 `NOT_FOUND` |
 | semua endpoint ber-grant (§4, §5) | 400 `DEVICE_ID_REQUIRED` · 401 `GRANT_TOKEN_MISSING` / `GRANT_TOKEN_INVALID` / `DEVICE_MISMATCH` · grant akun login: 401 `UNAUTHORIZED` / `TOKEN_EXPIRED` / `TOKEN_INVALID` |
-| §4.4, §5.1–§5.4 dengan `X-Payment-Session` (v2.25) | 400 `VALIDATION_ERROR` (dua kredensial sekaligus) · 401 `PAYMENT_SESSION_INVALID` · 404 `NOT_FOUND` (booking lain) |
+| §4.4, §5.1–§5.4 dengan `X-Payment-Session` (v2.25) | 400 `VALIDATION_ERROR` (session dikirim bersama `X-Grant-Token`) · 401 `PAYMENT_SESSION_INVALID` · 404 `NOT_FOUND` (booking lain) |
 | `POST /payments/{booking_id}/handoff` | lengkap di §5.6 |
 | `POST /payments/handoff/exchange` | lengkap di §5.7: 400 `VALIDATION_ERROR` · 401 `HANDOFF_CODE_INVALID` / `GRANT_TOKEN_INVALID` · 503 `INTERNAL_ERROR` |
 
@@ -3270,8 +3270,8 @@ Legenda: ✅ terpenuhi di kontrak · ⚙️ di luar permukaan API (backend atau 
 | **Atribusi akun** | `bookings.account_id` ditulis pada INSERT saat GRANT dari `token:{uuid}`, **tidak** dari kredensial yang dibawa klien saat checkout. Keterlibatan mengetahui identitasnya sejak join, ketika sesi masih pasti segar; bergantung pada token saat checkout berarti sesi yang kedaluwarsa menurunkan pembelian customer login menjadi pembelian tamu tanpa satu pun error |
 | **Pengikatan device (grant anonim)** | `X-Device-Id` — acak 128 bit yang dibuat klien (format tidak divalidasi), disimpan server sebagai `HMAC(DEVICE_PEPPER, device_id)`, dicocokkan pada join (rejoin), `/queue/me` dan setiap panggilan ber-grant. Tidak cocok → **401** `DEVICE_MISMATCH`, **tanpa rebind** (ADR-006 §8.9). Token akun dicocokkan ke `account_id`. **Bukan** fingerprint pasif: canvas/WebGL rapuh dan memanen karakteristik perangkat tanpa dasar persetujuan (NFR-11). **Non-goal**: ia menghentikan jual-beli slot, bukan penyerang yang menyalin `localStorage` korban |
 | SSE Auth | `queue_token` cookie (web) atau `X-Queue-Token` (mobile) divalidasi saat koneksi stream. `Authorization` tidak dipakai di sini |
-| **Handoff code (v2.25)** | Opaque acak 256 bit (`hc_…`), `paymenthandoff:{code}` di Redis, **60 detik, sekali pakai** (`GETDEL`), terikat satu `booking_id`. Diterbitkan §5.6 setelah grant guard lengkap; dibawa ke WebView di `#fragment` (tidak terkirim ke server, tidak masuk log / `Referer`), ditukar di §5.7 (ADR-007) |
-| **Payment session (v2.25)** | Opaque acak 256 bit (`ps_…`), header `X-Payment-Session`, `paymentsession:{session}` di Redis → `{booking_id, grant_token}`. Hanya §4.4 dan §5.1–§5.4 untuk satu booking. Setiap request memeriksa `grant:{token}` masih ada, jadi session mati bersama grant. Disimpan di memori halaman saja (tanpa cookie → tanpa CSRF). Kredensial ini **pengganti** grant di WebView, tidak pernah bersamaan dengannya |
+| **Handoff code (v2.25)** | Opaque acak 256 bit (`hc_…`), `paymenthandoff:{code}` di Redis, **60 detik, sekali pakai** (dibaca dan dihapus sekaligus), terikat satu `booking_id`. Diterbitkan §5.6 setelah grant guard lengkap; dibawa ke WebView di `#fragment` (tidak terkirim ke server, tidak masuk log / `Referer`), ditukar di §5.7 (ADR-007) |
+| **Payment session (v2.25)** | Opaque acak 256 bit (`ps_…`), header `X-Payment-Session`, `paymentsession:{session}` di Redis berisi `grant_token`. Hanya §4.4 dan §5.1–§5.4 untuk satu booking. Setiap request memeriksa `grant:{token}` masih ada, jadi session mati bersama grant. Disimpan di memori halaman saja (tanpa cookie → tanpa CSRF). Kredensial ini **pengganti** grant di WebView, tidak pernah bersamaan dengannya |
 | **WebView pembayaran (v2.25)** | Dikunci ke `https://rush-my-ticket.my.id`; domain lain dan deeplink GoPay dibuka di luar aplikasi; kembali lewat App Link / Universal Link. Pesan `postMessage` dari halaman hanya sinyal: aplikasi selalu memastikan status lewat `GET /bookings/{id}` (ADR-007) |
 
 ---
@@ -3759,5 +3759,5 @@ Penyelarasan dengan ADR-005. Yang memutus kompatibilitas ditandai **BREAKING**.
 |---|---|---|
 | 130 | §5.6 baru: `POST /payments/{booking_id}/handoff` → `201 {booking_id, handoff_code, expires_at}`; kode 256 bit, 60 detik, sekali pakai; errors 400/401/404/409/429/503 | Aplikasi mobile membuka halaman pembayaran web di WebView tanpa menaruh grant atau Bearer di URL (ADR-007) |
 | 131 | §5.7 baru: `POST /payments/handoff/exchange` `{booking_id, handoff_code}` → `200 {booking_id, payment_session, expires_at}`; kode habis pada percobaan pertama | Pola *authorization code*: kode yang tersalin tidak berguna setelah dipakai atau 60 detik |
-| 132 | §4.4, §5 (intro, §5.1–§5.4): header `X-Payment-Session` sebagai **pengganti** `X-Grant-Token` (+ `X-Device-Id` / `Authorization`); dua kredensial sekaligus → `400 VALIDATION_ERROR`; booking lain → `404 NOT_FOUND` | WebView hanya memegang kredensial untuk satu booking yang mati bersama grant, bukan sesi akun penuh |
+| 132 | §4.4, §5 (intro, §5.1–§5.4): header `X-Payment-Session` sebagai **pengganti** `X-Grant-Token` (+ `X-Device-Id` / `Authorization`); session bersama `X-Grant-Token` → `400 VALIDATION_ERROR`; booking lain → `404 NOT_FOUND` | WebView hanya memegang kredensial untuk satu booking yang mati bersama grant, bukan sesi akun penuh |
 | 133 | Appendix A: `HANDOFF_CODE_INVALID`, `PAYMENT_SESSION_INVALID`; §7 tabel error per endpoint; §9 tiga baris keamanan | Kode baru dari §5.6, §5.7 |

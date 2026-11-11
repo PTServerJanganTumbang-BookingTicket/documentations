@@ -9847,7 +9847,7 @@
                       "name": "X-Payment-Session",
                       "required": false,
                       "enable": true,
-                      "description": "Hanya di WebView pembayaran (ADR-007, v2.25): payment_session dari POST /payments/handoff/exchange. PENGGANTI X-Grant-Token + X-Device-Id + Authorization, tidak bersamaan (keduanya → 400 VALIDATION_ERROR). Tidak dikenal / grant sudah dihapus → 401 PAYMENT_SESSION_INVALID; booking lain → 404 NOT_FOUND.",
+                      "description": "Hanya di WebView pembayaran (ADR-007): payment_session dari POST /payments/handoff/exchange, PENGGANTI X-Grant-Token + X-Device-Id + Authorization. Dikirim bersama X-Grant-Token → 400 VALIDATION_ERROR; X-Device-Id / Authorization yang ikut terkirim diabaikan. Tidak dikenal / grant sudah dihapus → 401 PAYMENT_SESSION_INVALID; booking lain → 404 NOT_FOUND.",
                       "example": "ps_bTN4V1pLc0c2cWJ2Tk5yUjhYa0ZqZEw3a1R1aEVwWg",
                       "type": "string",
                       "schema": {
@@ -11677,7 +11677,7 @@
                       "name": "X-Payment-Session",
                       "required": false,
                       "enable": true,
-                      "description": "Hanya di WebView pembayaran (ADR-007, v2.25): payment_session dari POST /payments/handoff/exchange. PENGGANTI X-Grant-Token + X-Device-Id + Authorization, tidak bersamaan (keduanya → 400 VALIDATION_ERROR). Tidak dikenal / grant sudah dihapus → 401 PAYMENT_SESSION_INVALID; booking lain → 404 NOT_FOUND.",
+                      "description": "Hanya di WebView pembayaran (ADR-007): payment_session dari POST /payments/handoff/exchange, PENGGANTI X-Grant-Token + X-Device-Id + Authorization. Dikirim bersama X-Grant-Token → 400 VALIDATION_ERROR; X-Device-Id / Authorization yang ikut terkirim diabaikan. Tidak dikenal / grant sudah dihapus → 401 PAYMENT_SESSION_INVALID; booking lain → 404 NOT_FOUND.",
                       "example": "ps_bTN4V1pLc0c2cWJ2Tk5yUjhYa0ZqZEw3a1R1aEVwWg",
                       "type": "string",
                       "schema": {
@@ -12306,7 +12306,7 @@
                       "name": "X-Payment-Session",
                       "required": false,
                       "enable": true,
-                      "description": "Hanya di WebView pembayaran (ADR-007, v2.25): payment_session dari POST /payments/handoff/exchange. PENGGANTI X-Grant-Token + X-Device-Id + Authorization, tidak bersamaan (keduanya → 400 VALIDATION_ERROR). Tidak dikenal / grant sudah dihapus → 401 PAYMENT_SESSION_INVALID; booking lain → 404 NOT_FOUND.",
+                      "description": "Hanya di WebView pembayaran (ADR-007): payment_session dari POST /payments/handoff/exchange, PENGGANTI X-Grant-Token + X-Device-Id + Authorization. Dikirim bersama X-Grant-Token → 400 VALIDATION_ERROR; X-Device-Id / Authorization yang ikut terkirim diabaikan. Tidak dikenal / grant sudah dihapus → 401 PAYMENT_SESSION_INVALID; booking lain → 404 NOT_FOUND.",
                       "example": "ps_bTN4V1pLc0c2cWJ2Tk5yUjhYa0ZqZEw3a1R1aEVwWg",
                       "type": "string",
                       "schema": {
@@ -13123,7 +13123,7 @@
                       "name": "X-Payment-Session",
                       "required": false,
                       "enable": true,
-                      "description": "Hanya di WebView pembayaran (ADR-007, v2.25): payment_session dari POST /payments/handoff/exchange. PENGGANTI X-Grant-Token + X-Device-Id + Authorization, tidak bersamaan (keduanya → 400 VALIDATION_ERROR). Tidak dikenal / grant sudah dihapus → 401 PAYMENT_SESSION_INVALID; booking lain → 404 NOT_FOUND.",
+                      "description": "Hanya di WebView pembayaran (ADR-007): payment_session dari POST /payments/handoff/exchange, PENGGANTI X-Grant-Token + X-Device-Id + Authorization. Dikirim bersama X-Grant-Token → 400 VALIDATION_ERROR; X-Device-Id / Authorization yang ikut terkirim diabaikan. Tidak dikenal / grant sudah dihapus → 401 PAYMENT_SESSION_INVALID; booking lain → 404 NOT_FOUND.",
                       "example": "ps_bTN4V1pLc0c2cWJ2Tk5yUjhYa0ZqZEw3a1R1aEVwWg",
                       "type": "string",
                       "schema": {
@@ -14028,7 +14028,7 @@
                       "name": "X-Payment-Session",
                       "required": false,
                       "enable": true,
-                      "description": "Hanya di WebView pembayaran (ADR-007, v2.25): payment_session dari POST /payments/handoff/exchange. PENGGANTI X-Grant-Token + X-Device-Id + Authorization, tidak bersamaan (keduanya → 400 VALIDATION_ERROR). Tidak dikenal / grant sudah dihapus → 401 PAYMENT_SESSION_INVALID; booking lain → 404 NOT_FOUND.",
+                      "description": "Hanya di WebView pembayaran (ADR-007): payment_session dari POST /payments/handoff/exchange, PENGGANTI X-Grant-Token + X-Device-Id + Authorization. Dikirim bersama X-Grant-Token → 400 VALIDATION_ERROR; X-Device-Id / Authorization yang ikut terkirim diabaikan. Tidak dikenal / grant sudah dihapus → 401 PAYMENT_SESSION_INVALID; booking lain → 404 NOT_FOUND.",
                       "example": "ps_bTN4V1pLc0c2cWJ2Tk5yUjhYa0ZqZEw3a1R1aEVwWg",
                       "type": "string",
                       "schema": {
