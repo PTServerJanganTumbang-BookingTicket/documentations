@@ -1,22 +1,45 @@
 # Rusuh Booking Tiket — API Contracts
 
-**Versi**: 2.24.0  
-**Tanggal**: 11 November 2026  
+**Versi**: 2.27.0  
+**Tanggal**: 12 November 2026  
 **Status**: Draft  
 **Base URL**: `https://api.my-rusuh.my.id` (tanpa versi di path untuk saat ini; v2.9). Stream: `https://events.my-rusuh.my.id`  
-**Selaras dengan**: ADR-005 (Keputusan Arsitektur Final — SSE + ECS Fargate), diamandemen ADR-006 (antrian)  
+**Selaras dengan**: ADR-005 (Keputusan Arsitektur Final — SSE + ECS Fargate), diamandemen ADR-006 (antrian) dan ADR-007 (serah-terima pembayaran WebView)  
 **Pasangan mesin**: `rusuh-booking-apidog.json` (Apidog) — **sumber kebenaran bentuk respons**. Dokumen ini menjelaskan perilaku dan alasannya; keduanya wajib sinkron. `rusuh-booking-openapi.yaml` diarsipkan (`archive/`) dan tidak dipelihara lagi
 
-> **v2.24** (§1.7): **`GET /auth/verify-email` menerima token di cookie `magic_token`**, bukan query
-> parameter `?token=`. Ini **koreksi dokumen, bukan perubahan perilaku**: handler sudah membaca cookie
-> sejak endpoint ini ada (`1417f00`, 3 Nov 09:26), dan tabel query di v2.4 — ditulis 12 jam kemudian —
-> men-transkrip bentuk **tautan email**, yang menunjuk ke `APP_BASE_URL` (frontend), bukan ke API.
-> Klien yang mengirim `?token=` selalu mendapat `400 TOKEN_INVALID`, jadi tidak ada klien yang bekerja
-> hari ini yang rusak. Sejajar dengan §1.3. Lihat Appendix C, v2.23 → v2.24.
+> **v2.27** (aditif): `GET /queue/me` (§3.3) punya state baru **`HELD`**: tombol Bayar sudah ditekan, kursi di-hold,
+> pembayaran belum dimulai. Ia membawa `grant_token`, `booking_id`, `payment_expires_at` dan `server_time`. Sebelumnya
+> booking `HELD` dilaporkan sebagai `SELECTING` dengan tenggat 5 menit yang sudah lewat. Juga: `AWAITING_PAYMENT` dengan
+> `payment_expires_at` yang sudah lewat berarti **memverifikasi pembayaran**, bukan kedaluwarsa. Lihat Appendix C, v2.26 → v2.27.
+
+> **v2.26** (aditif, ADR-007): respons `POST /payments/{booking_id}/handoff` (§5.6) menambah **`payment_url`**,
+> URL WebView lengkap yang disusun backend. Aplikasi membukanya apa adanya setelah memeriksa awalannya.
+> Lihat Appendix C, v2.25 → v2.26.
 >
-> **v2.23** (§1.5): **`consent.policy_version` dihapus** dari body `POST /auth/register`. Klien yang masih
-> mengirimnya **tetap diterima** — anggota tambahan diabaikan, bukan ditolak — jadi tidak ada klien yang perlu
-> berubah. Rekam consent kini memuat `account_id` dan `consented_at` saja. Lihat Appendix C, v2.22 → v2.23.
+> **v2.25** (aditif, ADR-007): **halaman pembayaran web di dalam WebView aplikasi mobile.** Dua endpoint baru:
+> **`POST /payments/{booking_id}/handoff`** (§5.6, aplikasi meminta kode sekali pakai 60 detik) dan
+> **`POST /payments/handoff/exchange`** (§5.7, halaman web menukar kode dengan `payment_session`). Header baru
+> **`X-Payment-Session`** diterima §4.4 dan §5.1–§5.4 **sebagai pengganti** `X-Grant-Token` (+ `X-Device-Id` /
+> `Authorization`); tidak boleh dikirim bersama `X-Grant-Token`. Kode error baru: `401 HANDOFF_CODE_INVALID`, `401 PAYMENT_SESSION_INVALID`.
+> Web desktop tidak berubah. Lihat Appendix C, v2.24 → v2.25.
+>
+> **v2.24**: (1, format tampilan, tidak mengubah struktur): **`nik_masked` selalu 16 karakter: 4 digit awal, 10 asterisk, 2
+> digit akhir** (`3171**********22`), sama dengan yang dikembalikan nik-verify dan disimpan di `accounts`, `saved_niks`,
+> `booking_items` dan `tickets`. Contoh sebelumnya memakai tiga bentuk berbeda (`3171********22`, `3171********xx22`,
+> `3171********0022`); klien tidak boleh mengurai isinya, hanya menampilkannya. (2, §1.7, koreksi dokumen):
+> **`GET /auth/verify-email` menerima token di cookie `magic_token`**, bukan query parameter `?token=` — handler sudah
+> membaca cookie sejak endpoint ini ada (`1417f00`, 3 Nov 09:26); `?token=` selalu dijawab `400 TOKEN_INVALID`, tidak ada
+> klien yang bekerja hari ini yang rusak. Sejajar dengan §1.3. Lihat Appendix C, v2.23 → v2.24.
+>
+> **v2.23** (`POST /bookings`, `GET /bookings/{id}`): (1) **`429 TOO_MANY_REQUESTS` dihapus dari `POST /bookings`**:
+> booking memverifikasi NIK lewat pemanggilan internal ke nik-verify, tanpa batas per customer; batas laju Dukcapil
+> bersama menjawab `503 DUKCAPIL_UNAVAILABLE`. (2) **`409 BOOKING_EXPIRED` untuk setiap booking yang 5 menitnya habis
+> sebelum Bayar** (`GRANTED` maupun `SELECTING`); `409 BOOKING_STATUS_INVALID` hanya untuk `GRANTED` yang masih dalam
+> waktu. (3) `TICKETS_UNAVAILABLE.data.queue_state` selalu `FULL_BOOKED` atau `CLOSED`, juga sebelum admission-ctl
+> mengubah state antrian; `full_booked_at` dapat `null`. (4) §4.4: booking yang sudah berakhir biasanya menjawab
+> `401 GRANT_TOKEN_INVALID`, bukan `data.status` `EXPIRED`. (5) §1.5: **`consent.policy_version` dihapus** dari body
+> `POST /auth/register` (diabaikan bila masih dikirim — tidak breaking); rekam consent memuat `account_id` dan
+> `consented_at` saja. Lihat Appendix C, v2.22 → v2.23.
 >
 > **v2.22** (**breaking** bagi klien halaman utama dan join): (1) **`GET /events` dan `GET /events/{id}` disederhanakan**:
 > `status`, `queue_depth`, `queue_capacity`, `min_price`, `max_price`, `display.action`, `display.label_key` dan
@@ -576,7 +599,7 @@ memanggil Dukcapil lagi**. Maksimal 5 per akun. Tidak tersedia untuk guest.
   "data": {
     "max_entries": 5,
     "saved_niks": [
-      { "id": "snk_1", "nik_masked": "3171********22", "label": "Budi",
+      { "id": "snk_1", "nik_masked": "3171**********22", "label": "Budi",
         "verified_at": "2026-10-20T08:11:00Z", "status": "VERIFIED" }
     ]
   }
@@ -725,7 +748,7 @@ Authorization: Bearer {access_token}
   },
   "data": {
     "email": "Virgie_OKon@yahoo.com",
-    "nik_masked": "3171********xx22"
+    "nik_masked": "3171**********22"
   }
 }
 ```
@@ -766,17 +789,17 @@ Authorization: Bearer {access_token}
 >    kosmetik: field bernama `nik` yang kebetulan ter-mask adalah jebakan bagi penulis klien
 >    yang mengirimkannya kembali sebagai NIK — dan nilainya akan gagal validasi 16 digit
 >    tanpa petunjuk mengapa.
-> 3. **Mask `330************777` → `3171********xx22`.** Yang pertama 6 digit + 12 asterisk =
->    **18 karakter**, untuk NIK yang panjangnya 16. Bentuk `3171********xx22` adalah bentuk
->    yang benar **dan** yang dominan di dokumen ini (7 kemunculan vs 2).
+> 3. **Mask `330************777` → 16 karakter.** Yang pertama 6 digit + 12 asterisk =
+>    **18 karakter**, untuk NIK yang panjangnya 16. Bentuk akhirnya (v2.24) `3171**********22`:
+>    4 digit awal, 10 asterisk, 2 digit akhir.
 > 4. **Respons `401` ditambahkan.** Endpoint ini menuntut `Authorization`, jadi ia dapat
 >    menolak. Bentuknya mengikuti pola error terbaru — `meta.error_code` di samping
 >    `meta.message` — bukan pola `200`-saja yang dipakai §1.6.
 >
 > **Sisa yang tidak disentuh, karena di luar lingkup endpoint ini**: §1.6
 > `GET /accounts/me/saved-niks` masih hanya mendefinisikan `200` meski menuntut
-> `Authorization`, dan masih memakai mask `3171********22` (14 karakter). Keduanya
-> mendahului endpoint ini dan diperbaiki terpisah.
+> `Authorization`. Itu mendahului endpoint ini dan diperbaiki terpisah. (Mask-nya sudah
+> diselaraskan ke 16 karakter pada v2.24.)
 
 **Requirement Coverage**: tidak ada FR yang menuntut endpoint ini secara langsung. Ia
 melayani halaman profil yang FR-32a–d gambarkan dan memenuhi FR-32c pada field
@@ -1108,7 +1131,7 @@ X-Queue-Token: {queue_token}           # opsional (mobile): rejoin BR-09; web me
 > untuk event ini, mungkin dari perangkat lain. Keduanya memulihkan keterlibatan yang ada
 > dan menerbitkan ulang cookie untuknya; tidak ada keterlibatan kedua yang dibuat.
 >
-> `state` mengikuti nilai §3.3 (`QUEUED`, `GRANTED`, `SELECTING`, `AWAITING_PAYMENT`, …).
+> `state` mengikuti nilai §3.3 (`QUEUED`, `GRANTED`, `SELECTING`, `HELD`, `AWAITING_PAYMENT`, …).
 > Bila bukan `QUEUED`, field posisi diabaikan dan frontend merutekan sesuai `state` —
 > customer sudah melewati antrian.
 >
@@ -1446,12 +1469,21 @@ skenario kembali:
 | Masih mengantre | `{"state":"QUEUED","ticket_no":31842,"now_serving":31600}` | Waiting Room |
 | Giliran tiba | `{"state":"GRANTED","grant_token":"gt_abc123","booking_expires_at":"…","server_time":"…"}` | Detail Ticket, countdown **sudah berjalan** |
 | Sedang memilih | `{"state":"SELECTING","grant_token":"gt_abc123","booking_id":"RB-00912","booking_expires_at":"…","server_time":"…"}` | Detail Ticket, countdown dilanjutkan |
+| Kursi di-hold, belum bayar | `{"state":"HELD","grant_token":"gt_abc123","booking_id":"RB-00912","payment_expires_at":"…","server_time":"…"}` | Payment (pilih metode), countdown 10 menit dilanjutkan |
 | Menunggu bayar | `{"state":"AWAITING_PAYMENT","grant_token":"gt_abc123","booking_id":"RB-00912","payment_expires_at":"…","payment_ref":"pay_123","server_time":"…"}` | Payment, countdown dilanjutkan |
 | Selesai | `{"state":"CONFIRMED","booking_id":"RB-00912"}` | Halaman tiket |
 | Kedaluwarsa | `{"state":"EXPIRED"}` | Layar expired |
 
 > Grant pending atau lag replika menjawab `QUEUED` dengan `ticket_no ≤ now_serving` ("sebentar
 > lagi"); klien mengulang setelah 1 detik.
+>
+> **`AWAITING_PAYMENT` setelah tenggat berarti "memverifikasi", bukan kedaluwarsa** (v2.27). Booking
+> `PENDING_CANCELLATION` (tenggat lewat, grace 30 detik, lalu backend memeriksa ke Midtrans) dilaporkan sebagai
+> `AWAITING_PAYMENT` dengan `payment_expires_at` yang sudah lewat. Bila `payment_expires_at` ≤ jam server, klien
+> menampilkan "Memverifikasi pembayaran…" tanpa hitung mundur, menyembunyikan "ganti metode" dan "bayar lagi", dan
+> terus polling `GET /payments/{booking_id}/status`: `PAID` → Success Page; `EXPIRED` atau `401 GRANT_TOKEN_INVALID`
+> → `/queue/me` lagi (menjawab `EXPIRED`). Aturan yang sama berlaku saat hitung mundur Payment Page mencapai 0, dan
+> untuk `PENDING_PAYMENT` pada §4.4.
 >
 > **Tamu wajib mengirim `X-Device-Id`** (ADR-006 §8.9): token tamu hanya berlaku dari perangkat yang menerimanya, jadi perangkat lain
 > mendapat `401 DEVICE_MISMATCH` dan cookie `queue_token` dihapus; tanpa header itu `400 DEVICE_ID_REQUIRED`. Token akun hanya untuk akun
@@ -1470,7 +1502,7 @@ menghapusnya aktif:
 
 | Keadaan | Kredensial antrian | Akibat pada §3.3 |
 |---|---|---|
-| grant diterbitkan | **tetap** | pemulihan setelah grant justru bergantung padanya — `GRANTED`, `SELECTING`, `AWAITING_PAYMENT`, termasuk "kembali dari aplikasi bank" |
+| grant diterbitkan | **tetap** | pemulihan setelah grant justru bergantung padanya — `GRANTED`, `SELECTING`, `HELD`, `AWAITING_PAYMENT`, termasuk "kembali dari aplikasi bank" |
 | `LAPSED`, `EXPIRED` dari `SELECTING` (5 menit habis) | **hanya grant dihapus**; `token:{uuid}` dan `acct` tetap sampai jendela sale habis | `{"state":"EXPIRED"}`. Join ulang menemukan keterlibatan lama (`rejoined`), bukan tempat baru: tidak ada kesempatan kedua (ADR-005 Bagian 7) |
 | `EXPIRED` dari pembayaran, `ABANDONED` | dihapus | `{"state":"EXPIRED"}` — tidak ada apa pun untuk kembali ke sana |
 | `CONFIRMED` | dihapus, diganti **nisan** | tetap `{"state":"CONFIRMED","booking_id":…}` selama `SETTLED_TOMBSTONE_SECONDS` |
@@ -1694,7 +1726,7 @@ Authorization: Bearer {access_token}   # wajib bila grant milik akun login
     },
     "account": {
       "email": "buyer@example.com",
-      "nik_masked": "3171********0022"
+      "nik_masked": "3171**********22"
     }
   }
 }
@@ -1989,8 +2021,8 @@ lewat hash NIK).
       "image_url": "https://cdn.rusuh.id/events/konser-a.jpg"
     },
     "tickets": [
-      { "category": "VIP", "price": 1500000, "nik_masked": "3171********0022" },
-      { "category": "Festival", "price": 850000, "nik_masked": "3171********0033" }
+      { "category": "VIP", "price": 1500000, "nik_masked": "3171**********22" },
+      { "category": "Festival", "price": 850000, "nik_masked": "3171**********33" }
     ],
     "summary": { "quantity": 2, "total": 2350000 },
     "payment_ttl": { "expires_at": "2026-10-23T13:25:00Z", "server_time": "2026-10-23T13:15:00Z" }
@@ -2020,13 +2052,12 @@ sampai `BOOKING_EXPIRED`) diperiksa sebelum body (v2.21); booking `HELD` atau le
 | 401 | `GRANT_TOKEN_MISSING` / `GRANT_TOKEN_INVALID` / `DEVICE_MISMATCH` | grant hilang, tidak dikenal, dari perangkat lain, atau `event_id` event lain | — | tidak berubah |
 | 401 | `UNAUTHORIZED` / `TOKEN_EXPIRED` / `TOKEN_INVALID` | grant milik akun login: `Authorization` hilang atau milik akun lain / kedaluwarsa / tidak sah (kursi `saved_nik_id` dan `use_account_nik` hanya berlaku bagi akun yang terbukti) | — | tidak berubah |
 | 401 | `GRANT_TOKEN_INVALID` | tidak ada booking untuk grant ini, atau booking sudah berakhir (`LAPSED`, `EXPIRED`, `ABANDONED`; grant-nya sudah dihapus) | — | berakhir |
-| 409 | `BOOKING_STATUS_INVALID` | halaman tiket belum pernah dibuka (`GRANTED`): belum ada pilihan untuk dikirim | — | `GRANTED` |
-| 409 | `BOOKING_EXPIRED` | 5 menit habis saat booking masih `SELECTING` (sweep belum berjalan) | — | segera `EXPIRED` |
+| 409 | `BOOKING_STATUS_INVALID` | halaman tiket belum pernah dibuka (`GRANTED`) dan 5 menit belum habis: belum ada pilihan untuk dikirim | — | `GRANTED` |
+| 409 | `BOOKING_EXPIRED` | 5 menit habis sebelum Bayar ditekan, booking masih `GRANTED` atau `SELECTING` (sweep belum berjalan) | — | segera `LAPSED` / `EXPIRED` |
 | 400 | `VALIDATION_ERROR` | JSON rusak, `tickets` kosong, `contact_email` tidak valid, `category_id` tidak dikenal, kursi dengan nol atau lebih dari satu dari `nik` / `saved_nik_id` / `use_account_nik`, format NIK, `saved_nik_id` / `use_account_nik` tidak berlaku (bukan milik akun ini, sudah dihapus, tamu, akun tanpa NIK, `use_account_nik` di dua kursi), NIK sama di dua kursi (dibandingkan lewat hash) | `{index}` bila tentang satu kursi | tidak berubah |
 | 400 | `QTY_EXCEEDED` | lebih dari 3 kursi **secara total** (lintas kategori, BR-01) | — | tidak berubah |
 | 400 | `NIK_NOT_FOUND` / `NIK_INACTIVE` | nik-verify menyatakan NIK tidak terdaftar / tidak aktif | `{index}` | tidak berubah |
-| 429 | `TOO_MANY_REQUESTS` | verifikasi NIK dibatasi (§4.2); disertai header `Retry-After` | `{retry_after}` (detik) | tidak berubah |
-| 503 | `DUKCAPIL_UNAVAILABLE` | nik-verify atau Dukcapil tidak dapat menjawab (fail closed: tidak ada hold tanpa bukti) | — | tidak berubah |
+| 503 | `DUKCAPIL_UNAVAILABLE` | nik-verify atau Dukcapil tidak dapat menjawab, termasuk batas laju Dukcapil bersama yang habis (fail closed: tidak ada hold tanpa bukti) | — | tidak berubah |
 | 409 | `INSUFFICIENT_STOCK` | **habis sebagian**: stok sebuah kategori yang dipesan tidak cukup, tetapi **masih ada kategori lain** yang tersedia | `{category_id, available, requested}` | tetap `SELECTING`, sisa waktu berjalan |
 | 409 | `TICKETS_UNAVAILABLE` | **habis total**: setiap kategori event ini sudah 0 | `{queue_state, full_booked_at}` | tetap `SELECTING`, sisa waktu berjalan |
 | 409 | `NIK_ALREADY_USED` | NIK sudah memegang kursi untuk event ini (juga bila Redis terlewat dan basis data menolaknya) | `{index}` | tetap `SELECTING` |
@@ -2051,6 +2082,9 @@ sampai `BOOKING_EXPIRED`) diperiksa sebelum body (v2.21); booking `HELD` atau le
 > | `TICKETS_UNAVAILABLE` | pindah ke halaman "tiket habis". `data.queue_state` `FULL_BOOKED` = semua kursi sedang di-hold dan **dapat tersedia lagi** ("habis untuk sementara", pesanan tetap `SELECTING` dengan sisa waktunya); `CLOSED` = penjualan berakhir, tidak akan tersedia lagi |
 >
 > `data.queue_state` memakai nama yang sama dengan `queue_state` pada §2.1, sehingga halaman "tiket habis" yang sama dapat dipakai.
+> Nilainya **hanya** `FULL_BOOKED` atau `CLOSED`: stok adalah sumber kebenaran "habis", dan state antrian baru berubah
+> pada tick admission-ctl berikutnya (≤ 500 ms). Selama itu state antrian masih `OPEN`, dan server tetap menjawab
+> `FULL_BOOKED`. `data.full_booked_at` `null` bila admission-ctl belum mencatatnya.
 >
 > **Kode yang tidak muncul di endpoint ini:** `QTY_INVALID` dan `NIK_COUNT_MISMATCH` (satu kursi = satu tiket; hanya
 > penjaga di skrip Lua), `NIK_UNVERIFIED` dan `NIK_VALIDATION_FAILED` (verifikasi dilakukan server lewat nik-verify, bukan dituntut dari klien).
@@ -2084,9 +2118,15 @@ Detail booking untuk Payment Page dan Success Page.
 X-Grant-Token: {grant_token}
 X-Device-Id: {device_id}               # wajib bila customer TIDAK login
 Authorization: Bearer {access_token}   # wajib bila grant milik akun login
+
+# atau, hanya di WebView pembayaran (ADR-007), sebagai pengganti tiga header di atas:
+X-Payment-Session: {payment_session}
 ```
 
 > `Authorization` wajib bila grant milik akun login — lihat tabel di awal §4.
+
+> **Di WebView pembayaran (ADR-007):** ganti ketiga header di atas dengan `X-Payment-Session: {payment_session}`
+> dari §5.7. Aturannya ada di awal §5.
 
 **Response** (200 - Pending Payment):
 ```json
@@ -2109,7 +2149,7 @@ Authorization: Bearer {access_token}   # wajib bila grant milik akun login
       {
         "category": "VIP",
         "price": 1500000,
-        "nik_masked": "3171********xx22"
+        "nik_masked": "3171**********22"
       }
     ],
     "summary": {
@@ -2146,7 +2186,7 @@ Authorization: Bearer {access_token}   # wajib bila grant milik akun login
         "ticket_id": "TKT-001",
         "category": "VIP",
         "price": 1500000,
-        "nik_masked": "3171********xx22",
+        "nik_masked": "3171**********22",
         "eticket_url": "/tickets/TKT-001/eticket?t=et_9f3a2c"
       }
     ],
@@ -2190,6 +2230,11 @@ Authorization: Bearer {access_token}   # wajib bila grant milik akun login
 | 404 | `NOT_FOUND` | `booking_id` bukan milik grant ini atau tidak ada (tidak dibedakan, ADR-005 Bagian 12) |
 | 503 | `INTERNAL_ERROR` | basis data atau Redis tidak dapat dihubungi |
 
+> **Booking yang sudah berakhir biasanya menjawab `401 GRANT_TOKEN_INVALID`, bukan `data.status` `EXPIRED`.** Setiap
+> sweep yang mengakhiri booking (`LAPSED`, `EXPIRED`) juga menghapus grant-nya, dan grant diperiksa sebelum booking
+> dibaca. `EXPIRED` hanya terlihat di jeda singkat antara keduanya. Customer di halaman pembayaran yang 10 menitnya habis
+> karena itu menerima 401: klien memanggil `GET /queue/me`, yang menjawab `EXPIRED`, lalu menampilkan layar kedaluwarsa.
+
 > **`eticket_url` sudah membawa token e-tiket (`?t=`) saat `PAID`.** Token yang sama dengan
 > tautan email (§6.2): HMAC atas satu `ticket_id`, berlaku sampai pukul 00:00 WIB sehari setelah event,
 > diterbitkan lewat `pkg/eticket`. Success Page menautkannya langsung, sehingga customer —
@@ -2207,6 +2252,24 @@ Authorization: Bearer {access_token}   # wajib bila grant milik akun login
 Header dan aturannya sama dengan §4: `X-Grant-Token` wajib, `X-Device-Id` wajib bila tidak login,
 `Authorization: Bearer` wajib bila grant milik akun login.
 
+**Halaman pembayaran di WebView aplikasi mobile (v2.25, ADR-007).** Aplikasi tidak memberikan kredensialnya ke
+halaman web. Ia meminta kode sekali pakai (§5.6), membuka WebView ke `payment_url` dari respons itu
+(`https://rush-my-ticket.my.id/m/orders/{booking_id}/pay#code={handoff_code}`), dan halaman itu menukar kode dengan
+`payment_session` (§5.7). Sesudahnya §4.4 dan §5.1–§5.4 dipanggil dengan **satu** header:
+
+```
+X-Payment-Session: {payment_session}
+```
+
+| Aturan | Isi |
+|---|---|
+| Satu kredensial | `X-Payment-Session` **atau** `X-Grant-Token`. Keduanya dikirim bersamaan → `400 VALIDATION_ERROR`. `X-Device-Id` / `Authorization` yang ikut terkirim bersama session diabaikan |
+| Lingkup | Hanya `GET /bookings/{booking_id}` dan `/payments/{booking_id}/…` (§5.1–§5.4), dan hanya `booking_id` miliknya; lainnya → `404 NOT_FOUND` |
+| Umur | Selama grant hidup (TTL = sisa TTL grant). **PAID**: webhook tidak menghapus grant, jadi session tetap berlaku dan `/status` menjawab `PAID` sampai grant habis. **EXPIRED / dibatalkan**: grant dihapus, session ikut mati (`401 PAYMENT_SESSION_INVALID`) |
+| Tidak dikenal / kedaluwarsa | `401 PAYMENT_SESSION_INVALID`. Klien WebView berhenti polling dan mengirim `HANDOFF_EXPIRED` ke aplikasi, yang meminta kode baru (§5.6); bila §5.6 menjawab `401 GRANT_TOKEN_INVALID`, booking sudah berakhir |
+| Penyimpanan klien | Memori halaman saja. Tidak di `localStorage`, cookie, atau URL |
+| Web desktop | Tidak berubah: tetap `X-Grant-Token` |
+
 ### 5.1 Get Payment Methods
 
 Metode pembayaran yang tersedia beserta **parameter yang dibutuhkan klien**. UI: Payment
@@ -2219,6 +2282,9 @@ Method selection.
 X-Grant-Token: {grant_token}
 X-Device-Id: {device_id}               # wajib bila customer TIDAK login
 Authorization: Bearer {access_token}   # wajib bila grant milik akun login
+
+# atau, hanya di WebView pembayaran (ADR-007), sebagai pengganti tiga header di atas:
+X-Payment-Session: {payment_session}
 ```
 
 > `Authorization` wajib bila grant milik akun login — lihat tabel di awal §4.
@@ -2296,6 +2362,9 @@ Memulai pembayaran dengan metode terpilih. UI: tombol "Bayar Sekarang".
 X-Grant-Token: {grant_token}
 X-Device-Id: {device_id}               # wajib bila customer TIDAK login
 Authorization: Bearer {access_token}   # wajib bila grant milik akun login
+
+# atau, hanya di WebView pembayaran (ADR-007), sebagai pengganti tiga header di atas:
+X-Payment-Session: {payment_session}
 ```
 
 > `Authorization` wajib bila grant milik akun login — lihat tabel di awal §4.
@@ -2412,6 +2481,9 @@ metode — misalnya sudah menerima VA BCA lalu memilih GoPay.
 X-Grant-Token: {grant_token}
 X-Device-Id: {device_id}               # wajib bila customer TIDAK login
 Authorization: Bearer {access_token}   # wajib bila grant milik akun login
+
+# atau, hanya di WebView pembayaran (ADR-007), sebagai pengganti tiga header di atas:
+X-Payment-Session: {payment_session}
 ```
 
 > `Authorization` wajib bila grant milik akun login — lihat tabel di awal §4.
@@ -2478,6 +2550,9 @@ Polling status pembayaran. UI: Payment Page polling.
 X-Grant-Token: {grant_token}
 X-Device-Id: {device_id}               # wajib bila customer TIDAK login
 Authorization: Bearer {access_token}   # wajib bila grant milik akun login
+
+# atau, hanya di WebView pembayaran (ADR-007), sebagai pengganti tiga header di atas:
+X-Payment-Session: {payment_session}
 ```
 
 > `Authorization` wajib bila grant milik akun login — lihat tabel di awal §4.
@@ -2511,6 +2586,11 @@ Authorization: Bearer {access_token}   # wajib bila grant milik akun login
   }
 }
 ```
+
+> **Di WebView pembayaran (ADR-007):** `redirect_url` diabaikan. Halaman mengirim
+> `postMessage({type: "PAYMENT_DONE", booking_id})` ke aplikasi, yang memastikan status lewat
+> `GET /bookings/{booking_id}`. Session tetap berlaku setelah `PAID` (grant tidak dihapus webhook), jadi
+> polling berikutnya tetap menjawab `PAID`.
 
 **Response** (200 - Expired):
 ```json
@@ -2704,6 +2784,173 @@ memicu unique violation, seluruh transaksi batal, dan endpoint tetap menjawab `2
 
 ---
 
+### 5.6 Create Payment Handoff Code (Mobile → WebView)
+
+Aplikasi mobile meminta kode sekali pakai untuk membuka halaman pembayaran web di WebView (ADR-007).
+UI: tombol "Bayar" di halaman booking aplikasi.
+
+**Endpoint**: `POST /payments/{booking_id}/handoff`
+
+**Headers**:
+```
+X-Grant-Token: {grant_token}
+X-Device-Id: {device_id}               # wajib bila customer TIDAK login
+Authorization: Bearer {access_token}   # wajib bila grant milik akun login
+```
+
+> Kredensial lengkap **wajib** di sini; `X-Payment-Session` tidak diterima. Pengikatan device (tamu) dan
+> pemeriksaan Bearer (login) terjadi pada endpoint ini, sekali, sebelum kode diterbitkan.
+
+**Request**: tanpa body (`{}` atau kosong).
+
+**Response** (201):
+```json
+{
+  "meta": { "code": 201, "message": "Handoff code created" },
+  "data": {
+    "booking_id": "RB-00912",
+    "handoff_code": "hc_Q2h4b0x3TjVtV3pYc1RkV2xBZ0p1cG9mQ2t1dlhZ",
+    "payment_url": "https://rush-my-ticket.my.id/m/orders/RB-00912/pay#code=hc_Q2h4b0x3TjVtV3pYc1RkV2xBZ0p1cG9mQ2t1dlhZ",
+    "expires_at": "2026-10-25T10:16:30Z"
+  }
+}
+```
+
+| Field | Arti |
+|---|---|
+| `handoff_code` | Acak 256 bit, awalan `hc_`. **Sekali pakai**, berlaku 60 detik, hanya untuk `booking_id` ini |
+| `payment_url` | URL WebView lengkap (v2.26): `{PAYMENT_WEB_URL}/m/orders/{booking_id}/pay#code={handoff_code}`, disusun backend dari setelan per environment |
+| `expires_at` | Batas tukar kode (§5.7). Aplikasi membuka WebView segera; bila lewat, minta kode baru |
+
+Aplikasi membuka **`payment_url` apa adanya**, setelah memastikan URL itu diawali
+`https://rush-my-ticket.my.id/m/orders/`. Aplikasi tidak menyusun URL sendiri, jadi perubahan route web tidak
+memerlukan rilis aplikasi.
+
+Kode **wajib** di `#fragment`, tidak di query string: fragment tidak dikirim ke server, jadi tidak tercatat di log
+maupun `Referer`. Meminta kode baru tidak membatalkan kode lama; masing-masing tetap sekali pakai.
+
+**Status booking yang menerima handoff**: `HELD`, `AWAITING_PAYMENT`, `PENDING_CANCELLATION` (status API
+`PENDING_PAYMENT` / `PENDING` / `FAILED`). Booking yang sudah berakhir biasanya menjawab `401 GRANT_TOKEN_INVALID`
+karena grant-nya sudah dihapus.
+
+**Response** (409 - `BOOKING_STATUS_INVALID`): booking belum di-submit (`GRANTED` / `SELECTING`), atau sudah lunas.
+```json
+{
+  "meta": { "code": 409, "message": "Booking belum siap dibayar", "error_code": "BOOKING_STATUS_INVALID" },
+  "data": { "status": "SELECTING" }
+}
+```
+
+**Response** (409 - `PAYMENT_WINDOW_CLOSED`): `payment_expires_at` sudah lewat.
+```json
+{
+  "meta": { "code": 409, "message": "Waktu pembayaran sudah habis", "error_code": "PAYMENT_WINDOW_CLOSED" },
+  "data": { "payment_expires_at": "2026-10-25T10:25:00Z" }
+}
+```
+
+**Response** (429 - `TOO_MANY_REQUESTS`): lebih dari 10 kode per menit untuk satu grant.
+```json
+{
+  "meta": { "code": 429, "message": "Terlalu banyak permintaan", "error_code": "TOO_MANY_REQUESTS" },
+  "data": { "retry_after": 30 }
+}
+```
+
+**Semua error**:
+
+| HTTP | `error_code` | Kapan | Klien |
+|---|---|---|---|
+| 400 | `DEVICE_ID_REQUIRED` | Tamu tanpa `X-Device-Id` | Bug klien |
+| 400 | `VALIDATION_ERROR` | `X-Payment-Session` dikirim ke endpoint ini | Bug klien |
+| 401 | `GRANT_TOKEN_MISSING` | Tanpa `X-Grant-Token` | Bug klien |
+| 401 | `GRANT_TOKEN_INVALID` | Grant tidak dikenal, kedaluwarsa, atau dicabut (booking sudah berakhir) | Cek `GET /queue/me` / layar kedaluwarsa |
+| 401 | `DEVICE_MISMATCH` | Grant tamu dari perangkat lain | Layar sesi tidak berlaku |
+| 401 | `UNAUTHORIZED` / `TOKEN_EXPIRED` / `TOKEN_INVALID` | Grant akun login tanpa Bearer / Bearer akun lain / kedaluwarsa / tidak sah | Refresh (§1.4) atau login ulang |
+| 404 | `NOT_FOUND` | `booking_id` tidak ada atau bukan milik grant ini | Kembali ke beranda |
+| 409 | `BOOKING_STATUS_INVALID` | Status tidak menerima pembayaran; `data.status` | `SELECTING` → halaman tiket; `PAID` → halaman tiket terbit |
+| 409 | `PAYMENT_WINDOW_CLOSED` | Tenggat pembayaran lewat | Layar kedaluwarsa |
+| 429 | `TOO_MANY_REQUESTS` | > 10 kode / menit / grant; `data.retry_after` | Tunggu `retry_after` detik |
+| 503 | `INTERNAL_ERROR` | Redis / Aurora tidak dapat dihubungi | Coba lagi |
+
+**Requirement Coverage**: FR-21 (pembayaran), NFR-02 (re-entrancy: kode baru kapan saja selama grant hidup), NFR-11 (kredensial tidak di URL)
+
+---
+
+### 5.7 Exchange Payment Handoff Code (WebView)
+
+Halaman pembayaran web di WebView menukar kode dari §5.6 dengan `payment_session` (ADR-007). UI: saat
+`/m/orders/{booking_id}/pay` dimuat dengan `#code=`.
+
+**Endpoint**: `POST /payments/handoff/exchange`
+
+**Headers**: tidak ada kredensial. Kode di body adalah kredensialnya.
+
+**Request**:
+```json
+{
+  "booking_id": "RB-00912",
+  "handoff_code": "hc_Q2h4b0x3TjVtV3pYc1RkV2xBZ0p1cG9mQ2t1dlhZ"
+}
+```
+
+| Field | Wajib | Aturan |
+|---|---|---|
+| `booking_id` | ✅ | Dari path halaman `/m/orders/{booking_id}/pay`; harus sama dengan booking kode |
+| `handoff_code` | ✅ | Dari `#code=`; awalan `hc_` |
+
+**Response** (200):
+```json
+{
+  "meta": { "code": 200, "message": "Payment session created" },
+  "data": {
+    "booking_id": "RB-00912",
+    "payment_session": "ps_bTN4V1pLc0c2cWJ2Tk5yUjhYa0ZqZEw3a1R1aEVwWg",
+    "expires_at": "2026-10-25T10:34:00Z"
+  }
+}
+```
+
+| Field | Arti |
+|---|---|
+| `payment_session` | Acak 256 bit, awalan `ps_`. Dikirim sebagai `X-Payment-Session` pada §4.4 dan §5.1–§5.4. **Simpan di memori saja** |
+| `expires_at` | Batas atas umur session (= umur grant). Session dapat mati lebih cepat bila booking berakhir. **Bukan** tenggat pembayaran: countdown tetap dari `payment_ttl.expires_at` (§4.4) |
+
+> **Kode habis pada percobaan pertama**, berhasil maupun gagal. `booking_id` yang salah juga
+> menghabiskan kode. Halaman tidak boleh mengulang exchange dengan kode yang sama; ia meminta kode baru ke
+> aplikasi (`HANDOFF_EXPIRED`).
+
+**Response** (401 - `HANDOFF_CODE_INVALID`): kode tidak dikenal, sudah dipakai, kedaluwarsa, atau bukan untuk
+`booking_id` ini. Satu kode untuk semua penyebab, agar penebak tidak tahu bagian mana yang hampir benar.
+```json
+{
+  "meta": { "code": 401, "message": "Kode pembayaran tidak berlaku", "error_code": "HANDOFF_CODE_INVALID" },
+  "data": {}
+}
+```
+
+**Response** (401 - `GRANT_TOKEN_INVALID`): kode sah, tetapi booking sudah berakhir di antara §5.6 dan §5.7
+(grant dihapus).
+```json
+{
+  "meta": { "code": 401, "message": "Sesi booking sudah berakhir", "error_code": "GRANT_TOKEN_INVALID" },
+  "data": {}
+}
+```
+
+**Semua error**:
+
+| HTTP | `error_code` | Kapan | Klien (WebView) |
+|---|---|---|---|
+| 400 | `VALIDATION_ERROR` | `booking_id` / `handoff_code` kosong atau format salah | Kirim `HANDOFF_EXPIRED` |
+| 401 | `HANDOFF_CODE_INVALID` | Kode tidak dikenal, dipakai, kedaluwarsa, atau booking lain | Kirim `HANDOFF_EXPIRED`; aplikasi meminta kode baru |
+| 401 | `GRANT_TOKEN_INVALID` | Booking sudah berakhir | Kirim `PAYMENT_EXPIRED`; aplikasi memastikan lewat `GET /bookings/{id}` |
+| 503 | `INTERNAL_ERROR` | Redis tidak dapat dihubungi | Coba lagi sekali; kode **tidak** habis bila Redis tidak menjawab |
+
+**Requirement Coverage**: FR-21, NFR-11
+
+---
+
 ## 6. Tickets (Accounts › Tickets)
 
 > Sebelumnya bernama **User**. Di Apidog berada di dalam folder Accounts.
@@ -2825,7 +3072,7 @@ Authorization: Bearer {access_token}
     },
     "category": "VIP",
     "holder": {
-      "nik_masked": "3171********xx22"
+      "nik_masked": "3171**********22"
     },
     "qr_code": "data:image/png;base64,iVBORw0KGgo...",
     "qr_value": "TKT-001|evt_konser_a|3171xxxxxxxxxx22",
@@ -2963,10 +3210,13 @@ Bagian per endpoint menulis error yang khas. Error umum berikut juga berlaku dan
 | `GET /events/{event_id}/queue/me` | 401 `UNAUTHORIZED` (tidak ada kredensial, atau Bearer tanpa `acct` untuk event ini) |
 | `GET /events/{event_id}/tickets` | 400 `DEVICE_ID_REQUIRED` · 401 `GRANT_TOKEN_MISSING` / `GRANT_TOKEN_INVALID` / `DEVICE_MISMATCH` · 404 `NOT_FOUND` · 503 `STOCK_UNINITIALIZED` / `INTERNAL_ERROR` (§4.1) |
 | `POST /nik/validate` | 400 `VALIDATION_ERROR` · 429 `TOO_MANY_REQUESTS` · 503 `DUKCAPIL_UNAVAILABLE` |
-| `POST /bookings` | lengkap di §4.3: 400 `VALIDATION_ERROR` / `QTY_EXCEEDED` / `NIK_NOT_FOUND` / `NIK_INACTIVE` / `DEVICE_ID_REQUIRED` · 401 · 409 `INSUFFICIENT_STOCK` / `TICKETS_UNAVAILABLE` / `NIK_ALREADY_USED` / `BOOKING_STATUS_INVALID` / `BOOKING_EXPIRED` · 429 · 503 `DUKCAPIL_UNAVAILABLE` / `STOCK_UNINITIALIZED` / `STOCK_NEGATIVE` / `INTERNAL_ERROR` |
+| `POST /bookings` | lengkap di §4.3: 400 `VALIDATION_ERROR` / `QTY_EXCEEDED` / `NIK_NOT_FOUND` / `NIK_INACTIVE` / `DEVICE_ID_REQUIRED` · 401 · 409 `INSUFFICIENT_STOCK` / `TICKETS_UNAVAILABLE` / `NIK_ALREADY_USED` / `BOOKING_STATUS_INVALID` / `BOOKING_EXPIRED` · 503 `DUKCAPIL_UNAVAILABLE` / `STOCK_UNINITIALIZED` / `STOCK_NEGATIVE` / `INTERNAL_ERROR` |
 | `GET /bookings/{booking_id}` | 400 `DEVICE_ID_REQUIRED` · 404 `NOT_FOUND` · 503 `INTERNAL_ERROR` (§4.4) |
 | `GET /tickets/{ticket_id}/eticket` | 401 `ETICKET_TOKEN_INVALID` · 404 `NOT_FOUND` |
 | semua endpoint ber-grant (§4, §5) | 400 `DEVICE_ID_REQUIRED` · 401 `GRANT_TOKEN_MISSING` / `GRANT_TOKEN_INVALID` / `DEVICE_MISMATCH` · grant akun login: 401 `UNAUTHORIZED` / `TOKEN_EXPIRED` / `TOKEN_INVALID` |
+| §4.4, §5.1–§5.4 dengan `X-Payment-Session` (v2.25) | 400 `VALIDATION_ERROR` (session dikirim bersama `X-Grant-Token`) · 401 `PAYMENT_SESSION_INVALID` · 404 `NOT_FOUND` (booking lain) |
+| `POST /payments/{booking_id}/handoff` | lengkap di §5.6 |
+| `POST /payments/handoff/exchange` | lengkap di §5.7: 400 `VALIDATION_ERROR` · 401 `HANDOFF_CODE_INVALID` / `GRANT_TOKEN_INVALID` · 503 `INTERNAL_ERROR` |
 
 > `GET /bookings/{booking_id}/tickets` **dihapus** (v2.7, ADR-006 §8.8): §4.4 sudah mengembalikan
 > `tickets[]` dengan `eticket_url` bertoken saat `PAID`.
@@ -3066,7 +3316,7 @@ Legenda: ✅ terpenuhi di kontrak · ⚙️ di luar permukaan API (backend atau 
 | E-ticket Token | HMAC bertanda tangan atas satu `ticket_id` + kedaluwarsa, dikirim sebagai query `?t=` pada tautan email (§6.2). Stateless, tanpa identitas akun, lingkup satu tiket, berlaku sampai tanggal event + 1 hari. Kunci khusus — bukan signing secret JWT, bukan `DEVICE_PEPPER`. Ada karena FR-26 mengirim tiket ke pemegang NIK yang umumnya tidak punya akun; tanpa ini tombol di email mereka menjawab 401 |
 | Refresh Token | **Opaque acak 256-bit, bukan JWT**, 30 hari, disimpan server sebagai hash SHA-256. Sekali pakai dengan **rotasi**; pemutaran ulang mencabut seluruh keluarga (§1.4). Klien menyimpannya aman (Keychain/Keystore/memory) dan menggantinya setiap refresh |
 | Signing secret | Terpisah dari pepper HMAC NIK, dan **berbeda sifatnya**: signing secret dapat dan sebaiknya dirotasi, pepper tidak pernah (ADR-005 §8) |
-| NIK | Masked in responses (3171********xx22), stored encrypted |
+| NIK | Masked in responses (3171**********22), stored encrypted |
 | Payment | Via payment gateway (PCI-DSS compliant), no card data stored |
 | Rate Limiting | Per IP on queue join, per user on auth |
 | CSRF | `SameSite=Strict` on queue cookie; Origin validation on state-changing endpoints |
@@ -3075,6 +3325,9 @@ Legenda: ✅ terpenuhi di kontrak · ⚙️ di luar permukaan API (backend atau 
 | **Atribusi akun** | `bookings.account_id` ditulis pada INSERT saat GRANT dari `token:{uuid}`, **tidak** dari kredensial yang dibawa klien saat checkout. Keterlibatan mengetahui identitasnya sejak join, ketika sesi masih pasti segar; bergantung pada token saat checkout berarti sesi yang kedaluwarsa menurunkan pembelian customer login menjadi pembelian tamu tanpa satu pun error |
 | **Pengikatan device (grant anonim)** | `X-Device-Id` — acak 128 bit yang dibuat klien (format tidak divalidasi), disimpan server sebagai `HMAC(DEVICE_PEPPER, device_id)`, dicocokkan pada join (rejoin), `/queue/me` dan setiap panggilan ber-grant. Tidak cocok → **401** `DEVICE_MISMATCH`, **tanpa rebind** (ADR-006 §8.9). Token akun dicocokkan ke `account_id`. **Bukan** fingerprint pasif: canvas/WebGL rapuh dan memanen karakteristik perangkat tanpa dasar persetujuan (NFR-11). **Non-goal**: ia menghentikan jual-beli slot, bukan penyerang yang menyalin `localStorage` korban |
 | SSE Auth | `queue_token` cookie (web) atau `X-Queue-Token` (mobile) divalidasi saat koneksi stream. `Authorization` tidak dipakai di sini |
+| **Handoff code (v2.25)** | Opaque acak 256 bit (`hc_…`), `paymenthandoff:{code}` di Redis, **60 detik, sekali pakai** (dibaca dan dihapus sekaligus), terikat satu `booking_id`. Diterbitkan §5.6 setelah grant guard lengkap; dibawa ke WebView di `#fragment` (tidak terkirim ke server, tidak masuk log / `Referer`), ditukar di §5.7 (ADR-007) |
+| **Payment session (v2.25)** | Opaque acak 256 bit (`ps_…`), header `X-Payment-Session`, `paymentsession:{session}` di Redis berisi `grant_token`. Hanya §4.4 dan §5.1–§5.4 untuk satu booking. Setiap request memeriksa `grant:{token}` masih ada, jadi session mati bersama grant. Disimpan di memori halaman saja (tanpa cookie → tanpa CSRF). Kredensial ini **pengganti** grant di WebView, tidak pernah bersamaan dengannya |
+| **WebView pembayaran (v2.25)** | Dikunci ke `https://rush-my-ticket.my.id`; navigasi ke `gojek.link` / `gopay://` dibuka di luar aplikasi, host lain diblokir; kembali dari GoPay lewat app switcher (tanpa App Link di POC). Pesan `postMessage` dari halaman hanya sinyal: aplikasi selalu memastikan status lewat `GET /bookings/{id}` (ADR-007) |
 
 ---
 
@@ -3100,7 +3353,7 @@ Legenda: ✅ terpenuhi di kontrak · ⚙️ di luar permukaan API (backend atau 
 | `STOCK_UNINITIALIZED` | **503** — kunci stok hilang dari Redis (flush/failover). Bukan "habis": stok tidak diketahui |
 | `STOCK_NEGATIVE` | **503** — guard terakhir menyala; seluruh pengurangan dikembalikan |
 | `INSUFFICIENT_STOCK` | Stok tiket tidak mencukupi |
-| `TICKETS_UNAVAILABLE` | **409** — habis total: setiap kategori event sudah 0 (`POST /bookings`, §4.3). `data {queue_state, full_booked_at}`; `queue_state` `FULL_BOOKED` = dapat tersedia lagi, `CLOSED` = penjualan berakhir. Habis sebagian: `INSUFFICIENT_STOCK` |
+| `TICKETS_UNAVAILABLE` | **409** — habis total: setiap kategori event sudah 0 (`POST /bookings`, §4.3). `data {queue_state, full_booked_at}`; `queue_state` hanya `FULL_BOOKED` (dapat tersedia lagi) atau `CLOSED` (penjualan berakhir); `full_booked_at` dapat `null`. Habis sebagian: `INSUFFICIENT_STOCK` |
 | `PAYMENT_ALREADY_INITIATED` | Charge sudah berjalan; respons sebelumnya diputar ulang |
 | `BANK_NOT_SUPPORTED` | Bank di luar bca/bni/bri/cimb |
 | `MAX_ATTEMPTS_EXCEEDED` | Melewati batas percobaan pembayaran per booking |
@@ -3115,7 +3368,7 @@ Legenda: ✅ terpenuhi di kontrak · ⚙️ di luar permukaan API (backend atau 
 | `MAX_SAVED_NIKS_REACHED` | Daftar NIK Teman sudah mencapai 5 entri |
 | `CONSENT_REQUIRED` | Persetujuan pemrosesan data pribadi pihak ketiga belum diberikan |
 | `PAYMENT_GATEWAY_UNAVAILABLE` | **503** — breaker payment gateway terbuka; dapat di-retry. Menggantikan `ADMISSION_PAUSED` (v2.7, pause dihapus) |
-| `BOOKING_EXPIRED` | **409** — 5 menit habis saat booking masih `SELECTING` (§4.3). Booking yang sudah berakhir dan grant-nya dihapus menjawab `401 GRANT_TOKEN_INVALID` |
+| `BOOKING_EXPIRED` | **409** — 5 menit habis sebelum Bayar ditekan, saat booking masih `GRANTED` atau `SELECTING` (§4.3). Booking yang sudah berakhir dan grant-nya dihapus menjawab `401 GRANT_TOKEN_INVALID` |
 | `PAYMENT_EXPIRED` | TTL pembayaran habis |
 | `TOO_MANY_REQUESTS` | Rate limited |
 | `TOKEN_EXPIRED` | **Hanya tentang sesi akun.** Access token kedaluwarsa, atau refresh token kedaluwarsa/dicabut/tidak dikenal — klien me-refresh (§1.4) atau login ulang |
@@ -3124,6 +3377,8 @@ Legenda: ✅ terpenuhi di kontrak · ⚙️ di luar permukaan API (backend atau 
 | `GRANT_TOKEN_INVALID` | **401** — grant tidak dikenal, kedaluwarsa, atau sudah dicabut. Beda dari `BOOKING_EXPIRED`: yang ini soal kredensial, bukan soal TTL booking. Keduanya dapat terjadi berurutan dan frontend merutekannya berbeda |
 | `DEVICE_ID_REQUIRED` | **400** — `X-Device-Id` tidak disertakan oleh pemanggil anonim pada `POST …/queue/join` atau endpoint ber-grant. Ditolak di join, bukan nanti: grant tanpa pengikatan tidak dapat diikat belakangan |
 | `DEVICE_MISMATCH` | **401** — `queue_token` tamu atau grant dipakai dari perangkat yang bukan penerimanya (v2.9: **tanpa rebind**, ADR-006 §8.9). Di join respons juga menghapus cookie `queue_token`; klien menghapus token antriannya (§3.1) |
+| `HANDOFF_CODE_INVALID` | **401** — kode serah-terima pada `POST /payments/handoff/exchange` tidak dikenal, sudah dipakai, kedaluwarsa (60 detik), atau bukan untuk `booking_id` di body (§5.7, v2.25). Satu kode untuk semua penyebab. WebView meminta kode baru ke aplikasi |
+| `PAYMENT_SESSION_INVALID` | **401** — `X-Payment-Session` tidak dikenal, kedaluwarsa, atau grant di belakangnya sudah dihapus (§5, v2.25). WebView meminta kode baru ke aplikasi; bila §5.6 menjawab `GRANT_TOKEN_INVALID`, booking sudah berakhir |
 | `ETICKET_TOKEN_INVALID` | **401** — token `?t=` pada tautan e-tiket tidak sah, kedaluwarsa, atau tidak cocok dengan `ticket_id` di path. Satu kode untuk ketiganya: membedakannya memberi tahu penebak mana bagian yang hampir benar |
 
 ---
@@ -3152,7 +3407,7 @@ Legenda: ✅ terpenuhi di kontrak · ⚙️ di luar permukaan API (backend atau 
 |--------|-------|
 | Transport | REST polling (`GET /payments/{id}/status`) |
 | Interval | 2–3 detik |
-| Duration | Sampai `payment_expires_at` |
+| Duration | Sampai `payment_expires_at`, lalu **terus** selama status masih `PENDING` (verifikasi pembayaran, §3.3): berhenti pada `PAID`, `EXPIRED` atau `401` |
 
 **Mengapa polling, padahal tier SSE sudah ada.** Pilihan transport mengikuti **bentuk
 fan-out**, bukan ketersediaan infrastruktur.
@@ -3426,7 +3681,7 @@ Penyelarasan dengan ADR-005. Yang memutus kompatibilitas ditandai **BREAKING**.
 | # | Perubahan | Alasan |
 |---|---|---|
 | 95 | §1.8 **baru**: `GET /accounts/me` — `email` + `nik_masked`, `Authorization: Bearer`, `200` + `401` | Halaman profil membutuhkan info akun pemilik sesi; sebelumnya tidak ada endpoint yang mengembalikannya. Ditambahkan **tanpa** field `name`, konsisten dengan v2.12.1 dan FR-15a |
-| 96 | Definisi awal endpoint itu (`GET /account/info`, field `nik`, mask `330************777`, tanpa `401`) diselaraskan pada empat titik sebelum implementasi | Keempatnya menyimpang dari konvensi yang sudah ada di dokumen ini: path akun lain memakai `/accounts/me/…`; `nik` berarti 16 digit utuh di tiap endpoint lain sementara bentuk ter-mask bernama `nik_masked`; mask awalnya 18 karakter untuk NIK 16 digit, sedangkan `3171********xx22` benar dan dominan (7 vs 2); dan endpoint ber-`Authorization` tanpa `401` tidak dapat menyatakan penolakannya. Dilakukan sekarang karena `user-service` belum punya handler-nya — tidak ada klien yang terdampak. **Tidak** termasuk: §1.6 yang juga hanya punya `200` dan masih memakai mask 14 karakter |
+| 96 | Definisi awal endpoint itu (`GET /account/info`, field `nik`, mask `330************777`, tanpa `401`) diselaraskan pada empat titik sebelum implementasi | Keempatnya menyimpang dari konvensi yang sudah ada di dokumen ini: path akun lain memakai `/accounts/me/…`; `nik` berarti 16 digit utuh di tiap endpoint lain sementara bentuk ter-mask bernama `nik_masked`; mask awalnya 18 karakter untuk NIK 16 digit, sedangkan `3171**********22` benar dan dominan (7 vs 2); dan endpoint ber-`Authorization` tanpa `401` tidak dapat menyatakan penolakannya. Dilakukan sekarang karena `user-service` belum punya handler-nya — tidak ada klien yang terdampak. **Tidak** termasuk: §1.6 yang juga hanya punya `200` dan masih memakai mask 14 karakter |
 
 > **Apidog disinkronkan**: endpoint ditambahkan ke folder `Accounts` dengan skema respons,
 > contoh, dan `x-apidog-orders`; `auth` dan `securityScheme` disalin dari §1.6 agar skema
@@ -3542,10 +3797,37 @@ Penyelarasan dengan ADR-005. Yang memutus kompatibilitas ditandai **BREAKING**.
 
 | # | Perubahan | Alasan |
 |---|---|---|
-| 125 | §1.5, Apidog: **`consent.policy_version` dihapus** dari body `POST /auth/register` (diabaikan bila masih dikirim, jadi **tidak breaking** bagi klien); rekam consent memuat `id`, `account_id`, `consented_at` saja | Nilainya datang dari klien dan ditulis ke rekam immutable, sehingga klien menjadi otoritas atas kebijakan yang disetujui — untuk rekam yang justru harus menjadi bukti (UU PDP No. 27/2022). `account_id` + `consented_at` dari server menjawab siapa dan kapan; dokumen kebijakan berversi menjawab sisanya. Sejalan dengan `terms_version` (#109) |
+| 125 | §4.3, Apidog: `429 TOO_MANY_REQUESTS` dihapus dari `POST /bookings`; batas laju Dukcapil bersama menjawab `503 DUKCAPIL_UNAVAILABLE` | Booking memverifikasi NIK lewat pemanggilan Lambda internal ke nik-verify, bukan lewat `POST /nik/validate`; tidak ada batas per customer yang diteruskan |
+| 126 | §4.3, Appendix A, Apidog: `409 BOOKING_EXPIRED` juga untuk `GRANTED` yang 5 menitnya habis; `BOOKING_STATUS_INVALID` hanya untuk `GRANTED` yang masih dalam waktu | Halaman yang dibuka setelah tenggat tidak meng-claim (§4.1), jadi booking tetap `GRANTED`; customer kehabisan waktu dan harus melihat "waktu habis", bukan "buka halaman tiket" |
+| 127 | §4.3, Appendix A, Apidog: `TICKETS_UNAVAILABLE.data.queue_state` hanya `FULL_BOOKED` atau `CLOSED`; `full_booked_at` dapat `null` | Stok mencapai 0 sebelum admission-ctl mengubah state antrian (≤ 500 ms); menyalin state apa adanya akan mengirim `OPEN` ke halaman "tiket habis" |
+| 128 | §4.4: catatan bahwa booking yang sudah berakhir biasanya menjawab `401 GRANT_TOKEN_INVALID` | Sweep menghapus grant; klien tidak boleh menunggu `EXPIRED` dari endpoint ini |
+| 129 | §1.5, Apidog: **`consent.policy_version` dihapus** dari body `POST /auth/register` (diabaikan bila masih dikirim, jadi **tidak breaking** bagi klien); rekam consent memuat `id`, `account_id`, `consented_at` saja | Nilainya datang dari klien dan ditulis ke rekam immutable, sehingga klien menjadi otoritas atas kebijakan yang disetujui — untuk rekam yang justru harus menjadi bukti (UU PDP No. 27/2022). `account_id` + `consented_at` dari server menjawab siapa dan kapan; dokumen kebijakan berversi menjawab sisanya. Sejalan dengan `terms_version` (#109) |
 
 ### v2.23 → v2.24
 
 | # | Perubahan | Alasan |
 |---|---|---|
-| 126 | §1.7, Apidog: `GET /auth/verify-email` menerima token di **cookie `magic_token`**, bukan query parameter `?token=`. **Koreksi dokumen, bukan perubahan perilaku** | Handler membaca cookie sejak endpoint ini lahir (`1417f00`, 3 Nov 09:26). Tabel query ditulis 12 jam kemudian (#55) dan men-transkrip bentuk **tautan email**, bukan request ke API — tautan itu menunjuk ke `APP_BASE_URL`, yaitu frontend, yang terbaca jelas dari email login yang menunjuk ke `/auth/login`, rute yang tidak ada di API. Jadi kontrak mendokumentasikan endpoint yang katanya "sudah berjalan" dengan kanal yang tidak pernah dibacanya. Tidak breaking: `?token=` selalu dijawab `400 TOKEN_INVALID`, jadi tidak ada klien yang bekerja hari ini yang bergantung padanya. Query parameter juga kanal yang lebih buruk untuk kredensial sekali-pakai — ia masuk log akses, log load balancer, CloudWatch, dan `Referer` — sementara cookie `HttpOnly`/`SameSite=Strict` berhenti di frontend dan dihapus setelah dipakai. Kini sejajar dengan §1.3 |
+| 130 | §1.7, Apidog: `GET /auth/verify-email` menerima token di **cookie `magic_token`**, bukan query parameter `?token=`. **Koreksi dokumen, bukan perubahan perilaku** | Handler membaca cookie sejak endpoint ini lahir (`1417f00`, 3 Nov 09:26). Tabel query ditulis 12 jam kemudian (#55) dan men-transkrip bentuk **tautan email**, bukan request ke API — tautan itu menunjuk ke `APP_BASE_URL`, yaitu frontend, yang terbaca jelas dari email login yang menunjuk ke `/auth/login`, rute yang tidak ada di API. Jadi kontrak mendokumentasikan endpoint yang katanya "sudah berjalan" dengan kanal yang tidak pernah dibacanya. Tidak breaking: `?token=` selalu dijawab `400 TOKEN_INVALID`, jadi tidak ada klien yang bekerja hari ini yang bergantung padanya. Query parameter juga kanal yang lebih buruk untuk kredensial sekali-pakai — ia masuk log akses, log load balancer, CloudWatch, dan `Referer` — sementara cookie `HttpOnly`/`SameSite=Strict` berhenti di frontend dan dihapus setelah dipakai. Kini sejajar dengan §1.3 |
+| 131 | §1.6, §1.8, §4.1, §4.3, §4.4, §6.2, §9, Apidog: semua contoh `nik_masked` memakai `3171**********22` (4 digit awal, 10 asterisk, 2 digit akhir, total 16 karakter); aturan ditegaskan di catatan v2.24 | Tiga bentuk beredar di dokumen (14 karakter `3171********22`, `3171********xx22`, dan `3171********0022` yang menampilkan 4 digit akhir). Kode (`nik-verify`, `valueobject.Mask`) selalu mengembalikan bentuk 16 karakter dengan 2 digit akhir, dan itulah yang tersimpan; contoh yang berbeda membuat klien menulis pengujian dan tata letak untuk bentuk yang tidak pernah dikirim server |
+
+### v2.24 → v2.25
+
+| # | Perubahan | Alasan |
+|---|---|---|
+| 132 | §5.6 baru: `POST /payments/{booking_id}/handoff` → `201 {booking_id, handoff_code, expires_at}`; kode 256 bit, 60 detik, sekali pakai; errors 400/401/404/409/429/503 | Aplikasi mobile membuka halaman pembayaran web di WebView tanpa menaruh grant atau Bearer di URL (ADR-007) |
+| 133 | §5.7 baru: `POST /payments/handoff/exchange` `{booking_id, handoff_code}` → `200 {booking_id, payment_session, expires_at}`; kode habis pada percobaan pertama | Pola *authorization code*: kode yang tersalin tidak berguna setelah dipakai atau 60 detik |
+| 134 | §4.4, §5 (intro, §5.1–§5.4): header `X-Payment-Session` sebagai **pengganti** `X-Grant-Token` (+ `X-Device-Id` / `Authorization`); session bersama `X-Grant-Token` → `400 VALIDATION_ERROR`; booking lain → `404 NOT_FOUND` | WebView hanya memegang kredensial untuk satu booking yang mati bersama grant, bukan sesi akun penuh |
+| 135 | Appendix A: `HANDOFF_CODE_INVALID`, `PAYMENT_SESSION_INVALID`; §7 tabel error per endpoint; §9 tiga baris keamanan | Kode baru dari §5.6, §5.7 |
+
+### v2.25 → v2.26
+
+| # | Perubahan | Alasan |
+|---|---|---|
+| 136 | §5.6: respons `201` menambah `payment_url` (`{PAYMENT_WEB_URL}/m/orders/{booking_id}/pay#code={handoff_code}`); aplikasi membukanya apa adanya setelah memeriksa awalan `https://rush-my-ticket.my.id/m/orders/` | Route web dapat berubah tanpa rilis aplikasi mobile; satu tempat yang menyusun URL (ADR-007 aturan 3) |
+
+### v2.26 → v2.27
+
+| # | Perubahan | Alasan |
+|---|---|---|
+| 137 | §3.3, Apidog: state baru `HELD` pada `GET /queue/me` → `{grant_token, booking_id, payment_expires_at, server_time}`; `SELECTING` kini hanya untuk booking yang belum menekan Bayar | Booking `HELD` dulu dilaporkan sebagai `SELECTING` dengan `booking_expires_at` (5 menit sejak giliran). Customer yang me-refresh setelah menekan Bayar melihat "waktu habis" padahal kursinya masih di-hold sampai `payment_expires_at`. `grant_token` disertakan karena `POST /payments/{booking_id}` membutuhkannya |
+| 138 | §3.3, Appendix B, Apidog: aturan "`AWAITING_PAYMENT` setelah `payment_expires_at` = memverifikasi pembayaran" (tampilkan "Memverifikasi pembayaran…", tanpa hitung mundur, tanpa ganti metode / bayar lagi; polling berlanjut sampai `PAID`, `EXPIRED` atau `401`); Apidog `GET /queue/me` mendapat tabel arti setiap `state` | `PENDING_CANCELLATION` dilaporkan sebagai `AWAITING_PAYMENT` dengan tenggat yang sudah lewat; tanpa aturan ini klien menampilkan "waktu habis" kepada customer yang baru membayar. Tidak menambah state: Payment Page sudah butuh aturan yang sama saat hitung mundurnya mencapai 0 |
