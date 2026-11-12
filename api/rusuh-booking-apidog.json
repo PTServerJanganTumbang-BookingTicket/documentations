@@ -4306,7 +4306,7 @@
           "securityScheme": {},
           "parentId": 0,
           "serverId": "",
-          "description": "# Alur antrian untuk frontend (web dan mobile)\n\nSatu jalur ke tiket: **join → stream → /queue/me → halaman tiket**. Join tidak pernah langsung memberi grant dan tidak menunggu (v2.12, ADR-006 §8.14); bila tempat masih kosong, giliran tiba dalam satu tick (≤ 500 ms).\n\n```mermaid\nsequenceDiagram\n    autonumber\n    actor C as Klien\n    participant API as api.my-rusuh.my.id\n    participant SSE as events.my-rusuh.my.id\n\n    C->>API: POST /events/{id}/queue/join (captcha_token, X-Device-Id, Bearer?)\n    alt 200 queued / rejoined\n        API-->>C: ticket_no, queue_token, sse_url (+ cookie)\n    else 401 DEVICE_MISMATCH / UNAUTHORIZED\n        Note over C: hapus queue_token tersimpan, join lagi tanpa token\n    else 409 SALE_NOT_OPEN / FULL_BOOKED, 410 SALE_CLOSED, 503 QUEUE_FULL\n        Note over C: tampilkan pesan, tombol nonaktif\n    else 429 TOO_MANY_REQUESTS\n        Note over C: tunggu data.retry_after, coba lagi\n    end\n\n    C->>SSE: GET sse_url (cookie queue_token, atau X-Queue-Token di mobile)\n    loop pesan broadcast yang sama untuk semua\n        SSE-->>C: nowServing, ratePerMin\n        Note over C: posisi = ticket_no - nowServing, estimasi = ceil(posisi / ratePerMin) menit\n    end\n    Note over C: nowServing >= ticket_no berarti giliran saya\n    C->>API: GET /events/{id}/queue/me\n    API-->>C: state\n    alt GRANTED\n        Note over C: simpan grant_token, buka Detail Ticket\n        C->>API: GET /events/{id}/tickets (X-Grant-Token)\n    else QUEUED (belum tertulis)\n        Note over C: coba lagi sekitar 1 detik\n    else SELECTING / AWAITING_PAYMENT / CONFIRMED\n        Note over C: rutekan sesuai state (lanjutkan booking, pembayaran, atau sukses)\n    end\n```\n\n## Aturan klien\n\n| Situasi | Yang dilakukan klien |\n|---|---|\n| Stream putus atau event `reconnect` | Sambung ulang dengan jeda acak; tidak perlu join lagi |\n| Event `stale` | Tampilkan \"koneksi lambat\"; pesan berikutnya menghapusnya |\n| Event `status` | Perbarui tombol dan label sesuai `state` (OPEN, FULL_BOOKED) |\n| Event `sold-out` | Final: tampilkan \"Tiket sudah habis\" lalu **tutup stream** |\n| Stream tidak bisa dipakai | Fallback polling `GET /events/{id}/queue/serving`, interval dari `poll_tiers` |\n| Refresh halaman atau kembali dari aplikasi bank | `GET /queue/me`, **bukan** join |\n| Tombol \"Beli Tiket\" (`DIRECT`) | Tetap memanggil join, lalu stream; tampilkan \"Memproses...\" bukan layar antrian |\n| Web | Cookie `queue_token` dikirim otomatis, jangan simpan di localStorage |\n| Mobile | Simpan `queue_token` di secure storage, kirim `X-Queue-Token` |\n",
+          "description": "# Alur antrian untuk frontend (web dan mobile)\n\nSatu jalur ke tiket: **join → stream → /queue/me → halaman tiket**. Join tidak pernah langsung memberi grant dan tidak menunggu (v2.12, ADR-006 §8.14); bila tempat masih kosong, giliran tiba dalam satu tick (≤ 500 ms).\n\n```mermaid\nsequenceDiagram\n    autonumber\n    actor C as Klien\n    participant API as api.my-rusuh.my.id\n    participant SSE as events.my-rusuh.my.id\n\n    C->>API: POST /events/{id}/queue/join (captcha_token, X-Device-Id, Bearer?)\n    alt 200 queued / rejoined\n        API-->>C: ticket_no, queue_token, sse_url (+ cookie)\n    else 401 DEVICE_MISMATCH / UNAUTHORIZED\n        Note over C: hapus queue_token tersimpan, join lagi tanpa token\n    else 409 SALE_NOT_OPEN / FULL_BOOKED, 410 SALE_CLOSED, 503 QUEUE_FULL\n        Note over C: tampilkan pesan, tombol nonaktif\n    else 429 TOO_MANY_REQUESTS\n        Note over C: tunggu data.retry_after, coba lagi\n    end\n\n    C->>SSE: GET sse_url (cookie queue_token, atau X-Queue-Token di mobile)\n    loop pesan broadcast yang sama untuk semua\n        SSE-->>C: nowServing, ratePerMin\n        Note over C: posisi = ticket_no - nowServing, estimasi = ceil(posisi / ratePerMin) menit\n    end\n    Note over C: nowServing >= ticket_no berarti giliran saya\n    C->>API: GET /events/{id}/queue/me\n    API-->>C: state\n    alt GRANTED\n        Note over C: simpan grant_token, buka Detail Ticket\n        C->>API: GET /events/{id}/tickets (X-Grant-Token)\n    else QUEUED (belum tertulis)\n        Note over C: coba lagi sekitar 1 detik\n    else SELECTING / HELD / AWAITING_PAYMENT / CONFIRMED\n        Note over C: rutekan sesuai state (lanjutkan booking, pilih pembayaran, pembayaran, atau sukses)\n    end\n```\n\n## Aturan klien\n\n| Situasi | Yang dilakukan klien |\n|---|---|\n| Stream putus atau event `reconnect` | Sambung ulang dengan jeda acak; tidak perlu join lagi |\n| Event `stale` | Tampilkan \"koneksi lambat\"; pesan berikutnya menghapusnya |\n| Event `status` | Perbarui tombol dan label sesuai `state` (OPEN, FULL_BOOKED) |\n| Event `sold-out` | Final: tampilkan \"Tiket sudah habis\" lalu **tutup stream** |\n| Stream tidak bisa dipakai | Fallback polling `GET /events/{id}/queue/serving`, interval dari `poll_tiers` |\n| Refresh halaman atau kembali dari aplikasi bank | `GET /queue/me`, **bukan** join |\n| Tombol \"Beli Tiket\" (`DIRECT`) | Tetap memanggil join, lalu stream; tampilkan \"Memproses...\" bukan layar antrian |\n| Web | Cookie `queue_token` dikirim otomatis, jangan simpan di localStorage |\n| Mobile | Simpan `queue_token` di secure storage, kirim `X-Queue-Token` |\n",
           "identityPattern": {
             "httpApi": {
               "type": "inherit",
@@ -6206,10 +6206,12 @@
                                 "QUEUED",
                                 "GRANTED",
                                 "SELECTING",
+                                "HELD",
                                 "AWAITING_PAYMENT",
                                 "CONFIRMED",
                                 "EXPIRED"
-                              ]
+                              ],
+                              "description": "Keadaan customer; menentukan halaman tujuan. QUEUED (mengantre) · GRANTED (giliran tiba, halaman tiket belum dibuka) · SELECTING (memilih tiket) · HELD (Bayar ditekan, belum mulai membayar) · AWAITING_PAYMENT (pembayaran berjalan; setelah payment_expires_at = memverifikasi, bukan kedaluwarsa) · CONFIRMED (lunas) · EXPIRED (selesai tanpa tiket). Lihat tabel pada deskripsi endpoint"
                             },
                             "ticket_no": {
                               "type": "integer",
@@ -6224,25 +6226,27 @@
                             "grant_token": {
                               "type": "string",
                               "example": "gt_abc123",
-                              "description": "GRANTED, SELECTING, AWAITING_PAYMENT. Kirim sebagai X-Grant-Token"
+                              "description": "GRANTED, SELECTING, HELD, AWAITING_PAYMENT. Kirim sebagai X-Grant-Token"
                             },
                             "booking_id": {
                               "type": "string",
-                              "example": "RB-00912"
+                              "example": "RB-00912",
+                              "description": "SELECTING, HELD, AWAITING_PAYMENT, CONFIRMED"
                             },
                             "booking_expires_at": {
                               "type": "string",
                               "format": "date-time",
-                              "description": "GRANTED, SELECTING"
+                              "description": "GRANTED, SELECTING: tenggat 5 menit memilih tiket"
                             },
                             "payment_expires_at": {
                               "type": "string",
                               "format": "date-time",
-                              "description": "AWAITING_PAYMENT"
+                              "description": "HELD, AWAITING_PAYMENT: tenggat 10 menit pembayaran (sejak tombol Bayar). Sudah lewat pada AWAITING_PAYMENT = sedang diverifikasi, bukan kedaluwarsa"
                             },
                             "payment_ref": {
                               "type": "string",
-                              "example": "pay_123"
+                              "example": "pay_123",
+                              "description": "Hanya AWAITING_PAYMENT"
                             },
                             "server_time": {
                               "type": "string",
@@ -6373,6 +6377,14 @@
                     "data": "{\"meta\":{\"code\":200,\"message\":\"Success\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{\"state\":\"SELECTING\",\"grant_token\":\"gt_abc123\",\"booking_id\":\"RB-00912\",\"booking_expires_at\":\"2026-11-10T02:05:00Z\",\"server_time\":\"2026-11-10T02:01:10Z\"}}"
                   },
                   {
+                    "name": "Kursi di-hold, belum bayar",
+                    "responseId": "123813032",
+                    "description": "",
+                    "oasKey": "",
+                    "oasExtensions": "",
+                    "data": "{\"meta\":{\"code\":200,\"message\":\"Success\",\"server_time\":\"2026-11-03T09:12:00.412Z\"},\"data\":{\"state\":\"HELD\",\"grant_token\":\"gt_abc123\",\"booking_id\":\"RB-00912\",\"payment_expires_at\":\"2026-11-10T02:14:00Z\",\"server_time\":\"2026-11-10T02:06:00Z\"}}"
+                  },
+                  {
                     "name": "Menunggu bayar",
                     "responseId": "123813032",
                     "description": "",
@@ -6412,7 +6424,7 @@
                   "additionalContentTypes": [],
                   "oasExtensions": ""
                 },
-                "description": "Re-entrancy.",
+                "description": "Re-entrancy. Satu-satunya endpoint yang dipanggil klien saat kembali (refresh, ganti tab, kembali dari aplikasi bank). Ini READ: tanpa CAPTCHA dan tidak dihitung terhadap batas join (api-contracts §3.3).\n\n## `data.state`\n\n| `state` | Arti | Field `data` | Yang dilakukan frontend |\n|---|---|---|---|\n| `QUEUED` | Masih mengantre, giliran belum tiba | `ticket_no`, `now_serving` | Waiting Room. `ticket_no ≤ now_serving` berarti grant sedang ditulis: ulangi setelah ±1 detik |\n| `GRANTED` | Giliran tiba, halaman tiket belum dibuka | `grant_token`, `booking_expires_at`, `server_time` | Simpan `grant_token`, buka Detail Ticket. Hitung mundur 5 menit **sudah berjalan** sejak giliran diberikan |\n| `SELECTING` | Sedang memilih tiket, belum menekan Bayar | `grant_token`, `booking_id`, `booking_expires_at`, `server_time` | Detail Ticket, hitung mundur dilanjutkan dari `booking_expires_at` |\n| `HELD` | Tombol Bayar sudah ditekan, kursi dan NIK di-hold, pembayaran belum dimulai (v2.27) | `grant_token`, `booking_id`, `payment_expires_at`, `server_time` | Payment Page (pilih metode). Hitung mundur 10 menit dari `payment_expires_at`, **bukan** `booking_expires_at` |\n| `AWAITING_PAYMENT` | Pembayaran sudah dimulai (VA / e-wallet), menunggu customer membayar | `grant_token`, `booking_id`, `payment_expires_at`, `payment_ref`, `server_time` | Payment Page, hitung mundur dari `payment_expires_at`, polling `GET /payments/{booking_id}/status`. **Lihat aturan verifikasi di bawah** |\n| `CONFIRMED` | Sudah lunas | `booking_id` | Halaman tiket / Success Page. Dijawab dari nisan bila token antrian sudah dihapus; respons itu juga menghapus cookie |\n| `EXPIRED` | Selesai tanpa tiket: giliran tidak dipakai (`LAPSED`), waktu memilih atau membayar habis (`EXPIRED`), atau dibatalkan (`ABANDONED`) | — | Layar kedaluwarsa. Join ulang mengembalikan keterlibatan lama, bukan tempat baru |\n\n## Aturan verifikasi pembayaran (`AWAITING_PAYMENT` setelah tenggat)\n\nBila `state` = `AWAITING_PAYMENT` dan `payment_expires_at` ≤ jam server (`server_time` + selisih jam), tenggat sudah lewat tetapi pembayaran detik terakhir masih bisa masuk (grace 30 detik, lalu backend memeriksa ke Midtrans). Frontend:\n\n1. tampilkan **\"Memverifikasi pembayaran…\"**, tanpa hitung mundur, **bukan** layar kedaluwarsa;\n2. sembunyikan \"ganti metode\" dan \"bayar lagi\";\n3. terus polling `GET /payments/{booking_id}/status` setiap 2–3 detik, melewati `payment_expires_at`: `PAID` → Success Page; `EXPIRED` atau `401 GRANT_TOKEN_INVALID` → panggil `/queue/me` lagi (menjawab `EXPIRED`) → layar kedaluwarsa.\n\nAturan yang sama berlaku saat hitung mundur di Payment Page mencapai 0, dan untuk `PENDING_PAYMENT` pada `GET /bookings/{booking_id}`.\n\n## Catatan\n\n- Hitung mundur selalu dari tenggat server (`booking_expires_at`, `payment_expires_at`) dan `server_time`; tenggat tidak pernah bergeser.\n- Field yang tidak tercantum untuk sebuah `state` tidak dikirim.\n- Tamu wajib `X-Device-Id`: perangkat lain → `401 DEVICE_MISMATCH` (cookie dihapus); tanpa header → `400 DEVICE_ID_REQUIRED`.",
                 "tags": [
                   "Queue"
                 ],

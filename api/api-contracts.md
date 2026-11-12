@@ -1,11 +1,16 @@
 # Rusuh Booking Tiket — API Contracts
 
-**Versi**: 2.26.0  
+**Versi**: 2.27.0  
 **Tanggal**: 12 November 2026  
 **Status**: Draft  
 **Base URL**: `https://api.my-rusuh.my.id` (tanpa versi di path untuk saat ini; v2.9). Stream: `https://events.my-rusuh.my.id`  
 **Selaras dengan**: ADR-005 (Keputusan Arsitektur Final — SSE + ECS Fargate), diamandemen ADR-006 (antrian) dan ADR-007 (serah-terima pembayaran WebView)  
 **Pasangan mesin**: `rusuh-booking-apidog.json` (Apidog) — **sumber kebenaran bentuk respons**. Dokumen ini menjelaskan perilaku dan alasannya; keduanya wajib sinkron. `rusuh-booking-openapi.yaml` diarsipkan (`archive/`) dan tidak dipelihara lagi
+
+> **v2.27** (aditif): `GET /queue/me` (§3.3) punya state baru **`HELD`**: tombol Bayar sudah ditekan, kursi di-hold,
+> pembayaran belum dimulai. Ia membawa `grant_token`, `booking_id`, `payment_expires_at` dan `server_time`. Sebelumnya
+> booking `HELD` dilaporkan sebagai `SELECTING` dengan tenggat 5 menit yang sudah lewat. Juga: `AWAITING_PAYMENT` dengan
+> `payment_expires_at` yang sudah lewat berarti **memverifikasi pembayaran**, bukan kedaluwarsa. Lihat Appendix C, v2.26 → v2.27.
 
 > **v2.26** (aditif, ADR-007): respons `POST /payments/{booking_id}/handoff` (§5.6) menambah **`payment_url`**,
 > URL WebView lengkap yang disusun backend. Aplikasi membukanya apa adanya setelah memeriksa awalannya.
@@ -1089,7 +1094,7 @@ X-Queue-Token: {queue_token}           # opsional (mobile): rejoin BR-09; web me
 > untuk event ini, mungkin dari perangkat lain. Keduanya memulihkan keterlibatan yang ada
 > dan menerbitkan ulang cookie untuknya; tidak ada keterlibatan kedua yang dibuat.
 >
-> `state` mengikuti nilai §3.3 (`QUEUED`, `GRANTED`, `SELECTING`, `AWAITING_PAYMENT`, …).
+> `state` mengikuti nilai §3.3 (`QUEUED`, `GRANTED`, `SELECTING`, `HELD`, `AWAITING_PAYMENT`, …).
 > Bila bukan `QUEUED`, field posisi diabaikan dan frontend merutekan sesuai `state` —
 > customer sudah melewati antrian.
 >
@@ -1427,12 +1432,21 @@ skenario kembali:
 | Masih mengantre | `{"state":"QUEUED","ticket_no":31842,"now_serving":31600}` | Waiting Room |
 | Giliran tiba | `{"state":"GRANTED","grant_token":"gt_abc123","booking_expires_at":"…","server_time":"…"}` | Detail Ticket, countdown **sudah berjalan** |
 | Sedang memilih | `{"state":"SELECTING","grant_token":"gt_abc123","booking_id":"RB-00912","booking_expires_at":"…","server_time":"…"}` | Detail Ticket, countdown dilanjutkan |
+| Kursi di-hold, belum bayar | `{"state":"HELD","grant_token":"gt_abc123","booking_id":"RB-00912","payment_expires_at":"…","server_time":"…"}` | Payment (pilih metode), countdown 10 menit dilanjutkan |
 | Menunggu bayar | `{"state":"AWAITING_PAYMENT","grant_token":"gt_abc123","booking_id":"RB-00912","payment_expires_at":"…","payment_ref":"pay_123","server_time":"…"}` | Payment, countdown dilanjutkan |
 | Selesai | `{"state":"CONFIRMED","booking_id":"RB-00912"}` | Halaman tiket |
 | Kedaluwarsa | `{"state":"EXPIRED"}` | Layar expired |
 
 > Grant pending atau lag replika menjawab `QUEUED` dengan `ticket_no ≤ now_serving` ("sebentar
 > lagi"); klien mengulang setelah 1 detik.
+>
+> **`AWAITING_PAYMENT` setelah tenggat berarti "memverifikasi", bukan kedaluwarsa** (v2.27). Booking
+> `PENDING_CANCELLATION` (tenggat lewat, grace 30 detik, lalu backend memeriksa ke Midtrans) dilaporkan sebagai
+> `AWAITING_PAYMENT` dengan `payment_expires_at` yang sudah lewat. Bila `payment_expires_at` ≤ jam server, klien
+> menampilkan "Memverifikasi pembayaran…" tanpa hitung mundur, menyembunyikan "ganti metode" dan "bayar lagi", dan
+> terus polling `GET /payments/{booking_id}/status`: `PAID` → Success Page; `EXPIRED` atau `401 GRANT_TOKEN_INVALID`
+> → `/queue/me` lagi (menjawab `EXPIRED`). Aturan yang sama berlaku saat hitung mundur Payment Page mencapai 0, dan
+> untuk `PENDING_PAYMENT` pada §4.4.
 >
 > **Tamu wajib mengirim `X-Device-Id`** (ADR-006 §8.9): token tamu hanya berlaku dari perangkat yang menerimanya, jadi perangkat lain
 > mendapat `401 DEVICE_MISMATCH` dan cookie `queue_token` dihapus; tanpa header itu `400 DEVICE_ID_REQUIRED`. Token akun hanya untuk akun
@@ -1451,7 +1465,7 @@ menghapusnya aktif:
 
 | Keadaan | Kredensial antrian | Akibat pada §3.3 |
 |---|---|---|
-| grant diterbitkan | **tetap** | pemulihan setelah grant justru bergantung padanya — `GRANTED`, `SELECTING`, `AWAITING_PAYMENT`, termasuk "kembali dari aplikasi bank" |
+| grant diterbitkan | **tetap** | pemulihan setelah grant justru bergantung padanya — `GRANTED`, `SELECTING`, `HELD`, `AWAITING_PAYMENT`, termasuk "kembali dari aplikasi bank" |
 | `LAPSED`, `EXPIRED` dari `SELECTING` (5 menit habis) | **hanya grant dihapus**; `token:{uuid}` dan `acct` tetap sampai jendela sale habis | `{"state":"EXPIRED"}`. Join ulang menemukan keterlibatan lama (`rejoined`), bukan tempat baru: tidak ada kesempatan kedua (ADR-005 Bagian 7) |
 | `EXPIRED` dari pembayaran, `ABANDONED` | dihapus | `{"state":"EXPIRED"}` — tidak ada apa pun untuk kembali ke sana |
 | `CONFIRMED` | dihapus, diganti **nisan** | tetap `{"state":"CONFIRMED","booking_id":…}` selama `SETTLED_TOMBSTONE_SECONDS` |
@@ -3356,7 +3370,7 @@ Legenda: ✅ terpenuhi di kontrak · ⚙️ di luar permukaan API (backend atau 
 |--------|-------|
 | Transport | REST polling (`GET /payments/{id}/status`) |
 | Interval | 2–3 detik |
-| Duration | Sampai `payment_expires_at` |
+| Duration | Sampai `payment_expires_at`, lalu **terus** selama status masih `PENDING` (verifikasi pembayaran, §3.3): berhenti pada `PAID`, `EXPIRED` atau `401` |
 
 **Mengapa polling, padahal tier SSE sudah ada.** Pilihan transport mengikuti **bentuk
 fan-out**, bukan ketersediaan infrastruktur.
@@ -3771,3 +3785,10 @@ Penyelarasan dengan ADR-005. Yang memutus kompatibilitas ditandai **BREAKING**.
 | # | Perubahan | Alasan |
 |---|---|---|
 | 134 | §5.6: respons `201` menambah `payment_url` (`{PAYMENT_WEB_URL}/m/orders/{booking_id}/pay#code={handoff_code}`); aplikasi membukanya apa adanya setelah memeriksa awalan `https://rush-my-ticket.my.id/m/orders/` | Route web dapat berubah tanpa rilis aplikasi mobile; satu tempat yang menyusun URL (ADR-007 aturan 3) |
+
+### v2.26 → v2.27
+
+| # | Perubahan | Alasan |
+|---|---|---|
+| 135 | §3.3, Apidog: state baru `HELD` pada `GET /queue/me` → `{grant_token, booking_id, payment_expires_at, server_time}`; `SELECTING` kini hanya untuk booking yang belum menekan Bayar | Booking `HELD` dulu dilaporkan sebagai `SELECTING` dengan `booking_expires_at` (5 menit sejak giliran). Customer yang me-refresh setelah menekan Bayar melihat "waktu habis" padahal kursinya masih di-hold sampai `payment_expires_at`. `grant_token` disertakan karena `POST /payments/{booking_id}` membutuhkannya |
+| 136 | §3.3, Appendix B, Apidog: aturan "`AWAITING_PAYMENT` setelah `payment_expires_at` = memverifikasi pembayaran" (tampilkan "Memverifikasi pembayaran…", tanpa hitung mundur, tanpa ganti metode / bayar lagi; polling berlanjut sampai `PAID`, `EXPIRED` atau `401`); Apidog `GET /queue/me` mendapat tabel arti setiap `state` | `PENDING_CANCELLATION` dilaporkan sebagai `AWAITING_PAYMENT` dengan tenggat yang sudah lewat; tanpa aturan ini klien menampilkan "waktu habis" kepada customer yang baru membayar. Tidak menambah state: Payment Page sudah butuh aturan yang sama saat hitung mundurnya mencapai 0 |
