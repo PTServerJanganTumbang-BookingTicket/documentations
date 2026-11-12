@@ -14254,7 +14254,7 @@
                             },
                             "payment_status": {
                               "type": "string",
-                              "description": "transaction_status milik GATEWAY (pending/settlement/deny/expire). BUKAN field status pada respons yang sama: status adalah posisi booking, ini hal terakhir yang dikatakan Midtrans tentang uangnya. Keduanya bisa berbeda.",
+                              "description": "transaction_status milik GATEWAY untuk notifikasi terakhir yang DITINDAKLANJUTI. BUKAN field status pada respons yang sama: status adalah posisi booking, ini status gateway di balik posisi itu. Notifikasi yang diterima tetapi tidak ditindaklanjuti tidak mengubahnya — khususnya capture dengan fraud_status selain accept (terotorisasi tetapi belum dibayar) tidak pernah muncul di sini, karena akan terbaca sebagai uang yang sudah diterima. Urutan lengkapnya ada di payment_events.",
                               "examples": [
                                 "settlement"
                               ]

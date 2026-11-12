@@ -2632,13 +2632,25 @@ X-Payment-Session: {payment_session}
 > | `payment_id` | `order_id` di Midtrans: `{booking_id}:{attempt}` |
 > | `method` | `bank_transfer` atau `gopay` (= `payment_type` Midtrans) |
 > | `total_amount` | `gross_amount` yang **dikirim** ke gateway, bukan penjumlahan ulang `booking_items` |
-> | `payment_status` | `transaction_status` milik GATEWAY — `pending`, `settlement`, `deny`, `expire` |
+> | `payment_status` | `transaction_status` milik GATEWAY untuk notifikasi terakhir yang **ditindaklanjuti** — `pending`, `settlement`, `capture`, `deny`, `expire` |
 > | `instructions` | Objek yang sama dengan §5.2: `{bank, va_number}` atau `{qr_url, deeplink_url}` |
 >
 > **`payment_status` bukan `status`.** `status` adalah posisi booking dalam siklus hidupnya;
-> `payment_status` adalah hal terakhir yang dikatakan Midtrans tentang uangnya. Keduanya bisa
-> berbeda — booking yang masih `PENDING` dengan `payment_status: "deny"` justru kasus yang
-> perlu terlihat tanpa membuka `payment_events`.
+> `payment_status` adalah status gateway **di balik** posisi itu. Keduanya bisa berbeda —
+> booking yang masih `PENDING` dengan `payment_status: "deny"` justru kasus yang perlu
+> terlihat tanpa membuka `payment_events`: penolakan itu diterapkan, dan customer boleh
+> mencoba lagi.
+>
+> **Bukan sekadar notifikasi terakhir.** Notifikasi yang diterima tetapi **tidak**
+> ditindaklanjuti tidak mengubah field ini. Yang paling penting: `capture` dengan
+> `fraud_status` selain `accept` adalah transaksi yang **terotorisasi tetapi belum dibayar**,
+> dan ia TIDAK pernah muncul sebagai `payment_status: "capture"` — nilai itu akan terbaca
+> sebagai uang yang sudah diterima, persis salah-baca yang ingin dihindari. Hal yang sama
+> berlaku untuk notifikasi yang datang terlambat pada booking yang sudah selesai: ia tidak
+> menimpa status di balik keadaan booking saat ini.
+>
+> Urutan lengkap setiap notifikasi — termasuk yang diabaikan — tetap tersimpan di
+> `payment_events`. Kolom pada booking adalah keadaan saat ini, bukan log.
 >
 > **`instructions` ada di sini supaya customer bisa menyelesaikan pembayaran.** §5.2
 > mengembalikannya sekali; tanpa field ini, customer yang menutup tab kehilangan nomor virtual
