@@ -1,12 +1,16 @@
 # Rusuh Booking Tiket — API Contracts
 
-**Versi**: 2.25.0  
+**Versi**: 2.26.0  
 **Tanggal**: 12 November 2026  
 **Status**: Draft  
 **Base URL**: `https://api.my-rusuh.my.id` (tanpa versi di path untuk saat ini; v2.9). Stream: `https://events.my-rusuh.my.id`  
 **Selaras dengan**: ADR-005 (Keputusan Arsitektur Final — SSE + ECS Fargate), diamandemen ADR-006 (antrian) dan ADR-007 (serah-terima pembayaran WebView)  
 **Pasangan mesin**: `rusuh-booking-apidog.json` (Apidog) — **sumber kebenaran bentuk respons**. Dokumen ini menjelaskan perilaku dan alasannya; keduanya wajib sinkron. `rusuh-booking-openapi.yaml` diarsipkan (`archive/`) dan tidak dipelihara lagi
 
+> **v2.26** (aditif, ADR-007): respons `POST /payments/{booking_id}/handoff` (§5.6) menambah **`payment_url`**,
+> URL WebView lengkap yang disusun backend. Aplikasi membukanya apa adanya setelah memeriksa awalannya.
+> Lihat Appendix C, v2.25 → v2.26.
+>
 > **v2.25** (aditif, ADR-007): **halaman pembayaran web di dalam WebView aplikasi mobile.** Dua endpoint baru:
 > **`POST /payments/{booking_id}/handoff`** (§5.6, aplikasi meminta kode sekali pakai 60 detik) dan
 > **`POST /payments/handoff/exchange`** (§5.7, halaman web menukar kode dengan `payment_session`). Header baru
@@ -2198,8 +2202,8 @@ Header dan aturannya sama dengan §4: `X-Grant-Token` wajib, `X-Device-Id` wajib
 `Authorization: Bearer` wajib bila grant milik akun login.
 
 **Halaman pembayaran di WebView aplikasi mobile (v2.25, ADR-007).** Aplikasi tidak memberikan kredensialnya ke
-halaman web. Ia meminta kode sekali pakai (§5.6), membuka WebView ke
-`https://rush-my-ticket.my.id/pay/{booking_id}#code={handoff_code}`, dan halaman itu menukar kode dengan
+halaman web. Ia meminta kode sekali pakai (§5.6), membuka WebView ke `payment_url` dari respons itu
+(`https://rush-my-ticket.my.id/m/orders/{booking_id}/pay#code={handoff_code}`), dan halaman itu menukar kode dengan
 `payment_session` (§5.7). Sesudahnya §4.4 dan §5.1–§5.4 dipanggil dengan **satu** header:
 
 ```
@@ -2755,6 +2759,7 @@ Authorization: Bearer {access_token}   # wajib bila grant milik akun login
   "data": {
     "booking_id": "RB-00912",
     "handoff_code": "hc_Q2h4b0x3TjVtV3pYc1RkV2xBZ0p1cG9mQ2t1dlhZ",
+    "payment_url": "https://rush-my-ticket.my.id/m/orders/RB-00912/pay#code=hc_Q2h4b0x3TjVtV3pYc1RkV2xBZ0p1cG9mQ2t1dlhZ",
     "expires_at": "2026-10-25T10:16:30Z"
   }
 }
@@ -2763,13 +2768,12 @@ Authorization: Bearer {access_token}   # wajib bila grant milik akun login
 | Field | Arti |
 |---|---|
 | `handoff_code` | Acak 256 bit, awalan `hc_`. **Sekali pakai**, berlaku 60 detik, hanya untuk `booking_id` ini |
+| `payment_url` | URL WebView lengkap (v2.26): `{PAYMENT_WEB_URL}/m/orders/{booking_id}/pay#code={handoff_code}`, disusun backend dari setelan per environment |
 | `expires_at` | Batas tukar kode (§5.7). Aplikasi membuka WebView segera; bila lewat, minta kode baru |
 
-Aplikasi lalu membuka WebView ke:
-
-```
-https://rush-my-ticket.my.id/pay/{booking_id}#code={handoff_code}
-```
+Aplikasi membuka **`payment_url` apa adanya**, setelah memastikan URL itu diawali
+`https://rush-my-ticket.my.id/m/orders/`. Aplikasi tidak menyusun URL sendiri, jadi perubahan route web tidak
+memerlukan rilis aplikasi.
 
 Kode **wajib** di `#fragment`, tidak di query string: fragment tidak dikirim ke server, jadi tidak tercatat di log
 maupun `Referer`. Meminta kode baru tidak membatalkan kode lama; masing-masing tetap sekali pakai.
@@ -2825,7 +2829,7 @@ karena grant-nya sudah dihapus.
 ### 5.7 Exchange Payment Handoff Code (WebView)
 
 Halaman pembayaran web di WebView menukar kode dari §5.6 dengan `payment_session` (ADR-007). UI: saat
-`/pay/{booking_id}` dimuat dengan `#code=`.
+`/m/orders/{booking_id}/pay` dimuat dengan `#code=`.
 
 **Endpoint**: `POST /payments/handoff/exchange`
 
@@ -2841,7 +2845,7 @@ Halaman pembayaran web di WebView menukar kode dari §5.6 dengan `payment_sessio
 
 | Field | Wajib | Aturan |
 |---|---|---|
-| `booking_id` | ✅ | Dari path halaman `/pay/{booking_id}`; harus sama dengan booking kode |
+| `booking_id` | ✅ | Dari path halaman `/m/orders/{booking_id}/pay`; harus sama dengan booking kode |
 | `handoff_code` | ✅ | Dari `#code=`; awalan `hc_` |
 
 **Response** (200):
@@ -3272,7 +3276,7 @@ Legenda: ✅ terpenuhi di kontrak · ⚙️ di luar permukaan API (backend atau 
 | SSE Auth | `queue_token` cookie (web) atau `X-Queue-Token` (mobile) divalidasi saat koneksi stream. `Authorization` tidak dipakai di sini |
 | **Handoff code (v2.25)** | Opaque acak 256 bit (`hc_…`), `paymenthandoff:{code}` di Redis, **60 detik, sekali pakai** (dibaca dan dihapus sekaligus), terikat satu `booking_id`. Diterbitkan §5.6 setelah grant guard lengkap; dibawa ke WebView di `#fragment` (tidak terkirim ke server, tidak masuk log / `Referer`), ditukar di §5.7 (ADR-007) |
 | **Payment session (v2.25)** | Opaque acak 256 bit (`ps_…`), header `X-Payment-Session`, `paymentsession:{session}` di Redis berisi `grant_token`. Hanya §4.4 dan §5.1–§5.4 untuk satu booking. Setiap request memeriksa `grant:{token}` masih ada, jadi session mati bersama grant. Disimpan di memori halaman saja (tanpa cookie → tanpa CSRF). Kredensial ini **pengganti** grant di WebView, tidak pernah bersamaan dengannya |
-| **WebView pembayaran (v2.25)** | Dikunci ke `https://rush-my-ticket.my.id`; domain lain dan deeplink GoPay dibuka di luar aplikasi; kembali lewat App Link / Universal Link. Pesan `postMessage` dari halaman hanya sinyal: aplikasi selalu memastikan status lewat `GET /bookings/{id}` (ADR-007) |
+| **WebView pembayaran (v2.25)** | Dikunci ke `https://rush-my-ticket.my.id`; navigasi ke `gojek.link` / `gopay://` dibuka di luar aplikasi, host lain diblokir; kembali dari GoPay lewat app switcher (tanpa App Link di POC). Pesan `postMessage` dari halaman hanya sinyal: aplikasi selalu memastikan status lewat `GET /bookings/{id}` (ADR-007) |
 
 ---
 
@@ -3761,3 +3765,9 @@ Penyelarasan dengan ADR-005. Yang memutus kompatibilitas ditandai **BREAKING**.
 | 131 | §5.7 baru: `POST /payments/handoff/exchange` `{booking_id, handoff_code}` → `200 {booking_id, payment_session, expires_at}`; kode habis pada percobaan pertama | Pola *authorization code*: kode yang tersalin tidak berguna setelah dipakai atau 60 detik |
 | 132 | §4.4, §5 (intro, §5.1–§5.4): header `X-Payment-Session` sebagai **pengganti** `X-Grant-Token` (+ `X-Device-Id` / `Authorization`); session bersama `X-Grant-Token` → `400 VALIDATION_ERROR`; booking lain → `404 NOT_FOUND` | WebView hanya memegang kredensial untuk satu booking yang mati bersama grant, bukan sesi akun penuh |
 | 133 | Appendix A: `HANDOFF_CODE_INVALID`, `PAYMENT_SESSION_INVALID`; §7 tabel error per endpoint; §9 tiga baris keamanan | Kode baru dari §5.6, §5.7 |
+
+### v2.25 → v2.26
+
+| # | Perubahan | Alasan |
+|---|---|---|
+| 134 | §5.6: respons `201` menambah `payment_url` (`{PAYMENT_WEB_URL}/m/orders/{booking_id}/pay#code={handoff_code}`); aplikasi membukanya apa adanya setelah memeriksa awalan `https://rush-my-ticket.my.id/m/orders/` | Route web dapat berubah tanpa rilis aplikasi mobile; satu tempat yang menyusun URL (ADR-007 aturan 3) |

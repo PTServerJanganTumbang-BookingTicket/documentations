@@ -14702,7 +14702,13 @@
                             "handoff_code": {
                               "type": "string",
                               "example": "hc_Q2h4b0x3TjVtV3pYc1RkV2xBZ0p1cG9mQ2t1dlhZ",
-                              "description": "Acak 256 bit, sekali pakai, 60 detik, hanya untuk booking_id ini. Dibawa ke WebView di #fragment: https://rush-my-ticket.my.id/pay/{booking_id}#code={handoff_code}"
+                              "description": "Acak 256 bit, sekali pakai, 60 detik, hanya untuk booking_id ini. Sudah termasuk di payment_url."
+                            },
+                            "payment_url": {
+                              "type": "string",
+                              "format": "uri",
+                              "example": "https://rush-my-ticket.my.id/m/orders/RB-00912/pay#code=hc_Q2h4b0x3TjVtV3pYc1RkV2xBZ0p1cG9mQ2t1dlhZ",
+                              "description": "URL WebView lengkap (v2.26): {PAYMENT_WEB_URL}/m/orders/{booking_id}/pay#code={handoff_code}, disusun backend. Aplikasi membukanya apa adanya setelah memastikan diawali https://rush-my-ticket.my.id/m/orders/. Kode ada di #fragment, tidak terkirim ke server."
                             },
                             "expires_at": {
                               "type": "string",
@@ -14714,11 +14720,13 @@
                           "x-apidog-orders": [
                             "booking_id",
                             "handoff_code",
+                            "payment_url",
                             "expires_at"
                           ],
                           "required": [
                             "booking_id",
                             "handoff_code",
+                            "payment_url",
                             "expires_at"
                           ]
                         }
@@ -15611,7 +15619,7 @@
                 "responseExamples": [
                   {
                     "name": "Created",
-                    "data": "{\"meta\": {\"code\": 201, \"message\": \"Handoff code created\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {\"booking_id\": \"RB-00912\", \"handoff_code\": \"hc_Q2h4b0x3TjVtV3pYc1RkV2xBZ0p1cG9mQ2t1dlhZ\", \"expires_at\": \"2026-10-25T10:16:30Z\"}}",
+                    "data": "{\"meta\": {\"code\": 201, \"message\": \"Handoff code created\", \"server_time\": \"2026-11-03T09:12:00.412Z\"}, \"data\": {\"booking_id\": \"RB-00912\", \"handoff_code\": \"hc_Q2h4b0x3TjVtV3pYc1RkV2xBZ0p1cG9mQ2t1dlhZ\", \"payment_url\": \"https://rush-my-ticket.my.id/m/orders/RB-00912/pay#code=hc_Q2h4b0x3TjVtV3pYc1RkV2xBZ0p1cG9mQ2t1dlhZ\", \"expires_at\": \"2026-10-25T10:16:30Z\"}}",
                     "responseId": "961000001",
                     "description": "",
                     "oasKey": "",
@@ -15722,7 +15730,7 @@
                     "oasExtensions": ""
                   }
                 ],
-                "description": "Aplikasi mobile meminta kode sekali pakai (60 detik) untuk membuka halaman pembayaran web di WebView (ADR-007, api-contracts §5.6, v2.25). Kredensial grant lengkap wajib; X-Payment-Session tidak diterima. Tanpa body. Status yang diterima: HELD, AWAITING_PAYMENT, PENDING_CANCELLATION. Buka WebView ke https://rush-my-ticket.my.id/pay/{booking_id}#code={handoff_code} (fragment, bukan query).",
+                "description": "Aplikasi mobile meminta kode sekali pakai (60 detik) untuk membuka halaman pembayaran web di WebView (ADR-007, api-contracts §5.6, v2.25; payment_url v2.26). Kredensial grant lengkap wajib; X-Payment-Session tidak diterima. Tanpa body. Status yang diterima: HELD, AWAITING_PAYMENT, PENDING_CANCELLATION. Respons membawa payment_url (https://rush-my-ticket.my.id/m/orders/{booking_id}/pay#code={handoff_code}); aplikasi membukanya apa adanya setelah memastikan diawali https://rush-my-ticket.my.id/m/orders/ (kode di fragment, bukan query).",
                 "tags": [
                   "Payment"
                 ],
