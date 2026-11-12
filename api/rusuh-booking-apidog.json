@@ -279,6 +279,60 @@
                     "contentType": "json",
                     "mediaType": "application/json",
                     "oasExtensions": ""
+                  },
+                  {
+                    "id": "EmailNotRegistered",
+                    "code": 404,
+                    "name": "Email not registered",
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "examples": [
+                                404
+                              ]
+                            },
+                            "message": {
+                              "type": "string",
+                              "examples": [
+                                "no account is registered for this email"
+                              ]
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "examples": [
+                                "EMAIL_NOT_REGISTERED"
+                              ]
+                            },
+                            "server_time": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ]
+                        },
+                        "data": {
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "description": "Tidak ada akun untuk alamat ini: tidak ada token yang dibuat dan tidak ada email yang dikirim (v2.28). CATATAN: status ini membuat endpoint dapat dipakai untuk menebak alamat mana yang terdaftar. Konsekuensi yang disadari; rate limiter (5/jam per alamat) satu-satunya penahan dan dievaluasi LEBIH DULU, sehingga pemanggil yang kena limit mendapat 429 tanpa tahu apakah alamatnya ada.",
+                    "contentType": "json",
+                    "mediaType": "application/json",
+                    "oasExtensions": ""
                   }
                 ],
                 "responseExamples": [
@@ -429,6 +483,60 @@
                     "contentType": "json",
                     "mediaType": "application/json",
                     "oasExtensions": ""
+                  },
+                  {
+                    "id": "EmailNotRegisteredResend",
+                    "code": 404,
+                    "headers": [],
+                    "jsonSchema": {
+                      "type": "object",
+                      "properties": {
+                        "meta": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "integer",
+                              "examples": [
+                                404
+                              ]
+                            },
+                            "message": {
+                              "type": "string",
+                              "examples": [
+                                "no account is registered for this email"
+                              ]
+                            },
+                            "error_code": {
+                              "type": "string",
+                              "examples": [
+                                "EMAIL_NOT_REGISTERED"
+                              ]
+                            },
+                            "server_time": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "code",
+                            "message",
+                            "error_code",
+                            "server_time"
+                          ]
+                        },
+                        "data": {
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "meta",
+                        "data"
+                      ]
+                    },
+                    "description": "Tidak ada akun untuk alamat ini: tidak ada token yang dibuat dan tidak ada email yang dikirim (v2.28). CATATAN: status ini membuat endpoint dapat dipakai untuk menebak alamat mana yang terdaftar. Konsekuensi yang disadari; rate limiter (5/jam per alamat) satu-satunya penahan dan dievaluasi LEBIH DULU, sehingga pemanggil yang kena limit mendapat 429 tanpa tahu apakah alamatnya ada.",
+                    "contentType": "json",
+                    "mediaType": "application/json",
+                    "oasExtensions": "",
+                    "name": "Email not registered"
                   }
                 ],
                 "responseExamples": [
@@ -536,7 +644,7 @@
                       {
                         "name": "Set-Cookie",
                         "type": "string",
-                        "description": "access_token cookie",
+                        "description": "access_token; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=expires_in. Dikirim BERSAMA access_token di body — keduanya sengaja dipertahankan (v2.28). Respons yang sama juga menghapus cookie magic_token (Max-Age=-1): token itu sekali pakai, dan membiarkannya terpasang berarti kredensial mati ikut terkirim pada setiap request berikutnya ke origin ini.",
                         "schema": {
                           "type": "string"
                         },
@@ -14122,6 +14230,47 @@
                               "format": "date-time",
                               "example": "2026-10-23T13:25:00Z",
                               "description": "Tenggat pembayaran (payment_expires_at). Klien menghitung mundur dari sini dengan jam yang dikoreksi server_time. Hanya saat PENDING"
+                            },
+                            "payment_id": {
+                              "type": "string",
+                              "description": "order_id di Midtrans: {booking_id}:{attempt}.",
+                              "examples": [
+                                "RB-00912:1"
+                              ]
+                            },
+                            "method": {
+                              "type": "string",
+                              "description": "bank_transfer atau gopay (= payment_type Midtrans).",
+                              "examples": [
+                                "bank_transfer"
+                              ]
+                            },
+                            "total_amount": {
+                              "type": "integer",
+                              "description": "gross_amount yang DIKIRIM ke gateway, bukan penjumlahan ulang booking_items.",
+                              "examples": [
+                                3000000
+                              ]
+                            },
+                            "payment_status": {
+                              "type": "string",
+                              "description": "transaction_status milik GATEWAY (pending/settlement/deny/expire). BUKAN field status pada respons yang sama: status adalah posisi booking, ini hal terakhir yang dikatakan Midtrans tentang uangnya. Keduanya bisa berbeda.",
+                              "examples": [
+                                "settlement"
+                              ]
+                            },
+                            "instructions": {
+                              "type": "object",
+                              "description": "Objek yang sama dengan §5.2: {bank, va_number} untuk transfer, {qr_url, deeplink_url} untuk e-wallet. Ada di sini supaya customer yang menutup tab tidak kehilangan nomor virtual account.",
+                              "additionalProperties": {
+                                "type": "string"
+                              },
+                              "examples": [
+                                {
+                                  "bank": "bca",
+                                  "va_number": "8801234567890"
+                                }
+                              ]
                             }
                           },
                           "x-apidog-orders": [

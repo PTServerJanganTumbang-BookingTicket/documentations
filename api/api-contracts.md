@@ -1,12 +1,28 @@
 # Rusuh Booking Tiket — API Contracts
 
-**Versi**: 2.27.0  
+**Versi**: 2.28.0  
 **Tanggal**: 12 November 2026  
 **Status**: Draft  
 **Base URL**: `https://api.my-rusuh.my.id` (tanpa versi di path untuk saat ini; v2.9). Stream: `https://events.my-rusuh.my.id`  
 **Selaras dengan**: ADR-005 (Keputusan Arsitektur Final — SSE + ECS Fargate), diamandemen ADR-006 (antrian) dan ADR-007 (serah-terima pembayaran WebView)  
 **Pasangan mesin**: `rusuh-booking-apidog.json` (Apidog) — **sumber kebenaran bentuk respons**. Dokumen ini menjelaskan perilaku dan alasannya; keduanya wajib sinkron. `rusuh-booking-openapi.yaml` diarsipkan (`archive/`) dan tidak dipelihara lagi
 
+> **v2.28** — dua perubahan, keduanya breaking bagi klien.
+>
+> **(1) §1.1 dan §1.2**: magic link hanya diterbitkan untuk alamat yang **sudah terdaftar**.
+> Alamat tak dikenal dijawab `404 EMAIL_NOT_REGISTERED`; tidak ada token, tidak ada email.
+> Ini **membalik** keputusan non-enumerasi sebelumnya: endpoint kini menjadi oracle untuk
+> menebak alamat mana yang punya akun, dan rate limiter adalah satu-satunya yang menahannya.
+> Limiter sengaja dievaluasi SEBELUM pencarian akun. Yang ditukar: sebelumnya alamat tak
+> terdaftar tetap menerima email berisi tautan yang kemudian gagal saat ditukar.
+>
+> **(2) §5.4**: respons memuat detail pembayaran — `payment_id`, `method`, `total_amount`,
+> `payment_status`, dan `instructions`. Sebelumnya endpoint ini tidak bisa menjawab apa pun
+> tentang pembayarannya sendiri: nomor virtual account hanya dikembalikan sekali oleh §5.2,
+> sehingga customer yang menutup tab tidak punya cara mendapatkannya kembali. Didukung
+> migrasi `0017` dan `0018`. `payment_status` adalah `transaction_status` milik gateway dan
+> **bukan** `status` pada respons yang sama. Lihat Appendix C, v2.27 → v2.28.
+>
 > **v2.27** (aditif): `GET /queue/me` (§3.3) punya state baru **`HELD`**: tombol Bayar sudah ditekan, kursi di-hold,
 > pembayaran belum dimulai. Ia membawa `grant_token`, `booking_id`, `payment_expires_at` dan `server_time`. Sebelumnya
 > booking `HELD` dilaporkan sebagai `SELECTING` dengan tenggat 5 menit yang sudah lewat. Juga: `AWAITING_PAYMENT` dengan
@@ -271,6 +287,14 @@ Mengirim link login ke email. UI: "Send Login Link" button.
   "data": {}
 }
 ```
+
+**Response** (404 - `EMAIL_NOT_REGISTERED`): tidak ada akun untuk alamat ini. Tidak ada
+token yang dibuat dan tidak ada email yang dikirim.
+
+> **Endpoint ini membocorkan alamat mana yang terdaftar.** Itu konsekuensi yang disadari
+> dari v2.28, bukan kelalaian: status 404 versus 200 cukup untuk menelusuri daftar alamat.
+> Rate limiter (§1.1, 5/jam per alamat) adalah satu-satunya penahan, dan ia dievaluasi
+> lebih dulu — pemanggil yang kena limit mendapat 429 tanpa pernah tahu apakah alamatnya ada.
 
 **Response** (429 - Rate Limited):
 ```json
@@ -2567,7 +2591,12 @@ X-Payment-Session: {payment_session}
   "data": {
     "status": "PENDING",
     "expires_at": "2026-10-23T13:25:00Z",
-    "server_time": "2026-10-23T13:22:00Z"
+    "server_time": "2026-10-23T13:22:00Z",
+    "payment_id": "RB-00912:1",
+    "method": "bank_transfer",
+    "total_amount": 3000000,
+    "payment_status": "pending",
+    "instructions": { "bank": "bca", "va_number": "8801234567890" }
   }
 }
 ```
@@ -2582,10 +2611,38 @@ X-Payment-Session: {payment_session}
   "data": {
     "status": "PAID",
     "paid_at": "2026-10-23T13:23:00Z",
-    "redirect_url": "/bookings/RB-00912/success"
+    "redirect_url": "/bookings/RB-00912/success",
+    "payment_id": "RB-00912:1",
+    "method": "bank_transfer",
+    "total_amount": 3000000,
+    "payment_status": "settlement",
+    "instructions": { "bank": "bca", "va_number": "8801234567890" }
   }
 }
 ```
+
+> **Detail pembayaran (v2.28).** Lima field berikut muncul pada **setiap** status begitu
+> sebuah charge pernah terjadi, termasuk status terminal: yang membaca struk dan yang
+> membaca penolakan sama-sama perlu tahu berapa dan dengan apa. Semuanya `omitempty` —
+> booking yang belum pernah di-charge tidak memuatnya sama sekali, karena "tidak ditagih"
+> dan "ditagih nol" adalah dua klaim berbeda.
+>
+> | Field | Isi |
+> |---|---|
+> | `payment_id` | `order_id` di Midtrans: `{booking_id}:{attempt}` |
+> | `method` | `bank_transfer` atau `gopay` (= `payment_type` Midtrans) |
+> | `total_amount` | `gross_amount` yang **dikirim** ke gateway, bukan penjumlahan ulang `booking_items` |
+> | `payment_status` | `transaction_status` milik GATEWAY — `pending`, `settlement`, `deny`, `expire` |
+> | `instructions` | Objek yang sama dengan §5.2: `{bank, va_number}` atau `{qr_url, deeplink_url}` |
+>
+> **`payment_status` bukan `status`.** `status` adalah posisi booking dalam siklus hidupnya;
+> `payment_status` adalah hal terakhir yang dikatakan Midtrans tentang uangnya. Keduanya bisa
+> berbeda — booking yang masih `PENDING` dengan `payment_status: "deny"` justru kasus yang
+> perlu terlihat tanpa membuka `payment_events`.
+>
+> **`instructions` ada di sini supaya customer bisa menyelesaikan pembayaran.** §5.2
+> mengembalikannya sekali; tanpa field ini, customer yang menutup tab kehilangan nomor virtual
+> account dan tidak punya cara mendapatkannya kembali.
 
 > **Di WebView pembayaran (ADR-007):** `redirect_url` diabaikan. Halaman mengirim
 > `postMessage({type: "PAYMENT_DONE", booking_id})` ke aplikasi, yang memastikan status lewat
@@ -3831,3 +3888,12 @@ Penyelarasan dengan ADR-005. Yang memutus kompatibilitas ditandai **BREAKING**.
 |---|---|---|
 | 137 | §3.3, Apidog: state baru `HELD` pada `GET /queue/me` → `{grant_token, booking_id, payment_expires_at, server_time}`; `SELECTING` kini hanya untuk booking yang belum menekan Bayar | Booking `HELD` dulu dilaporkan sebagai `SELECTING` dengan `booking_expires_at` (5 menit sejak giliran). Customer yang me-refresh setelah menekan Bayar melihat "waktu habis" padahal kursinya masih di-hold sampai `payment_expires_at`. `grant_token` disertakan karena `POST /payments/{booking_id}` membutuhkannya |
 | 138 | §3.3, Appendix B, Apidog: aturan "`AWAITING_PAYMENT` setelah `payment_expires_at` = memverifikasi pembayaran" (tampilkan "Memverifikasi pembayaran…", tanpa hitung mundur, tanpa ganti metode / bayar lagi; polling berlanjut sampai `PAID`, `EXPIRED` atau `401`); Apidog `GET /queue/me` mendapat tabel arti setiap `state` | `PENDING_CANCELLATION` dilaporkan sebagai `AWAITING_PAYMENT` dengan tenggat yang sudah lewat; tanpa aturan ini klien menampilkan "waktu habis" kepada customer yang baru membayar. Tidak menambah state: Payment Page sudah butuh aturan yang sama saat hitung mundurnya mencapai 0 |
+
+### v2.27 → v2.28
+
+| # | Perubahan | Alasan |
+|---|---|---|
+| 139 | **BREAKING** §1.1, §1.2, Apidog: magic link hanya untuk alamat terdaftar; alamat tak dikenal dijawab `404 EMAIL_NOT_REGISTERED` tanpa token dan tanpa email | Sebelumnya alamat tak terdaftar tetap menerima email berisi tautan yang kemudian gagal ditukar dengan "no account exists" — endpoint itu menjadi cara mengirim surat kepada orang yang tidak pernah mendaftar. **Harga yang dibayar disebut terang-terangan**: ini membalik keputusan non-enumerasi dan menjadikan endpoint oracle untuk menebak alamat terdaftar. Rate limiter satu-satunya penahan, karena itu ia dievaluasi lebih dulu — pemanggil yang kena limit mendapat 429 tanpa tahu apakah alamatnya ada. Keputusan diambil setelah konsekuensinya disampaikan |
+| 140 | **BREAKING** §5.4, Apidog: respons menambah `payment_id`, `method`, `total_amount`, `payment_status`, `instructions`, semuanya `omitempty` | Endpoint ini tidak bisa menjawab apa pun tentang pembayarannya sendiri. `GetOwned` hanya membaca baris `bookings` dan tidak pernah menjumlahkan `booking_items`, sehingga totalnya nol di jalur itu, dan status gateway hanya ada di dalam `payment_events.raw` yang tidak dibaca endpoint mana pun. Yang paling merugikan customer: nomor virtual account hanya dikembalikan sekali oleh §5.2, jadi menutup tab berarti kehilangan cara membayar. Didukung migrasi `0017` (`payment_amount`, `payment_status`) dan `0018` (`payment_instructions`) |
+| 141 | §5.4: `payment_status` dinyatakan **berbeda** dari `status` pada respons yang sama | `status` adalah posisi booking dalam siklus hidupnya, `payment_status` adalah hal terakhir yang dikatakan Midtrans tentang uangnya. Keduanya bisa berbeda, dan booking `PENDING` dengan `payment_status: "deny"` justru kasus yang perlu terlihat tanpa membuka `payment_events` |
+
