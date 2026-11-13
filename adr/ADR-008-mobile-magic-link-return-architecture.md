@@ -1,7 +1,7 @@
 # ADR-008: Mobile Magic-Link Return Architecture
 
-**Status**: Proposed — menunggu review tim
-**Tanggal**: 7 November 2026 (Revised 12 November 2026)
+**Status**: Pending (Deferred) — ditunda ke iterasi berikutnya; lihat "Catatan Penundaan" di bawah
+**Tanggal**: 7 November 2026 (Revised 12 November 2026; Deferred 13 November 2026)
 **Decider**: Rosyid (architecture approval boundary)
 **Terkait**: GH-43 Mobile Magic-Link Integration, ADR-0023 (fe-web), api-contracts.md §1.3
 **Dokumen Referensi**: `fe-mobile-rusuh-war-ticketing/.kiro/specs/GH-43-mobile-magic-link-integration/`, `api/api-contracts.md` v2.9.0, `fe-web-rusuh-war-ticketing/src/core/data/account/account-gateway.service.ts`
@@ -15,6 +15,19 @@
 | **Architecture Direction** | Web-Mediated Return (Opsi B) |
 | **Handoff Contract (Web FE → Mobile FE)** | **UNRESOLVED** |
 | **Decision Completeness** | **INCOMPLETE** |
+| **ADR Status** | **PENDING (DEFERRED)** — ditunda 13 November 2026 (H-1 tenggat penilaian) |
+
+---
+
+## Catatan Penundaan (Deferral Note)
+
+ADR ini ditunda menjadi **Pending (Deferred)** pada 13 November 2026 (H-1 tenggat penilaian semestral), dengan alasan:
+
+1. **Keterbatasan sumber daya menjelang tenggat.** Kapasitas tim yang tersisa diprioritaskan untuk menyelesaikan P0 mobile hardening (GH-51–GH-57) sebelum deadline, sehingga tidak ada bandwidth untuk menuntaskan kontrak handoff LEG B.
+2. **Keputusan memerlukan input lintas tim yang tidak dapat dijadwalkan tepat waktu.** Pertanyaan terbuka Q1–Q6 menunggu keterlibatan Infra (hosting AASA/DAL), Web FE (deteksi mobile dan UX halaman handoff), serta penerimaan risiko keamanan LEG B oleh Rosyid; koordinasi lintas tim tersebut tidak realistis dilakukan pada H-1.
+3. **Tidak ada dampak fungsional bagi pengguna.** LEG A (email → web) telah terbukti berjalan di produksi dan login magic-link tetap berfungsi penuh melalui alur web; yang ditunda adalah keputusan arsitektur, bukan fitur yang sudah berjalan.
+
+Penundaan ini bukan penolakan terhadap Opsi B (Web-Mediated Return) — arah arsitektur tersebut tetap menjadi kandidat yang diutamakan dan pembahasan ADR ini dilanjutkan pada iterasi/semester berikutnya.
 
 ---
 
@@ -378,8 +391,8 @@ GH-43 R4 dan GH-7 R4 tetap **BLOCKED** sampai alternatif arsitektur ditetapkan.
 | **Architecture Direction** | Web-Mediated Return (Opsi B) — PROPOSED |
 | **LEG B Handoff Contract** | **UNRESOLVED** |
 | **Decision Completeness** | **INCOMPLETE** |
-| **ADR Status** | **Proposed** — Rosyid remains approval boundary |
+| **ADR Status** | **Pending (Deferred 2026-11-13)** — keterbatasan sumber daya dan input lintas tim pada H-1 tenggat penilaian; Rosyid remains approval boundary |
 
 **GH-43 R4 status: DOR_BLOCKED** — requires LEG B handoff contract resolution.
 
-**GH-7 status: PARKED** — requires GH-43 contract completion.
+**GH-7 status: PARKED (DEFERRED)** — requires GH-43 contract completion; ditunda bersama ADR-008 ke iterasi berikutnya.
