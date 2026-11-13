@@ -64,6 +64,8 @@ customer sees is what is true.
 
 ## 2. System Context
 
+### 2.1 Overview
+
 ```mermaid
 flowchart TB
     subgraph Customers
@@ -93,6 +95,66 @@ flowchart TB
     MID -->|webhook| EDGE
     APP -->|fail-open| CAP
     APP --> SES
+```
+
+### 2.2 Services
+
+REST calls go through API Gateway to the Lambda services; the queue stream goes through the ALB to `sse-server`.
+
+```mermaid
+flowchart LR
+    subgraph Customers
+        WEB[Web · Next.js]
+        MOB[Mobile · Expo / React Native]
+    end
+
+    subgraph AWS["Rusuh Booking System (AWS)"]
+        subgraph REST["REST: API Gateway HTTP API"]
+            APIGW[API Gateway]
+            EV[events]
+            QU[queue]
+            BK[booking]
+            NV[nik-verify]
+            PA[payment-api]
+            US[user]
+        end
+        subgraph STREAM["Stream: Application Load Balancer"]
+            ALB[ALB]
+            SSE[sse-server · ECS]
+        end
+        subgraph WORKERS["Background"]
+            CTL[admission-ctl · ECS]
+            OP[outbox-publisher]
+            NO[notification]
+        end
+        R[(ElastiCache Redis)]
+        DB[(Aurora PostgreSQL)]
+        SQS[[SQS + DLQ]]
+        CW[CloudWatch<br/>dashboards · alarms]
+    end
+
+    DUK[Dukcapil API]
+    MID[Midtrans Core API<br/>VA · GoPay]
+    CAP[Cloudflare Turnstile]
+    SES[Amazon SES]
+
+    WEB & MOB --> APIGW
+    WEB & MOB -->|SSE| ALB
+    MOB -->|WebView: web payment page| WEB
+    APIGW --> EV & QU & BK & NV & PA & US
+    ALB --> SSE
+    QU -->|fail-open| CAP
+    BK -->|invoke| NV
+    NV -->|fail-closed| DUK
+    PA -->|charge · cancel · status| MID
+    MID -->|webhook| APIGW
+    CTL -->|pub/sub via Redis| SSE
+    CTL -->|invoke: overdue payments| PA
+    EV & QU & BK & NV & PA & US & CTL --> R
+    EV & QU & BK & NV & PA & US & CTL --> DB
+    OP & NO -->|lease · dedupe| R
+    DB -->|outbox rows| OP --> SQS --> NO --> SES
+    REST & STREAM & WORKERS -.-> CW
 ```
 
 ---
@@ -217,32 +279,46 @@ so the button is decided server-side (FR-03e).
 sequenceDiagram
     autonumber
     actor C as Customer
-    participant API as API Gateway + Lambdas
+    participant APIGW as API Gateway
+    participant EV as events
+    participant QU as queue
+    participant ALB as ALB
     participant SSE as sse-server
     participant CTL as admission-ctl
+    participant BK as booking
+    participant PA as payment-api
     participant MT as Midtrans
-    participant N as Email
+    participant N as outbox → SES
 
-    C->>API: GET /events (queue_state, display.enabled)
-    C->>API: POST /events/{id}/queue/join (CAPTCHA token)
-    API-->>C: ticket_no, queue_token
-    C->>SSE: GET …/queue/stream (X-Queue-Token)
+    C->>APIGW: GET /events
+    APIGW->>EV: list
+    EV-->>C: queue_state, display.enabled
+    C->>APIGW: POST /events/{id}/queue/join (CAPTCHA token)
+    APIGW->>QU: join
+    QU-->>C: ticket_no, queue_token
+    C->>ALB: GET …/queue/stream (X-Queue-Token)
+    ALB->>SSE: open stream
     loop every 500 ms
         CTL->>CTL: admit if room and stock
         CTL-->>SSE: {nowServing, state, ratePerMin, serverTime}
         SSE-->>C: same message to everyone
     end
     Note over C: position = ticket_no − nowServing
-    C->>API: GET …/queue/me (when nowServing ≥ ticket_no)
-    API-->>C: grant_token (5-minute booking clock starts)
-    C->>API: GET /events/{id}/tickets (X-Grant-Token)
-    C->>API: POST /bookings (categories, one NIK per seat, email)
-    API-->>C: HELD (10-minute payment clock starts)
-    C->>API: POST /payments/{booking_id} (VA or GoPay)
-    API->>MT: charge (custom_expiry = payment deadline)
-    MT-->>API: webhook settlement
-    API-->>N: e-tickets to buyer's email (via outbox)
-    C->>API: GET /payments/{id}/status → PAID
+    C->>APIGW: GET …/queue/me (when nowServing ≥ ticket_no)
+    APIGW->>QU: me
+    QU-->>C: grant_token (5-minute booking clock starts)
+    C->>APIGW: GET /events/{id}/tickets · POST /bookings
+    APIGW->>BK: ticket page, hold
+    BK-->>C: HELD (10-minute payment clock starts)
+    C->>APIGW: POST /payments/{booking_id} (VA or GoPay)
+    APIGW->>PA: charge
+    PA->>MT: charge (custom_expiry = payment deadline)
+    MT->>APIGW: webhook settlement
+    APIGW->>PA: confirm
+    PA-->>N: e-tickets to buyer's email
+    C->>APIGW: GET /payments/{id}/status
+    APIGW->>PA: status
+    PA-->>C: PAID
 ```
 
 ### 5.2 Join and wait
@@ -256,9 +332,12 @@ sequenceDiagram
     participant CTL as admission-ctl (ECS)
     participant R as Redis
     participant DB as Aurora
+    participant TS as Turnstile
 
     C->>Q: POST /events/{ev}/queue/join (captcha_token, X-Device-Id or Bearer)
-    Q->>R: rate limit → CAPTCHA → sale state, capacity, BR-07 checks
+    Q->>R: rate limit
+    Q->>TS: verify CAPTCHA token (fail-open)
+    Q->>R: sale state, capacity, BR-07 checks
     Q->>R: HINCRBY issued · HSET token · ZADD by_ticket
     Q-->>C: 200 ticket_no, queue_token, sse_url (never waits for a grant)
     C->>SSE: GET …/queue/stream (X-Queue-Token)
@@ -390,7 +469,7 @@ sequenceDiagram
         CTL->>R: DEL grant for each row
         CTL->>DB: CAS UPDATE HELD → EXPIRED WHERE payment_expires_at <= now RETURNING · DELETE nik_claims
         CTL->>R: release_hold.lua (stock and NIK locks back)
-        CTL->>P: invoke: sweep overdue AWAITING_PAYMENT
+        CTL->>P: invoke every 60 s: sweep overdue AWAITING_PAYMENT
         P->>DB: bookings past payment_expires_at + grace
         P->>M: GET status per booking
         alt paid
@@ -583,36 +662,50 @@ otherwise `404`.
 
 ```mermaid
 flowchart TB
+    VER[Vercel<br/>rush-my-ticket.my.id · web app]
+    MOB[Mobile app]
+
     subgraph Edge["Edge (public)"]
-        APIGW[API Gateway HTTP API<br/>api.rush-my-ticket.my.id<br/>webhook: signature check]
-        ALB[ALB HTTPS<br/>sse.rush-my-ticket.my.id]
-        VER[Vercel<br/>rush-my-ticket.my.id · web app]
+        APIGW[API Gateway HTTP API<br/>api.rush-my-ticket.my.id]
+        ALB[Application Load Balancer · HTTPS<br/>sse.rush-my-ticket.my.id]
     end
 
     subgraph VPC
-        L[Lambda services<br/>queue · events · booking · nik-verify<br/>payment-api · user · outbox-publisher · notification]
-        SSE[ECS sse-server]
-        CTL[ECS admission-ctl<br/>1 task]
+        subgraph LAMBDA["Lambda (behind API Gateway)"]
+            EV[events]
+            QU[queue]
+            BK[booking]
+            NV[nik-verify]
+            PA[payment-api]
+            US[user]
+        end
+        subgraph ECS["ECS Fargate cluster"]
+            SSE[sse-server<br/>behind the ALB]
+            CTL[admission-ctl<br/>1 task, no ingress]
+        end
+        subgraph ASYNC["Lambda (scheduled / queue)"]
+            OP[outbox-publisher]
+            NO[notification]
+        end
         RC[(ElastiCache Redis)]
         AU[(Aurora PostgreSQL<br/>Serverless v2)]
     end
 
-    SQS[SQS + DLQ] --> SESN[SES]
-    EB[EventBridge<br/>outbox schedule] --> L
+    EB[EventBridge<br/>every 1 min] --> OP
+    OP --> SQS[[SQS + DLQ]] --> NO --> SESN[SES]
     CW[CloudWatch<br/>dashboards · alarms → SNS]
 
-    VER --> APIGW
-    VER --> ALB
-    APIGW --> L
+    VER & MOB --> APIGW
+    VER & MOB --> ALB
+    APIGW --> EV & QU & BK & NV & PA & US
     ALB --> SSE
-    L --> RC
-    L --> AU
+    LAMBDA --> RC & AU
     SSE --> RC
-    CTL --> RC
-    CTL --> AU
-    CTL -->|invoke| L
-    L --> SQS
-    L & SSE & CTL --> CW
+    CTL --> RC & AU
+    CTL -->|invoke| PA
+    OP --> AU
+    ASYNC -->|lease · dedupe| RC
+    LAMBDA & ECS & ASYNC -.-> CW
 ```
 
 **Infrastructure as code:** CloudFormation stacks `infra/foundation` (VPC, Aurora, ElastiCache, KMS, secrets, SES),
