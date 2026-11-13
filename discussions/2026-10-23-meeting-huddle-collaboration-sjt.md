@@ -62,11 +62,11 @@
   - `data`: objek (mis. berisi `link`); bila tidak ada data → objek kosong `{}` / `0`.
   - `message`: untuk pesan error ditaruh di sini (satu pesan, bukan list — field-level error tidak dipakai).
 - **Expired & resend:** magic link punya masa berlaku (ada `expired_in`); sediakan mekanisme **resend/kirim ulang** (tombol resend saat countdown habis).
-- **Standar HTTP status code** mengikuti standar partner **Telkomsel** (referensi kontrak): 200/201, 400/401/404/409/429 dsb. Pakai yang mandatory.
+- **Standar HTTP status code** mengikuti standar partner **TL** (referensi kontrak): 200/201, 400/401/404/409/429 dsb. Pakai yang mandatory.
 
 ### Open
 - Halaman **registrasi** belum ada di Figma (perlu ditambah: nama, NIK, consent).
-- Perlu keputusan field metadata standar di envelope (align dengan IDP/standar Telkomsel).
+- Perlu keputusan field metadata standar di envelope (align dengan IDP/standar TL).
 
 ---
 
@@ -147,7 +147,7 @@ Perhitungan kasar yang dibahas (asumsi 1 event, ~300.000 connection, durasi ~2 j
 - **Envelope seragam** `{ meta, data, message }` untuk semua response.
 - **Pagination** (bila list): `limit`, `offset`, `total_data`, `total_page` ditaruh di **`meta`**.
 - **Error:** satu `message` utama (bukan list field-error). Business error di-handle sebagai **error boundary di Front End** (mapping), tidak perlu bisnis-code khusus di BE *(disepakati: "tidak perlu business error code")*.
-- **HTTP status** mengikuti standar partner **Telkomsel** (ada referensi infeksi/standar internal).
+- **HTTP status** mengikuti standar partner **TL** (ada referensi infeksi/standar internal).
 
 ---
 
@@ -177,7 +177,7 @@ Perhitungan kasar yang dibahas (asumsi 1 event, ~300.000 connection, durasi ~2 j
 | D9 | Antrian pakai polling adaptif (1→2→4→8s); SSE/hybrid = fallback | ✅ Sepakat arah |
 | D10 | Payment callback diproses BE (webhook); sukses→konteks login, guest→home | ✅ Sepakat |
 | D11 | Payment gateway mock/sandbox; desain kontrak sendiri (jangan copy mitra) | ✅ Sepakat |
-| D12 | Envelope `{meta,data,message}`; pagination di meta; HTTP status ala Telkomsel | ✅ Sepakat |
+| D12 | Envelope `{meta,data,message}`; pagination di meta; HTTP status ala TL | ✅ Sepakat |
 | D13 | Guest token terikat device_id (JWT+signature); refresh di cookie | ✅ Arah, detail open |
 | D14 | Dashboard observability (konversi, antrian, expired) via Grafana + Sentry | ✅ Sepakat |
 

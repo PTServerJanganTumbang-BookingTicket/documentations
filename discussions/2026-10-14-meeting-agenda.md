@@ -13,7 +13,7 @@
 
 *Konteks proyek dan constraint teknis — set the stage sebelum masuk detail.*
 
-**UA-1.** 🟡 Penerapan Development sesuai "Standard" itu hanya codebase, atau mencakup SDLC + project management? Perusahaan mana yang dimaksud (PT Server Jangan Tumbang atau Telkomsel)?
+**UA-1.** 🟡 Penerapan Development sesuai "Standard" itu hanya codebase, atau mencakup SDLC + project management? Perusahaan mana yang dimaksud (PT Server Jangan Tumbang atau TL)?
 > **→ Keputusan yang dibutuhkan:** definisi deliverable dan konteks perusahaan.
 
 **UA-2.** 🔴 TechRadar — apakah teknologi, framework, tools, dan library di FE/BE/Mobile dibebaskan, atau ada constraint dari klien?
