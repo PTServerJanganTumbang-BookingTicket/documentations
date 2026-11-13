@@ -8,6 +8,10 @@
 > ⚠️ **Diubah oleh ADR-006 §8.10** — di seluruh dokumen ini, status antrian `SOLD_OUT` dibaca **`FULL_BOOKED`**
 > (`sold_out_at` → `full_booked_at`, `SOLD_OUT_HOLD_SECONDS` → `FULL_BOOKED_HOLD_SECONDS`, error join `SOLD_OUT` → `FULL_BOOKED`).
 > `CLOSED`, event SSE `sold-out` dan `SALE_CLOSED` tidak berubah. Teks asli di bawah dibiarkan apa adanya.
+>
+> ⚠️ **Diubah oleh ADR-006 §8.20** — di seluruh dokumen ini **tidak ada cookie `queue_token`**: server tidak menyetel,
+> menghapus atau membaca cookie itu. Web dan mobile mengirim token antrian lewat header `X-Queue-Token`; stream web memakai
+> klien SSE berbasis `fetch` (bukan `EventSource`) atau polling `/queue/serving`. Teks asli di bawah dibiarkan apa adanya.
 
 **Dokumen Referensi**: `requirement/requirements.md` v1.0 (Finalized), Tender Rusuh Booking Ticket.pdf, ADR-001, ADR-002
 
@@ -36,7 +40,7 @@ seluruh FR, NFR dan BR dalam `requirements.md` v1.0; pemetaan lengkapnya ada di 
 | Compute SSE | **ECS Fargate** (`rusuh-sse-server`) |
 | Compute admission + expiry + rekonsiliasi | **ECS Fargate** (`rusuh-admission-ctl`, 1 task, loop 500ms) |
 | Compute REST API | **Lambda + API Gateway** |
-| Autentikasi stream | Cookie `HttpOnly` `queue_token` (web) / header `X-Queue-Token` (mobile) |
+| Autentikasi stream | Cookie `HttpOnly` `queue_token` (web) / header `X-Queue-Token` (mobile) ⚠️ |
 | Verifikasi NIK | **Dukcapil API**, NIK saja. **Gagal apa pun sebabnya → tidak bisa bayar** |
 | Dukcapil tidak tersedia | **Fail closed** + pause admission. Dukcapil adalah SPOF yang diterima |
 | Pembayaran | Charge sinkron; efek samping **inline best-effort + outbox fallback** |
@@ -2514,6 +2518,8 @@ memakai cookie/header — dan mengapa perilaku yang sama dipakai **dengan sengaj
 | Web | Cookie `HttpOnly; Secure; SameSite=Lax; Domain=.my-rusuh.my.id`; `withCredentials: true` | ❌ |
 | Mobile | `react-native-sse` custom header → `X-Queue-Token` | ❌ |
 
+> ⚠️ **Diubah oleh ADR-006 §8.20** — baris Web kini: klien SSE berbasis `fetch` + header `X-Queue-Token` (sama dengan mobile), tanpa cookie.
+
 | Kelas | Pengikatan `grantToken` | Requirement |
 |---|---|---|
 | **Login** | `account_id` | FR-29 opsional |
@@ -2719,6 +2725,10 @@ tidak boleh hilang karena itu (BR-09, NFR-01). Dua lapis menanganinya:
 | **Cookie / header** | perangkat yang sama — tab ditutup, refresh, kembali dari aplikasi bank | `queue_token` → `HGET token:{uuid}` → state + posisi |
 | **Identitas akun** | perangkat berbeda, cookie dibersihkan, incognito, app di-install ulang | identity token (JWT) → `acct:{ev}:{account_id}` → uuid token → state yang sama |
 
+> ⚠️ **Diubah oleh ADR-006 §8.20** — lapis pertama hanya header `X-Queue-Token` (token disimpan klien per event); `/queue/me` menerima
+> **identity token ATAU `X-Queue-Token`**. Pemulihan lewat identity token tidak lagi menerbitkan cookie, dan respons `/me` tidak membawa
+> `queue_token`; untuk stream, perangkat baru memanggil join (BR-07) atau polling `/queue/serving`. `Max-Age` cookie tidak ada lagi; umur token = TTL `token:{uuid}`.
+
 **Lapis kedua WAJIB lewat `GET …/queue/me`, bukan `POST …/queue/join`.** Keduanya secara
 teknis dapat memulihkan — join memang mengembalikan keterlibatan yang ada (BR-07) — tetapi
 join adalah jalur tulis yang membawa **CAPTCHA** dan dua rate limit (`rl:join:{ip}` 20 per 5
@@ -2760,7 +2770,7 @@ transport pun yang membawa lebih dari satu**:
 |---|---|---|---|---|
 | Access token (sesi akun) | `Authorization: Bearer` | JWT HS256, `ACCESS_TOKEN_TTL_SECONDS` | siapa pemegangnya | ❌ — stateless, tunggu TTL |
 | Grant token | `X-Grant-Token` | opaque `gt_…`, `grant:{token}` di Redis | pemegangnya punya slot | ✅ — satu `DEL` |
-| Queue token (ruang tunggu) | cookie `queue_token` / `X-Queue-Token` | opaque `qt_…`, `token:{uuid}` di Redis | posisinya dalam antrian | ✅ |
+| Queue token (ruang tunggu) | ~~cookie `queue_token` /~~ `X-Queue-Token` (ADR-006 §8.20) | opaque `qt_…`, `token:{uuid}` di Redis | posisinya dalam antrian | ✅ |
 | E-ticket token | query `?t=` pada tautan email | HMAC bertanda tangan, satu `ticket_id`, sampai tanggal event | hak baca **satu** tiket | hanya dengan rotasi kunci |
 
 > **E-ticket token ada karena FR-26 menuntutnya.** Tiket dikirim ke *masing-masing pemegang
@@ -2798,6 +2808,8 @@ dapat memulihkan apa pun. Umurnya `SETTLED_TOMBSTONE_SECONDS`.
 > terjadi di `admission-ctl` atau webhook, bukan di dalam permintaan customer, jadi tidak ada
 > respons untuk menumpangi. §3.3 yang menjawab dari tombstone mengirim
 > `Set-Cookie: queue_token=; Max-Age=0` bersamaan.
+>
+> ⚠️ **Diubah oleh ADR-006 §8.20** — tidak ada `Set-Cookie`; klien menghapus `queue_token` event itu sendiri saat menerima `CONFIRMED`.
 >
 > **Setelah tombstone kedaluwarsa, email adalah rutenya** — ditambah mendaftar dengan NIK yang
 > sama, yang mewarisi tiket lewat klausa kepemilikan (*pembeli **atau** pemegang NIK
