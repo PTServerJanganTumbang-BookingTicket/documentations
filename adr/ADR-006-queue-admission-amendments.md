@@ -1,611 +1,189 @@
-# ADR-006: Amandemen Antrian — Pending Grant, Formula Admission, Satu Penulis Grant, Tanpa Pause, Estimasi Waktu Tunggu
+# ADR-006: Amandemen Antrian — Giliran yang Tahan Crash, Formula Admission, Satu Pemberi Giliran
 
-**Status**: Proposed — menunggu review tim
-**Tanggal**: 5 November 2026
+**Status**: Accepted (13 November 2026)
+**Tanggal**: 5 November 2026 · keputusan lanjutan sampai 13 November 2026 · diringkas ulang 13 November 2026
 **Decider**: SJT Team
-**Amends**: ADR-005 Bagian 4, 5, 6 (termasuk "Rekonsiliasi stok", §8.19), 7, 8, 9, 11, 12, 13, 14, 16, 17; `requirements.md` BR-13a, BR-22, FR-26 (§8.15), FR-03a..e (§8.18), api-contracts §2, §3.1, §4 (§8.17, §8.18), §3.1–§3.3 (§8.20, cookie `queue_token` dihapus; §8.21, tempat yang berakhir tidak dipulihkan). **Tidak** menggantikan ADR-005: semua yang tidak disebut di sini tetap berlaku
-**Dokumen Referensi**: ADR-005, `requirement/requirements.md` v1.1, `requirement/implementation-plan.md` v2.1, `api/rusuh-booking-apidog.json`, `api/api-contracts.md` v2.7.0, `be-rusuh-war-ticketing/docs/04-queue/`
+**Mengamandemen**: [ADR-005](ADR-005-final-architecture-decision.md). Yang tidak disebut di sini tetap berlaku.
+**Versi lengkap**: [versi sebelum diringkas (commit `9408e55`)](https://github.com/PTServerJanganTumbang-BookingTicket/documentations/blob/9408e55/adr/ADR-006-queue-admission-amendments.md) — teks asli dengan skrip Lua, tabel alasan per keputusan, dan dampak ke dokumen lain. Nomor bagian (§2, §8.18, …) di dokumen ini sama dengan versi lengkap.
 
 ---
 
 ## Konteks
 
-Sebelum implementasi modul antrian dimulai, desain antrian di ADR-005 ditinjau ulang terhadap
-requirement, kontrak API, dan rencana implementasi. Tinjauan menemukan:
+Sebelum modul antrian dibangun, desain antrian ADR-005 ditinjau ulang. Hasilnya tujuh perubahan besar dan
+sejumlah keputusan kecil. Intinya:
 
-1. **Celah yang menghilangkan customer.** `advance_now_serving.lua` menghapus token dari
-   `by_ticket` *sebelum* baris `GRANTED` ditulis di Aurora. Bila `admission-ctl` mati di antara
-   keduanya, token tidak ada di `by_ticket`, tidak ada di `regrant`, dan tidak punya baris: customer
-   tidak pernah dilayani dan `/queue/me` menjawab `QUEUED` selamanya.
-2. **Antrian membeku di ujung sale.** `target = min(MAX, stock)` membandingkan stok bebas dengan
-   *seluruh* slot terbuka, termasuk customer yang kursinya sudah di-hold (dan sudah dikurangkan
-   dari stok). Customer itu terhitung dua kali.
-3. **Satu customer per tiket di ujung sale**, padahal tiap customer boleh membeli 3 (FR-13).
-4. **`now_serving` dapat melewati `issued`.** `INCRBY now_serving deficit` tanpa batas atas: saat
-   yang menunggu sedikit, `now_serving` melompat melewati nomor yang belum diterbitkan, sehingga
-   pendatang berikutnya mendapat `ticket_no` yang "sudah dilayani".
-5. **Kompleksitas yang tersebar.** `slots:open` di Redis harus di-`DECR` tepat sekali oleh empat
-   komponen (booking, payment-api, webhook, admission-ctl), padahal ADR-005 sudah menghitung angka
-   yang sama dari Aurora setiap 10 detik untuk rekonsiliasi. Ada dua penulis grant (admission-ctl
-   dan bypass di Lambda join), dan sse-server harus memetakan token ke koneksi hanya untuk event
-   `grant`.
-6. **Konflik kontrak** pada `/queue/serving`: "`poll_after_ms` ditentukan server berdasarkan
-   posisi", padahal endpoint tidak menerima posisi.
-7. **FR-09 tanpa metode.** ADR-005 hanya menyebut "`ratePerMin` pada payload". `position /
-   rate_per_min` membagi dengan nol saat T0, dan menjanjikan giliran yang tidak akan
-   datang di antrian 300.000 untuk 10.000 tiket.
-8. Beberapa butir ADR-005 Bagian 17 dapat diputuskan untuk POC.
-9. **Pause admission (BR-13a, BR-22) menambah satu state yang menyentuh semua komponen:**
-   gerbang di tick, field `paused` di setiap payload, geser tenggat +60 detik di Aurora dan
-   `expiries`, guard `pause:{ev}:grace_applied`, aturan klien "baca ulang `/me` saat `paused`
-   berubah", dan cabang tampilan. Untuk POC, kompleksitas itu tidak sebanding dengan manfaatnya.
+1. **Customer tidak kehilangan posisi antrean** walau server mati di tengah memberi giliran.
+2. **Antrian tidak membeku** di akhir penjualan.
+3. **Hanya satu proses** yang memberi giliran, dan semua orang menerima **pesan yang sama**.
+4. Fitur yang menambah kerumitan tanpa manfaat sebanding (**pause admission**, **langsung masuk tanpa antre**) dihapus.
 
 ---
 
-## 1. Ringkasan Keputusan
+## Konteks: apa yang ditemukan
 
-| # | Keputusan | Menggantikan di ADR-005 | Bagian |
-|---|---|---|---|
-| 1 | **Pending grant:** token keluar dari `by_ticket` hanya setelah baris `GRANTED` ada. Skor ≤ `now_serving` = pending, diulang tiap tick. `regrant:{ev}` dihapus | §6 Lua, "Baris bookings dibuat saat GRANTED" (kompensasi), "`regrant:{ev}` dan pause/resume", §16 | §2 |
-| 2 | **Formula admission:** `deficit = min(MAX − open, ceil(stock / 3) − browsing)` | §6 Lua `target` | §3 |
-| 3 | **Hitungan dari Aurora (S1):** `open` dan `browsing` dibaca dari `bookings` tiap tick. `slots:open:{ev}` dihapus | §6 "Kepemilikan `slots:open`", "Rekonsiliasi" (untuk slot) | §3 |
-| 4 | **`now_serving` tidak melewati `issued`** | §6 Lua | §3.4 |
-| 5 | **Satu penulis grant (S2):** hanya admission-ctl, pada tick tetap 500 ms. Join tidak menunggu grant (§8.14); webhook, outbox-publisher dan abandon tidak melakukan apa pun terkait antrian | §5, §6 "Jalur bypass memakai Lua yang sama", §9 inline best-effort | §4.1 |
-| 6 | **Broadcast saja (S3):** payload SSE global dan identik `{nowServing, state, ratePerMin, serverTime}`; klien mendeteksi gilirannya dari `nowServing ≥ ticket_no` lalu memanggil `/me`. Event SSE `grant` dan kanal `sse-grant` dihapus. Event `status {state}` tiap transisi state; indikator basi pindah ke event `stale` | §4, §11 fan-out | §4.2 |
-| 6a | **Pause admission dihapus:** tanpa field `paused`, tanpa gerbang di tick, tanpa grace +60 detik. BR-13a dan BR-22 dihapus. Breaker tetap melindungi dependensi (fail fast) | §6 "Apa yang dihentikan `paused`", "`regrant:{ev}` dan pause/resume", §8 tabel breaker "pause admission" | §4.3 |
-| 7 | **Satu shard Redis per event** untuk POC | (belum dinyatakan) | §5 |
-| 8 | **Estimasi waktu tunggu dihitung frontend** dari `ratePerMin` pada payload; estimasi level sale | §14 FR-09 | §6 |
-| 9 | Keputusan lebih kecil: Turnstile, `SALE_WINDOW_SECONDS`, customer idle, `/serving`, `/me`, hapus `GET /bookings/{id}/tickets` | §6 CAPTCHA, §9 langkah 5, §12, §13, §17 | §8 |
-| 10 | **Ditunda ke produksi:** leader lease + standby, qpersist + `queue_entries` + rebuild, sharded pub/sub | §11, §12 | §9 |
+| # | Temuan | Akibatnya bila dibiarkan |
+|---|---|---|
+| 1 | Token dikeluarkan dari antrian Redis **sebelum** baris booking ditulis di Aurora | Bila proses mati di antaranya, customer hilang: tidak di antrian, tidak punya booking |
+| 2 | Formula menghitung customer yang sudah membayar dua kali | Antrian membeku sampai 10 menit di akhir sale, padahal tiket masih ada |
+| 3 | Satu giliran per tiket, padahal satu customer boleh membeli 3 | Sebagian besar yang dipanggil di akhir sale tidak menemukan tiket |
+| 4 | `now_serving` bisa melewati nomor yang belum diterbitkan | Pendatang berikutnya mendapat nomor yang "sudah lewat" |
+| 5 | Penghitung slot di Redis harus dikurangi tepat sekali oleh empat service | Mudah salah hitung dan menerima terlalu banyak orang |
+| 6 | Estimasi waktu tunggu belum punya rumus | Bagi nol di awal sale, janji yang tidak realistis |
+| 7 | *Pause admission* saat Dukcapil/Midtrans gangguan menyentuh semua komponen | Kerumitan besar untuk kasus jarang |
 
 ---
 
-## 2. Pending Grant: `by_ticket` sebagai Baki
+## Keputusan utama
 
-### 2.1 Masalah
+### §2. Pending grant: giliran yang tahan crash
 
-```mermaid
-sequenceDiagram
-    participant CTL as admission-ctl
-    participant R as Redis
-    participant DB as Aurora
-    CTL->>R: advance Lua (ADR-005): INCRBY now_serving, ZREMRANGEBYSCORE by_ticket
-    Note over CTL: crash di sini (ECS replace, OOM, lease hilang)
-    CTL--xDB: INSERT bookings GRANTED tidak pernah terjadi
-    Note over R,DB: token tidak di by_ticket, tidak di regrant, tanpa baris.<br/>Customer hilang. /me menjawab QUEUED selamanya
-```
-
-Redis dan Aurora tidak dapat ditulis secara atomik. Masalahnya bukan celah itu sendiri, melainkan
-bahwa satu-satunya catatan customer **dihapus sebelum** catatan yang tahan lama ditulis.
-
-### 2.2 Keputusan
-
-> Anggota `queue:{ev}:by_ticket` dengan skor (`ticket_no`) **≤ `now_serving`** adalah **pending
-> grant**: sudah diterima di Redis, barisnya belum terkonfirmasi. **`ZREM by_ticket` selalu langkah
-> terakhir**, setelah baris `GRANTED` dan hash grant ada.
+**Aturannya:** token baru dikeluarkan dari antrian (`by_ticket`) **paling akhir**, setelah baris booking `GRANTED`
+dan grant tersimpan. Token yang nomornya sudah ≤ `now_serving` tetapi masih di antrian berarti *pending*: setiap tick
+menyelesaikannya, tanpa batas percobaan.
 
 ```mermaid
 stateDiagram-v2
     direction LR
-    [*] --> Waiting: join ZADD by_ticket
-    Waiting --> Pending: advance Lua menaikkan now_serving melewati ticket_no
+    [*] --> Menunggu: join
+    Menunggu --> Pending: now_serving melewati nomornya
     Pending --> Pending: crash atau INSERT gagal, diulang tick berikutnya
-    Pending --> Granted: INSERT ok, HSET grant, lalu ZREM
-    Granted --> [*]
+    Pending --> Diberi_giliran: baris GRANTED + grant tersimpan, lalu keluar dari antrian
+    Diberi_giliran --> [*]
 ```
 
-- **Lua tidak lagi `ZREM`.** Ia hanya membaca rentang token dan menaikkan `now_serving`.
-- **RECOVER di awal tiap tick:** `ZRANGEBYSCORE by_ticket -inf now_serving` → selesaikan token
-  yang tertinggal (juga oleh task baru setelah restart).
-- **INSERT idempoten:** `UNIQUE (event_id, queue_token)` + `ON CONFLICT DO NOTHING`. Saat konflik,
-  baris yang ada dibaca kembali sehingga retry memakai `booking_id`, `grant_token` dan tenggat yang
-  sama.
-- **Urutan:** INSERT → `HSET grant` + `HSET token` (salinan grant, §8.11) → `ZREM by_ticket` → (akhir tick) broadcast. (`ZADD expiries` dihapus oleh §8.12.)
+- Insert idempoten (`UNIQUE (event_id, queue_token)`), jadi pengulangan memakai booking dan grant yang sama.
+- Kedalaman antrian selalu `issued − now_serving`, bukan jumlah anggota antrian.
 
-### 2.3 `regrant:{ev}` dihapus
-
-`regrant` hanya terisi saat INSERT grant gagal. Dengan pending grant, token yang INSERT-nya gagal
-**tetap** di `by_ticket` dan diulang tiap tick, jadi tidak ada lagi yang perlu ditampung.
-
-> **Ini menggantikan `GRANT_INSERT_MAX_RETRIES` + kompensasi `DECRBY` + `SADD regrant`** (ADR-005
-> §6, §16 "`regrant` livelock"). Pending grant **diulang tanpa batas, tidak pernah menyerah**:
-> menyerah adalah cara customer hilang. Alarm bila `ZCOUNT by_ticket -inf now_serving > 0` lebih
-> dari 10 tick (5 detik); perbaikan manual. Satu token yang macet hanya menahan satu slot.
-
-### 2.4 `/queue/me`
-
-- Tidak ada baris dan `ticket_no ≤ now_serving` → **cek ulang sekali di writer** (lag replika).
-- Masih tidak ada baris, token ada di `by_ticket` → pending: `QUEUED` posisi 0, "sebentar lagi";
-  klien mengulang setelah 1 detik.
-- Tidak ada baris dan tidak di `by_ticket` → seharusnya mustahil: metrik `LostGrant` + log uuid.
-
-### 2.5 Alternatif yang ditolak
-
-| Alternatif | Alasan ditolak |
-|---|---|
-| ZSET terpisah `queue:{ev}:granting` (skor = waktu) | Benar, dan memberi umur pending secara eksplisit, tetapi menambah satu key dan satu jalur `regrant` khusus untuk keuntungan kecil. `by_ticket` sudah menyimpan urutan yang dibutuhkan |
-| Insert dulu, baru hapus di Redis (peek → INSERT → Lua commit dengan CAS) | Memindahkan keputusan admission keluar dari Lua; CAS yang gagal meninggalkan baris `GRANTED` untuk token yang masih mengantre |
-
-### 2.6 Konsekuensi
-
-- `by_ticket` punya dua arti (menunggu / pending). Aturannya wajib ditulis di `pkg/rediskeys` dan
-  di header Lua.
-- **`ZCARD by_ticket` bukan kedalaman antrian.** Kedalaman selalu `issued − now_serving`.
-- Rebuild Redis dari Aurora (ADR-005 §12; ditunda ke produksi, §9) tetap konsisten bila ditambahkan: token tanpa baris dengan `ticket_no ≤
-  now_serving` masuk kembali ke `by_ticket` sebagai pending dan diselesaikan RECOVER.
-
----
-
-## 3. Formula Admission dan Hitungan dari Aurora
-
-### 3.1 Masalah
-
-**÷ 3.** `min(MAX, stock)` memberi satu customer per tiket, padahal tiap customer boleh membeli
-hingga 3 (FR-13). Di ujung sale, sebagian besar yang diterima tidak menemukan apa pun.
-
-**Dihitung dua kali.** Customer yang sudah HELD / AWAITING_PAYMENT / PENDING_CANCELLATION sudah
-mengurangi `stock`, tetapi tetap terhitung di `slots:open`:
-
-| | Nilai |
-|---|---|
-| Stok bebas | 240 |
-| Membayar (kursi sudah di-hold) | 70 |
-| Memilih (belum hold) | 10 |
-| ADR-005: `min(100, 80) − 80` | **0, antrian membeku** hingga pembayar selesai (≤ 10 menit) |
-| Seharusnya | 10 pemilih mengambil ≤ 30 tiket; ~210 tiket tidak dikejar siapa pun; ada 20 tempat → **20** |
-
-**Penghitung yang tersebar.** ADR-005 menjaga `slots:open` di Redis dengan aturan kepemilikan di
-empat komponen. Double-DECR → `slots:open` negatif → over-admission, dan rekonsiliasi baru
-memperbaikinya setelah ≥ 20 detik dengan dua konfirmasi. Padahal rekonsiliasi itu sendiri sudah
-menjalankan `COUNT(*)` di writer setiap 10 detik. Penghitung Redis hanyalah cache dari angka yang
-sudah kita hitung dari sumber kebenaran.
-
-### 3.2 Keputusan
+### §3. Formula admission dan hitungan dari Aurora
 
 ```
-room    = MAX − (open + pending)                    kapasitas: semua yang di dalam
-demand  = ceil(stock / 3) − (browsing + pending)    inventaris: hanya yang masih bisa mengambil stok
-deficit = min(room, demand)                         ≤ 0 → tidak ada yang diterima tick ini
+room    = MAX − (open + pending)              kapasitas: semua yang ada di dalam
+demand  = ceil(stok / 3) − (browsing + pending)  inventaris: yang masih bisa mengambil stok
+deficit = min(room, demand)                    ≤ 0 → tidak ada yang dipanggil tick ini
 ```
 
-| Nama | Status | Dari |
+| Nama | Artinya | Diambil dari |
 |---|---|---|
-| `open` | GRANTED, SELECTING, HELD, AWAITING_PAYMENT, PENDING_CANCELLATION | `COUNT` Aurora writer, tiap tick |
-| `browsing` | GRANTED, SELECTING | `COUNT` Aurora writer, tiap tick |
-| `pending` | — | `ZCOUNT by_ticket -inf now_serving` |
-| `stock` | — | `SUM stock:{ev}:{cat}`, dibaca **di dalam** Lua |
+| `open` | booking aktif: GRANTED, SELECTING, HELD, AWAITING_PAYMENT, PENDING_CANCELLATION | `COUNT` Aurora tiap tick |
+| `browsing` | yang masih memilih: GRANTED, SELECTING | `COUNT` Aurora tiap tick |
+| `pending` | giliran yang belum selesai ditulis (§2) | Redis |
+| `stok` | total stok semua kategori | Redis, dibaca di dalam skrip atomik |
 
-```sql
-SELECT count(*)                                                  AS open,
-       count(*) FILTER (WHERE status IN ('GRANTED','SELECTING')) AS browsing
-FROM bookings
-WHERE event_id = $1
-  AND status IN ('GRANTED','SELECTING','HELD','AWAITING_PAYMENT','PENDING_CANCELLATION');
--- indeks parsial ON bookings (event_id, status) WHERE status IN (…aktif…); ≤ MAX baris, ~1 ms
-```
+- Penghitung slot di Redis **dihapus**; tidak ada service lain yang perlu menjaga angka antrian.
+- `now_serving` tidak pernah melewati `issued`.
+- Hitungan yang meleset sesaat selalu condong ke **memanggil lebih sedikit**, tidak pernah lebih banyak. Dua pengaman
+  membuatnya aman: hanya satu pemberi giliran (§4.1) dan skrip menolak bekerja bila `now_serving` sudah berubah sejak
+  dibaca (compare-and-set).
 
-- **`slots:open:{ev}` dihapus.** booking-service, payment-api dan webhook **tidak lagi menyentuh
-  penghitung antrian apa pun**. Tabel "Kepemilikan `slots:open`" dan rekonsiliasi slot di ADR-005
-  §6 tidak berlaku. (Penghitung `slots:browsing:{ev}` yang sempat diusulkan tidak pernah dibuat.)
-- **Awal sale tidak berubah:** `demand` sangat besar, sehingga `deficit = MAX − open`.
-- Kekurangan per kategori tetap mungkin (stok dijumlahkan lintas kategori); customer memilih
-  kategori lain.
+### §4.1. Satu pemberi giliran
 
-### 3.3 Mengapa hitungan non-atomik aman
-
-COUNT dan Lua **bukan** satu langkah atomik. Aman karena setiap kesalahan condong ke **menerima
-lebih sedikit**:
-
-| Kejadian di antara COUNT dan Lua | Hitungan kita | Efek |
-|---|---|---|
-| CONFIRMED / EXPIRED / LAPSED / ABANDONED | terlalu tinggi | menerima lebih sedikit ≤ 1 tick ✅ |
-| SELECTING → HELD | `browsing` terlalu tinggi, stok segar | lebih sedikit ✅ |
-| GRANTED → SELECTING | tepat | ✅ |
-| **grant baru** | terlalu rendah | ⚠️ dicegah aturan 1 dan 2 |
-
-1. **Satu penulis grant** (§4.1).
-2. **Pagar CAS pada `now_serving`:** ctl mengirim nilai yang ia baca; Lua mengembalikan `STALE`
-   tanpa menulis apa pun bila nilainya berubah. Di POC hanya ada satu task, tetapi tumpang tindih
-   yang tidak disengaja (deploy salah konfigurasi, task kedua manual) tetap aman, dan kelak dua
-   leader saat pergantian lease juga (ADR-005 §11 "Lease ganda tidak dicegah — ia dibuat tidak berbahaya").
-3. **Urutan baca tetap: snapshot Redis → COUNT Aurora → Lua.** Setiap grant terhitung minimal sekali:
-   sebagai baris, sebagai pending, atau keduanya. Grant yang lahir setelah snapshot pasti mengubah
-   `now_serving`, sehingga aturan 2 membatalkan.
-4. **Stok dibaca di dalam Lua, setelah COUNT.** Hold di antaranya terlihat sebagai stok rendah +
-   `browsing` tinggi (aman). Membaca stok lebih dulu bisa over-admit ~2.
-
-**Invarian:** tidak ada transisi yang **kembali masuk** ke GRANTED atau SELECTING. Bila booking
-kelak menambah transisi seperti HELD → SELECTING, bagian ini harus ditinjau ulang.
-
-Biaya: 2 query terindeks per detik di writer. Bila writer tidak terjangkau, COUNT gagal, tick
-melewati ADVANCE (antrian membeku, tidak ada yang hilang); INSERT grant toh juga akan gagal.
-
-### 3.4 `advance_now_serving.lua` (revisi, menggantikan ADR-005 §6)
-
-Mengikuti `pkg/rediskeys`: `now_serving` adalah field pada hash `queue:{ev}`.
-
-> ⚠️ **Diubah oleh §8.11 (dicabut sebagian oleh §8.14) dan §8.12.** Blok di bawah menunjukkan bentuk awal. Sejak §8.12, `state`, `issued` dan
-> `full_booked_at` adalah **field** pada hash `queue:{ev}` (bukan key terpisah; `full_booked_at` dalam epoch detik),
-> `queue:{ev}:resume` dihapus, dan KEYS menjadi `queue:{ev}`, `queue:{ev}:by_ticket`, `stock:{ev}:{cat}...`. Sejak §8.11
-> skrip sempat menulis `free_slots` dan `free_slots_at`; **§8.14 menghapusnya lagi.** **Rujukan final adalah
-> `pkg/redisscript/features/advance_now_serving.feature`**, bukan blok ini.
-
-```lua
--- KEYS[1]=queue:{ev} (hash: now_serving)  KEYS[2]=queue:{ev}:state
--- KEYS[3]=queue:{ev}:by_ticket            KEYS[4]=queue:{ev}:issued
--- KEYS[5]=queue:{ev}:full_booked_at          KEYS[6]=queue:{ev}:resume
--- KEYS[7..n]=stock:{ev}:{cat}
--- ARGV[1]=MAX_CONCURRENT_SLOTS  ARGV[2]=open+pending  ARGV[3]=browsing+pending
--- ARGV[4]=now_serving yang dibaca ctl (pagar CAS)    ARGV[5]=now (epoch detik)
---
--- ATURAN PENDING: token TIDAK dihapus di sini. Anggota by_ticket dengan skor
--- <= now_serving adalah pending grant; ctl meng-ZREM setelah baris GRANTED ada.
-
-local ns = tonumber(redis.call('HGET', KEYS[1], 'now_serving') or 0)
-if ns ~= tonumber(ARGV[4]) then return {ns, ns, 'STALE', {}} end   -- task lain sudah maju
-
-local state = redis.call('GET', KEYS[2])
-if state ~= 'OPEN' and state ~= 'FULL_BOOKED' then
-  return {ns, ns, state or 'MISSING', {}}                           -- SCHEDULED / CLOSED / belum di-seed
-end
-
-local stock = 0
-for i = 7, #KEYS do
-  local v = redis.call('GET', KEYS[i])
-  if not v then return {ns, ns, 'STOCK_UNINITIALIZED', {}} end      -- key hilang != nol
-  stock = stock + tonumber(v)
-end
-
-if stock <= 0 then
-  if state == 'OPEN' then                                           -- SEMENTARA, bukan terminal
-    redis.call('SET', KEYS[2], 'FULL_BOOKED')
-    redis.call('SET', KEYS[5], ARGV[5])
-  end
-  return {ns, ns, 'FULL_BOOKED', {}}
-end
-if state == 'FULL_BOOKED' then                                         -- stok kembali: lanjutkan FCFS
-  redis.call('SET', KEYS[2], 'OPEN')
-  redis.call('DEL', KEYS[5])
-  redis.call('SET', KEYS[6], 1)
-end
-
-local room    = tonumber(ARGV[1]) - tonumber(ARGV[2])
-local demand  = math.ceil(stock / 3) - tonumber(ARGV[3])
-local deficit = math.min(room, demand)
-if deficit <= 0 then return {ns, ns, 'NOOP', {}} end
-
--- now_serving TIDAK boleh melewati nomor yang sudah diterbitkan
-local issued = tonumber(redis.call('GET', KEYS[4]) or 0)
-local to = math.min(ns + deficit, issued)
-if to <= ns then return {ns, ns, 'EMPTY', {}} end
-
-local tokens = redis.call('ZRANGEBYSCORE', KEYS[3], ns + 1, to)    -- baca saja, TANPA ZREM
-redis.call('HSET', KEYS[1], 'now_serving', to)
-return {ns + 1, to, 'ADMITTED', tokens}
-```
-
-- **Celah di `by_ticket`** (customer pergi) membuat `tokens` lebih sedikit dari `to − ns`. Itu
-  benar: nomor kosong dilewati, dan tempat yang tersisa terisi tick berikutnya lewat COUNT.
-- **`to ≤ issued`** menutup temuan Konteks #4. Pada ADR-005 pendatang dengan nomor ≤ `now_serving`
-  tidak akan pernah terpilih; dengan pending grant mereka justru akan di-grant RECOVER tanpa
-  dihitung terhadap MAX. Batas ini mencegah keduanya.
-
-### 3.5 Alternatif yang ditolak
-
-| Alternatif | Alasan ditolak |
-|---|---|
-| Biarkan antrian membeku di ujung (formula ADR-005) | Tidak pernah oversell, tetapi tiket menganggur hingga 10 menit sementara antrian terlihat macet |
-| Penghitung Redis `slots:browsing:{ev}` di samping `slots:open` | Benar dan atomik, tetapi menambah satu penghitung lagi yang harus di-DECR tepat sekali oleh banyak komponen, termasuk perubahan lintas domain di `hold_booking.lua` |
-| Pembagi = rata-rata keranjang (≈ 2) alih-alih 3 | Ujung sale lebih cepat, tetapi sebagian customer bisa mendapat kurang dari yang diinginkan. Ditunda: ukur `avg_basket` lebih dulu (§6.3), lalu jadikan konfigurasi bila perlu |
-
----
-
-## 4. Satu Penulis Grant, Broadcast Saja, Tanpa Pause
-
-### 4.1 Satu penulis grant (S2)
-
-Bypass ADR-005 menjalankan Lua dan INSERT di Lambda join, sehingga ada penulis grant kedua. Dengan
-hitungan dari Aurora (§3), dua penulis bisa over-admit, dan Lambda butuh jalur crash sendiri.
-
-**Keputusan:** hanya `admission-ctl` yang memberi grant, pada tick tetap 500 ms. Tidak ada komponen
-lain yang memberi sinyal ke ctl. Join **tidak menunggu** grant dan
-tidak ada jalur langsung-masuk (§8.14, 9 November 2026); customer dimasukkan oleh tick berikutnya.
+Hanya `admission-ctl` yang memberi giliran, pada tick 500 ms. Join hanya menerbitkan nomor dan **tidak pernah
+menunggu giliran** (§8.14). Webhook pembayaran, outbox, dan booking tidak lagi ikut memanggil skrip admission: tempat
+yang kosong terlihat oleh hitungan Aurora pada tick berikutnya (≤ 500 ms).
 
 ```mermaid
 sequenceDiagram
-    autonumber
     actor C as Customer
     participant Q as queue (join)
     participant R as Redis
     participant CTL as admission-ctl
     participant DB as Aurora
-
     C->>Q: POST /queue/join
-    Q->>R: snapshot: now_serving, issued, state, ...
-    Q->>R: HINCRBY issued → ticket_no · HSET token · ZADD by_ticket
-    Q-->>C: 200 ticket_no, position, sse_url (selalu, tanpa menunggu)
-    Note over CTL: tick reguler berikutnya (≤ 500 ms)
-    CTL->>DB: COUNT · Lua · INSERT GRANTED
-    CTL->>R: HSET grant · HSET token grant_token
-    CTL-->>C: broadcast nowServing ≥ ticket_no → klien GET /queue/me
+    Q->>R: terbitkan ticket_no, simpan token
+    Q-->>C: 200 ticket_no (langsung)
+    Note over CTL: tick berikutnya ≤ 500 ms
+    CTL->>DB: COUNT open, browsing
+    CTL->>R: skrip admission: naikkan now_serving
+    CTL->>DB: INSERT booking GRANTED
+    CTL-->>C: broadcast nowServing (SSE)
+    C->>Q: GET /queue/me → grant_token
 ```
 
-- ⚠️ **Diubah oleh §8.14.** Semula kontrak FR-05 (`granted: true`) dipertahankan lewat tunggu ≤ 1 detik; kini join tidak menunggu dan tidak pernah menjawab `granted`.
-- **Pemanggil lain juga berhenti memberi grant.** ADR-005 §9 dan implementation-plan §14
-  ("Empat pemanggil untuk `advance_now_serving.lua`") menjalankan `DECR slots:open` +
-  `EVALSHA advance_now_serving.lua` + `PUBLISH` di luar admission-ctl: payment-api (webhook inline,
-  impl-plan §10.5), outbox-publisher (§13.2), dan booking-service saat `ABANDONED` (§5.6). Semua
-  itu **dihapus tanpa pengganti**: tempat yang baru bebas terlihat oleh COUNT pada tick berikutnya
-  (≤ 500 ms) dan langsung terpakai. `advance_now_serving.lua` kini punya **satu** pemanggil.
-- Sinyal "bangunkan ctl" sempat dipertimbangkan dan **ditolak**: ia hanya menghemat ≤ 500 ms, tetapi
-  menambah kanal pub/sub, debounce, dan satu konsep lagi.
-- Lambda mati setelah menerbitkan nomor → tidak ada yang hilang; ctl tetap memberi grant, klien tahu lewat
-  broadcast + `/me`.
+### §4.2. Broadcast saja
 
-### 4.2 Broadcast saja (S3)
+Semua koneksi sebuah event menerima **byte yang sama**: `{nowServing, state, ratePerMin, serverTime}`. Tidak ada event
+khusus per customer. Klien melihat sendiri bahwa `nowServing ≥ ticket_no`, lalu memanggil `GET /queue/me`. Masuk normal
+dan pemulihan setelah koneksi putus menjadi satu jalur yang sama.
 
-ADR-005 mengirim `event: grant` ke satu koneksi, yang menuntut peta token → koneksi di setiap task
-sse-server dan kanal `sse-grant`.
-
-**Keputusan:** semua koneksi sebuah event menerima **byte yang identik**. admission-ctl mem-publish
-satu payload global; tidak ada event per customer. Klien menghitung sendiri:
-
-```
-position = ticket_no − nowServing
-nowServing ≥ ticket_no  →  GET /queue/me  →  grant_token  →  Detail Ticket
-menit    = dari position dan ratePerMin (§6.2)
-```
-
-**Event SSE:**
-
-| Event | Kapan | `data` |
-|---|---|---|
-| *(default)* | snapshot saat connect, tiap `nowServing` berubah, heartbeat 10 detik | `{nowServing, state, ratePerMin, serverTime}` + `id` |
-| `status` | tiap transisi `state` (`OPEN → FULL_BOOKED`, `FULL_BOOKED → OPEN`, `→ CLOSED`) | `{state, fullBookedAt?}` |
-| `stale` | data berhenti segar (Redis putus / tanpa broadcast 30 detik), dan saat pulih | `{stale, state, message?, serverTime}` (dulu event `status`; `reason` diganti `message` pada kontrak v2.12) |
-| `sold-out` | tepat setelah `status {state: CLOSED}` | `{state: CLOSED, message, serverTime}`; klien **wajib** `es.close()` |
-| `reconnect` | task shutdown | `retry:` berjitter |
-
-`state` tetap ada di payload default supaya snapshot setelah reconnect lengkap; event `status`
-adalah sinyal eksplisit "state baru saja berubah" sehingga klien tidak perlu membandingkan sendiri.
-
-- admission-ctl mem-publish broadcast **setelah** INSERT tick itu, sehingga `/me` biasanya langsung
-  menemukan baris. Bila belum (pending, lag replika): §2.4.
-- **Masuk normal dan pemulihan menjadi satu jalur.** Klien yang terputus saat gilirannya datang
-  melihat `nowServing ≥ ticket_no` pada snapshot pertama setelah reconnect.
-- Beban `/me`: ≤ `deficit` customer melewati ambang per tick, jadi ≤ MAX panggilan per tick
-  ditambah retry. Tidak bisa di-cache, dan memang tidak perlu.
-- **Perubahan kontrak:** event `grant` dihapus; event `status` kini membawa `state`, indikator basi
-  menjadi event `stale` (§7).
-
-### 4.3 Pause admission dihapus
-
-**Keputusan:** admission-ctl **tidak pernah** berhenti memberi grant karena dependensi bermasalah.
-Yang dihapus: BR-13a (breaker OPEN → pause admission), BR-22 (`PAUSE_TTL_GRACE_SECONDS` +60 detik),
-field `paused` di payload SSE dan `/queue/serving`, gerbang ADVANCE di tick, `pause:{ev}:grace_applied`,
-metrik `PauseTransitions` / `PauseTtlGrantedSeconds`, dan aturan klien "panggil `/me` lagi saat
-`paused` berubah".
-
-**Yang tetap:** circuit breaker Dukcapil dan payment gateway (ADR-005 §8) tetap ada dan tetap
-**fail closed**. Bedanya, mereka hanya membuat panggilan itu gagal cepat; mereka tidak lagi
-menghentikan antrian.
-
-| Gangguan | Dulu (pause) | Sekarang |
-|---|---|---|
-| Dukcapil breaker OPEN | antrian berhenti, tenggat yang berjalan +60 detik | antrian tetap maju. Customer yang sedang memilih mendapat error validasi NIK yang dapat di-retry ("Verifikasi NIK sedang gangguan, coba lagi"). Countdown 5 menit tetap berjalan |
-| Payment gateway breaker OPEN | sama | `initiate payment` gagal cepat dan dapat di-retry dalam jendela 10 menit pembayaran. Booking `HELD` tetap memegang kursi |
-| Gangguan melewati tenggat | grace 60 detik, lalu expire | booking expire / lapse seperti biasa; kursi kembali ke stok dan dipakai giliran berikutnya |
-
-**Konsekuensi yang diterima untuk POC:**
-- Pada gangguan Dukcapil yang lama, customer yang mendapat giliran bisa kehabisan waktu tanpa bisa
-  menyelesaikan NIK. Ini bertentangan dengan semangat NFR-02 "Jangan PHP" lebih dari desain pause;
-  mitigasinya pesan error yang jujur dan retry, bukan perpanjangan waktu.
-- Ruang TTL `GRANT_TOKEN_TTL_SECONDS` (1080) terhadap perjalanan maksimum (930) kembali 150 detik.
-- **Lebih sederhana:** satu state lebih sedikit di tick, payload, klien, dan pengujian (tidak ada
-  geser tenggat ganda, tidak ada pause yang berkedip).
-- Jalur produksi bila dibutuhkan: operator menunda sale secara manual, atau pause dikembalikan
-  lewat ADR baru.
-
----
-
-## 5. Satu Shard Redis per Event
-
-Semua key ber-tag `{ev}` berada di satu slot cluster, sehingga **satu event = satu shard**. Ini
-**wajib**, bukan efek samping: Lua multi-key (`advance_now_serving.lua`, `hold_booking.lua`) hanya
-boleh menyentuh key di satu slot.
-
-- Diterima untuk POC. Target load test: ~30k ops/s pada satu primary.
-- Bila kurang: naikkan ukuran node. Sharded pub/sub (`SPUBLISH`/`SSUBSCRIBE`) **ditunda ke produksi**
-  (§9); panggilan publish/subscribe berada di balik satu interface sehingga pergantiannya satu adapter.
-
----
-
-## 6. Estimasi Waktu Tunggu (FR-09)
-
-### 6.1 `rate_per_min`
-
-`rate_per_min` = **berapa nomor tiket yang dilewati `now_serving` per menit**, dalam satuan yang
-sama dengan `position` (celah ikut terhitung di keduanya). Dihitung admission-ctl, dikirim sebagai
-`ratePerMin` di payload SSE dan `rate_per_min` di `/queue/serving`.
-
-```
-tiap tick (BROADCAST):
-  bila state == OPEN: simpan (now, now_serving) ke ring buffer 60 detik
-  bila buffer < 60 detik (baru buka / task baru restart): rate = MAX / ETA_SEED_SLOT_MINUTES (5)
-  selain itu: rate = Δnow_serving / Δt × 60
-  saat FULL_BOOKED: pertahankan nilai terakhir
-```
-
-- Lonjakan T0 (tick pertama memberi hingga MAX sekaligus) jatuh di 60 detik pertama yang memakai
-  seed, jadi tidak membuat estimasi awal terlalu optimis.
-- Waktu `FULL_BOOKED` tidak masuk buffer, sehingga laju setelah stok kembali tidak terseret ke 0.
-
-### 6.2 Estimasi per customer: dihitung frontend
-
-**Backend hanya mengirim `nowServing` dan `ratePerMin`; frontend menghitung menit.** Tidak ada
-field estimasi atau status estimasi di respons API mana pun. Rumusnya ditulis sekali di kontrak
-(api-contracts §3.5) supaya web dan mobile sama:
-
-```
-position = ticket_no − nowServing
-state == FULL_BOOKED   → tampilkan pesan "semua tiket sedang di-hold", tanpa estimasi
-position ≤ 0        → "Giliran Anda sebentar lagi" (dan panggil /me)
-ratePerMin ≤ 0      → "Menghitung estimasi…"
-selain itu          → estimatedWaitMinutes = bulatkan_ke_atas(ceil(position / ratePerMin))
-```
-
-| Menit mentah | Dibulatkan ke atas ke | Contoh |
-|---|---|---|
-| 1–10 | menit utuh | 4 → 4 |
-| 11–30 | kelipatan 5 | 12 → 15 |
-| 31–60 | kelipatan 10 | 33 → 40 |
-| > 60 | kelipatan 30 | 725 → 750 |
-
-Pembulatan ke atas membuat estimasi condong pesimis dan angkanya berubah dalam langkah besar
-(tidak berkedip tiap 500 ms).
-
-| `estimatedWaitMinutes` | Teks |
+| Event SSE | Kapan |
 |---|---|
-| 1–59 | "Estimasi waktu tunggu ± {m} menit" (wireframe tender §9.2) |
-| 60–180 | "Estimasi waktu tunggu ± {m/60} jam" (mis. 90 → "± 1,5 jam") |
-| > 180 | "Estimasi waktu tunggu lebih dari 3 jam" |
+| *(default)* | saat tersambung, tiap `nowServing` berubah, heartbeat 10 detik |
+| `status` | state penjualan berubah |
+| `stale` | data berhenti segar (mis. tidak ada broadcast 30 detik), dan saat pulih |
+| `sold-out` | penjualan `CLOSED`; klien wajib menutup stream |
+| `reconnect` | server dimatikan untuk deploy; klien menyambung ulang dengan jeda acak |
 
-**Contoh** (`ratePerMin` = 200): posisi 150 → ± 1 menit; 1.000 → ± 5 menit; 2.400 → ± 15 menit;
-6.000 → ± 30 menit; 145.000 → lebih dari 3 jam.
+### §4.3. Pause admission dihapus
 
-Dalam mode polling (`/queue/serving`) rumusnya sama, memakai `rate_per_min`.
+Antrian **tidak pernah berhenti** karena Dukcapil atau Midtrans gangguan. Circuit breaker tetap ada dan tetap
+*fail-closed*, tetapi hanya membuat panggilan itu gagal cepat dengan pesan yang bisa dicoba ulang. BR-13a dan BR-22
+dihapus dari requirement.
 
-**Ditolak:**
-- *Backend menghitung per customer* (`estimated_wait_minutes` + status di join, `/me`, SSE): membuat
-  payload SSE berbeda per koneksi dan tidak tersedia di `/serving` yang di-cache CDN.
-- *Rentang "sekitar X–Y menit"*: wireframe tender memakai "± N menit".
-- *Persentil laju (p25)*: butuh riwayat sampel; dipertimbangkan lagi setelah data sale pertama.
+### §5. Satu event = satu shard Redis
 
-### 6.3 Estimasi level sale (perencanaan)
+Semua key satu event memakai hash tag `{ev}`, sehingga skrip atomik bisa menyentuh semuanya. Diterima untuk POC.
 
-```
-throughput (customer diterima / menit)  ≈ MAX / avg_slot_minutes
-pembeli dibutuhkan                       ≈ total_tiket / avg_basket
-diterima dibutuhkan                      ≈ pembeli / conversion
-waktu hingga habis (menit)               ≈ diterima / throughput
-porsi antrian yang mendapat giliran      ≈ diterima / ukuran_antrian
-```
+### §6. Estimasi waktu tunggu dihitung frontend
 
-| Input | Nilai | Sumber |
+`admission-ctl` mengukur `ratePerMin` (berapa nomor dilewati per menit, jendela 60 detik; nilai awal dari konfigurasi
+saat sale baru dibuka). Frontend menghitung `ceil(posisi / ratePerMin)`, dibulatkan **ke atas** supaya condong pesimis
+dan tidak berkedip, lalu menampilkan "± N menit". Rumus lengkap di `api-contracts.md` §3.5.
+
+---
+
+## Keputusan lanjutan
+
+| # | Keputusan | Inti alasannya |
 |---|---|---|
-| total tiket | 10.000 | ADR-005 §6, §12 |
-| ukuran antrian | 300.000 | requirements §5 |
-| `avg_basket` | 2 | *asumsi* (maks 3, FR-13) |
-| `conversion` | 70% | *asumsi* |
-| `avg_slot_minutes` | 5 | *asumsi*: median pembeli 2–4 menit (ADR-005 §16), no-show 5 menit (BR-03) |
+| 8.1 | CAPTCHA memakai **Cloudflare Turnstile** mode tak terlihat, *fail-open* | Gangguan provider tidak boleh menghentikan sale |
+| 8.2 | `SALE_WINDOW_SECONDS` = 6 jam untuk POC | Umur token antrian dan kunci akun |
+| 8.4 | Customer yang menunggu tidak dikeluarkan karena idle | Giliran yang tidak dipakai sudah ditagih oleh jam booking 5 menit |
+| 8.5 | `/queue/serving` tanpa query string, cache CDN 1 detik, membawa `poll_tiers` | Satu entri cache untuk semua orang |
+| 8.6 | `/queue/me` memeriksa ulang ke writer Aurora bila baris belum terlihat | Menutup lag replika |
+| 8.8 | `GET /bookings/{id}/tickets` dihapus; e-tiket lewat `eticket_url` bertoken di `GET /bookings/{id}` | Satu endpoint lebih sedikit |
+| 8.9 | Token antrian hanya berlaku bagi pemiliknya, **tanpa rebind**: tamu dari perangkat yang sama, akun dari akun yang sama | Mencegah jual-beli slot; tamu yang menghapus data browser mulai lagi dari belakang |
+| 8.10 | State antrian `SOLD_OUT` diganti **`FULL_BOOKED`**; `CLOSED` tetap satu-satunya akhir | "Sold out" terdengar final padahal kursi bisa kembali |
+| 8.11 | *(dicabut oleh 8.14)* langsung masuk tanpa ruang tunggu bagi yang muat | — |
+| 8.12 | Lebih sedikit key Redis: `state`, `issued`, `full_booked_at` menjadi field hash `queue:{ev}`; ZSET tenggat dihapus, sweep membaca Aurora | Lebih sedikit key yang harus sinkron |
+| 8.13 | Isi grant ditetapkan: `event_id`, `booking_id`, `queue_token`, plus `account_id` **atau** `device_hash`; umurnya mencakup seluruh perjalanan sampai pembayaran | Grant tidak boleh mati di tengah pembayaran |
+| 8.14 | **Tanpa langsung-masuk**: join selalu menjawab "antre" seketika; bila ada tempat, tick berikutnya (≤ 500 ms) memberi giliran | Join tetap ringan; hanya satu jalur menuju giliran. FR-05 tetap terpenuhi karena customer pindah ke halaman tiket dalam satu tick |
+| 8.15 | Semua e-tiket satu booking dikirim ke **email pembeli** (`contact_email`) | Satu email per booking; NIK tetap mengikat kursi |
+| 8.16 | `terms_version` dihapus dari booking; persetujuan dicatat saat registrasi | Bukti persetujuan ada di satu tempat |
+| 8.17 | Grant milik akun login wajib disertai `Authorization` akun yang sama | Grant yang bocor tidak cukup untuk membeli atas nama akun |
+| 8.18 | **`FULL_BOOKED` tetap menerima pendatang baru**; halaman utama hanya mengirim `queue_state` (`SCHEDULED`, `OPEN`, `FULL_QUEUE`, `FULL_BOOKED`, `CLOSED`) dan `display.enabled` (true untuk `OPEN` dan `FULL_BOOKED`) | Kursi yang kembali dilayani menurut nomor; satu field cukup untuk frontend |
+| 8.19 | Rekonsiliasi stok hanya mengembalikan "kursi hilang" bila penghitung Redis diam pada dua pembacaan berturut-turut; `PENDING_CANCELLATION` ikut dihitung memegang kursi | Hold yang sedang berjalan terlihat seperti kebocoran; salah koreksi berarti menjual dua kali |
+| 8.20 | **Cookie `queue_token` dihapus**; web dan mobile mengirim token lewat header `X-Queue-Token` | Cookie menimbulkan bug saat customer antre di event lain |
+| 8.21 | Join **tidak memulihkan tempat yang sudah berakhir** (LAPSED, EXPIRED, ABANDONED, CONFIRMED): customer mendapat nomor baru di belakang | Customer yang kembali setelah kedaluwarsa bisa antre lagi; FCFS tetap terjaga |
 
-Hasil: pembeli ≈ 5.000 → diterima ≈ **7.150** → porsi antrian ≈ **2,4%**, sekitar **292.000 orang
-tidak pernah mendapat giliran**.
+---
 
-| MAX | Throughput | Waktu hingga habis |
+## §9. Ditunda ke produksi
+
+Ketiganya soal ketersediaan pada beban penuh, bukan soal kebenaran data.
+
+| Ditunda | Di POC | Untuk menambahkannya |
 |---|---|---|
-| 500 | 100 / menit | ≈ 72 menit |
-| 1.000 | 200 / menit | ≈ 36 menit |
-| 2.000 | 400 / menit | ≈ 18 menit |
-
-**Batas giliran (~7.150) tidak bergantung pada MAX; hanya kecepatannya.** MAX menukar durasi sale
-dengan beban hilir (Dukcapil, payment gateway), jadi MAX dipilih dari load test terhadap batas itu
-(ADR-005 §17 #5). Seluruh asumsi diganti data nyata setelah load test / sale pertama.
-
-### 6.4 Diusulkan: petunjuk "kemungkinan habis" di ruang tunggu
-
-**Belum diputuskan.** Ini keputusan pesan dan produk milik pemilik tender (ADR-005 §17 #3).
-
-```
-remaining_turns   = max(0, stock / AVG_BASKET − browsing) / CONVERSION
-gap_factor        = Δnow_serving / grants pada jendela rate   (≥ 1)
-likelyServedUntil = now_serving + ceil(remaining_turns × gap_factor)
-```
-
-Satu angka **global** pada broadcast, sehingga cocok dengan model broadcast. Klien dengan
-`ticket_no > likelyServedUntil` menampilkan: *"Tiket kemungkinan habis sebelum giliran Anda. Anda
-tetap boleh menunggu. Tiket yang tidak dibayar dapat tersedia kembali."* Di balik flag
-`SHOW_SELLOUT_HINT`, default **mati**.
+| Leader lease + standby untuk `admission-ctl` | 1 task; ECS mengganti task yang mati. Antrian berhenti sebentar, tidak ada yang hilang (§2) | Lease + epoch; pengaman compare-and-set sudah ada |
+| Salinan posisi antrian ke Aurora + rebuild Redis | Redis saja | Buffer di join, drain di `admission-ctl`, job rebuild |
+| Sharded pub/sub | Pub/sub biasa di balik satu interface | Ganti adapter |
 
 ---
 
-## 7. Dampak pada Dokumen Lain
-
-| Dokumen | Bagian | Perubahan | Status |
-|---|---|---|---|
-| ADR-005 | header + §4, §5, §6, §7, §8, §12, §13, §16, §17 (pause: §6 "Apa yang dihentikan `paused`", §8 breaker) | catatan "Diubah oleh ADR-006" di awal tiap bagian terdampak | ✅ dalam PR ini |
-| `architecture/high-level-design.md` | §1, §4, §5, §6, §8, §14, Lampiran | diselaraskan (v2.1.0) | ✅ dalam PR ini |
-| `requirement/requirements.md` | §5 "Admission formula", alur §6; BR-13a, BR-22, §5 "Degradasi dependensi" / "TTL saat pause" | formula baru; "event grant" → `nowServing ≥ ticket_no`; pause ditandai **dihapus** (baris dipertahankan, dicoret) | ✅ dalam PR ini |
-| `api/rusuh-booking-openapi.yaml` | — | **diarsipkan** ke `api/archive/` (tidak dipelihara lagi); sumber kebenaran API = Apidog + api-contracts | ✅ dalam PR ini |
-| `api/api-contracts.md` | §3.1–§3.5, §7 (`error_code`), Appendix A, tabel FR | v2.7.0, selaras dengan Apidog | ✅ dalam PR ini |
-| `requirement/implementation-plan.md` | §3.1 (`pkg/rediskeys`: hapus `regrant`, `slots:open`, `sse-grant`; `ctl:leader`/`ctl:epoch`/`qpersist` ditunda), §5.6 / §10.5 / §13.2 (DECR + advance Lua + PUBLISH dihapus), §7.2 (bypass dihapus; join tidak menunggu, §8.14), §9.2 / §9.7 (lease, drain qpersist: ditunda), §7.4 (`poll_tiers`), §8 (sse-server tanpa peta token), §9.6 (tick baru), §14.1 (Lua §3.4), §14.2 (`hold_booking.lua` tanpa penghitung slot), §18 (kepemilikan) | catatan amandemen di header; rewrite per bagian menyusul saat implementasi | ⚠️ header saja |
-| `api/rusuh-booking-apidog.json` | seluruh respons | **sumber kebenaran**: envelope standar (`error_code` pada error), skema event SSE (`itemSchema`), semua contoh tervalidasi terhadap skemanya | ✅ dalam PR ini |
-| migrasi | `bookings` | `UNIQUE (event_id, queue_token)` + indeks parsial status aktif | ⏳ build step 2 |
-| `be-rusuh-war-ticketing/docs/04-queue/` | semua | rencana per endpoint | ✅ |
-| ADR-005 (semua penyebutan `SOLD_OUT`, `sold_out_at`, `SOLD_OUT_HOLD_SECONDS` untuk state antrian), implementation-plan, api-contracts, Apidog | status `FULL_BOOKED` | §8.10 | ✅ (api-contracts v2.10.0) |
-| ADR-005 §12, §17 #12, konfigurasi; api-contracts §3.1, §4, §9, Appendix A; implementation-plan `pkg/grantauth` | pengikatan device | §8.9: tanpa rebind | ✅ (api-contracts v2.9.0) |
-
----
-
-## 8. Keputusan Lebih Kecil
-
-| # | Keputusan | Catatan |
-|---|---|---|
-| 8.1 | **CAPTCHA: Cloudflare Turnstile** (mode invisible) di balik port `Captcha` + adapter mock | Fail-open tetap (ADR-005 §6). Turnstile memberi lulus/gagal, bukan skor. Kuota 300k `siteverify` / ~60 detik tetap terbuka (ADR-005 §17 #8). Token sekali pakai dan berumur pendek: klien memperbarui bila hampir kedaluwarsa |
-| 8.2 | **`SALE_WINDOW_SECONDS` = 21600** (6 jam) untuk POC | Nilai produksi tetap pada pemilik tender (ADR-005 §17 #10) |
-| 8.4 | **Customer idle / pergi:** aturan terkunci dipertahankan (requirements §5 "Queue session") | Tanpa eviksi saat menunggu. Ditolak: eviksi heartbeat, check-in dekat depan, jendela klaim pendek, over-admission |
-| 8.5 | **`/queue/serving`:** tanpa query string (satu entri CDN), TTL CloudFront 1 detik, respons menambah `poll_tiers` | Server tetap pemilik tabel interval; klien memilih barisnya. Menyelesaikan konflik kontrak di Konteks #6 |
-| 8.6 | **`/queue/me` lag replika:** cek ulang sekali di writer bila tanpa baris dan `ticket_no ≤ now_serving` | §2.4 |
-| 8.7 | **Koneksi SSE per task:** keluaran load test, bukan keputusan sekarang | Hasil dicatat di ADR-005 §17 #4 |
-| 8.9 | **Token antrian hanya berlaku bagi pemiliknya, tanpa rebind** (menggantikan "Toleransi" di ADR-005 §12). Token **tamu** hanya berlaku dari perangkat yang menerimanya: `HMAC(DEVICE_PEPPER, X-Device-Id)` harus sama dengan `device_hash`. Token **akun** hanya berlaku bagi akun yang sama (`account_id` = akun Bearer), dari perangkat mana pun. Tidak cocok → `401 DEVICE_MISMATCH` (tamu) / `401 UNAUTHORIZED` (akun lain); di join cookie `queue_token` dihapus (⚠️ sejak §8.20 tidak ada cookie lagi; klien menghapus tokennya sendiri). Berlaku untuk join, `/queue/me` dan semua endpoint ber-grant. `MAX_DEVICE_REBINDS`, field `rebinds` dan metrik `DeviceRebindRate` **dihapus**; gantinya metrik `DeviceMismatch` | Rebind satu kali menambah penghitung, CAS dan aturan "percobaan ketiga" yang harus dijaga di tiga service, untuk kasus yang jarang (tamu menghapus data situs). **Konsekuensi diterima:** tamu yang menghapus data situs, ganti browser atau install ulang aplikasi kehilangan tempatnya dan mulai lagi dari belakang. Customer login tidak terkena: akunnya yang mengikat. Server tidak memvalidasi format `X-Device-Id`; kekuatan pengikatan bergantung pada klien membuat nilai acak 128 bit |
-| 8.10 | **Status antrian `SOLD_OUT` diganti `FULL_BOOKED`.** `queue:{ev}:state` ∈ `SCHEDULED \| OPEN \| FULL_BOOKED \| CLOSED`; `sold_out_at` → `full_booked_at`, `soldOutAt` → `fullBookedAt`, `SOLD_OUT_HOLD_SECONDS` → `FULL_BOOKED_HOLD_SECONDS`, error join 409 `SOLD_OUT` → `FULL_BOOKED`, `rediskeys.SoldOutAt` → `FullBookedAt`. **Tetap:** `CLOSED` (satu-satunya keadaan terminal), event SSE `sold-out` (sale selesai, klien wajib `close()`), `SALE_CLOSED` (410) | "Sold out" terdengar final padahal state ini reversibel (kursi dari booking kedaluwarsa kembali); event `sold-out` yang final memakai kata yang sama, sehingga klien menutup stream pada state yang salah. `FULL_BOOKED` = semua kursi sedang di-hold. **Ditolak:** mengganti `CLOSED` menjadi `SOLD_OUT` — memindahkan makna string lama ke keadaan terminal (klien lama diam-diam salah), dan `CLOSED` mungkin kelak berarti sale berakhir bukan karena habis. `status: SOLD_OUT` pada halaman utama (FR-03c, sumbu stok) belum diubah; usulan: ganti bersama FR-03c |
-| 8.11 | ⚠️ **Dicabut oleh §8.14 (9 November 2026); bagian salinan grant ke `token:{qt}` tetap berlaku.** **Langsung masuk tanpa ruang tunggu bagi semua yang muat** (8 November 2026, memperluas §4.1). Tiap kali Lua membaca hitungan, ia menulis `free_slots = max(0, deficit − (to − now_serving lama))` dan `free_slots_at` (epoch detik) ke `queue:{ev}`, atomik bersama `now_serving`, **juga saat `SCHEDULED`** (hanya dua field itu), sehingga saat T0 nilainya sudah `min(MAX, ceil(stock / 3))`. Join menunggu grant ≤ 1 detik bila `free_slots_at` paling lama `JOIN_FREE_SLOTS_MAX_AGE_SECONDS` (2) dan `ticket_no ≤ now_serving + min(free_slots, JOIN_DIRECT_MAX)` (default 500); selain itu langsung menjawab antre. Join menunggu dengan membaca `token:{qt}` di **Redis**: saat FINISH, ctl menyalin `grant_token`, `booking_id`, `booking_expires_at` ke hash itu (setelah `HSET grant`, sebelum `ZREM`, hanya bila hash masih ada) | Tujuan: batch pertama saat penjualan dibuka (hingga `MAX_CONCURRENT_SLOTS` orang) langsung ke halaman tiket, bukan hanya nomor 1. **Tetap satu penulis grant**: join hanya membaca. Ditolak: join memberi grant sendiri untuk batch pertama (penulis grant kedua, ADR-006 §4.1). `free_slots` setengah detik usang hanya membuat sebagian orang lewat ruang tunggu, atau menunggu 1 detik lalu antre, tanpa grant ganda. ctl mati atau COUNT gagal → `free_slots_at` menua → join tidak menunggu. `JOIN_DIRECT_MAX` membatasi Lambda yang tertahan saat T0 (batas konkurensi Lambda); disetel dari load test. Bentuk respons tidak berubah (kontrak v2.11.0) |
-| 8.12 | **Lebih sedikit key Redis** (8 November 2026). (a) `queue:{ev}:state`, `queue:{ev}:issued` dan `queue:{ev}:full_booked_at` menjadi **field** `state`, `issued`, `full_booked_at` pada hash `queue:{ev}`; `full_booked_at` disimpan sebagai **epoch detik** (join mengubahnya menjadi ISO 8601 pada respons 409, bentuk API tidak berubah); `issued` memakai `HINCRBY`. (b) `queue:{ev}:resume` dihapus (tidak ada pembaca sejak pause dihapus). (c) **`expiries:{ev}` dihapus**: sweep tenggat membaca Aurora lewat indeks parsial pada `booking_expires_at` untuk status aktif, lalu CAS `UPDATE` seperti sebelumnya; `ZADD`/rescore tidak ada lagi | Satu event = satu shard, jadi menggabung key tidak mengubah beban; yang berkurang adalah jumlah key, builder, KEYS Lua dan catatan sinkronisasi (snapshot join: 4 perintah menjadi 1 `HMGET`; `INCR` menjadi `HINCRBY`). `expiries` adalah salinan kedua dari tenggat di Aurora: menghapusnya menutup celah crash antara INSERT dan `ZADD` serta kasus "tenggat bergeser, skor basi", dan COUNT sudah membaca Aurora tiap tick (S1). Query sweep memakai satu `UPDATE … WHERE status = 'GRANTED' AND booking_expires_at <= now RETURNING`, atomik. **Dampak ke plan booking (belum diputuskan di sini):** `ZADD expiries` setelah `HELD` (impl-plan §5.3, HLD §5.3) dan sweep `HELD` / `AWAITING_PAYMENT` (HLD §5.4) memakai pola yang sama (query indeks parsial, tanpa `ZADD`); pemilik plan booking menyesuaikan. Biaya: satu query terindeks per tick untuk sweep (sebanding dengan COUNT), migrasi `0006` menambah indeks parsial tenggat |
-| 8.13 | **Isi dan umur `grant:{token}` ditetapkan** (8 November 2026). (a) Field: `event_id`, `booking_id`, `queue_token`, plus **tepat satu** dari `account_id` (customer login) atau `device_hash` (tamu). Field yang tidak berlaku **tidak ditulis**. Tidak ada field `token` (itu nama key-nya) dan tidak ada `rebinds` (§8.9: tanpa rebind). `account_id` dan `device_hash` disalin admission-ctl dari `token:{uuid}` (satu `HMGET` pada FINISH); klien tidak pernah menyuplainya. (b) **TTL = `GRANT_TOKEN_TTL_SECONDS` (1080) dihitung dari `granted_at`**, bukan dari `booking_expires_at` (300): `pkg/grantauth` memverifikasinya pada setiap panggilan booking dan pembayaran, sehingga hash yang mati pada detik ke-300 memutus customer yang sudah memegang kursi di tengah pembayaran (`401 GRANT_TOKEN_INVALID`). Perjalanan terpanjang 930 detik. (c) `LAPSED` tetap `DEL grant:{token}`; bila ctl mati setelah `UPDATE` dan sebelum `DEL`, hash hidup sampai TTL-nya, dan penolakan datang dari validasi status booking (bukan lubang akses, lihat api-contracts butir 48) | Menutup dua celah: ADR-005 §6/§12 dan rencana §9.5 menyebut field tanpa `booking_id`, sedangkan booking memerlukannya, dan spesifikasi admission-ctl sempat menulis TTL 300 detik. `device_hash` dan `account_id` saling meniadakan sehingga `DEVICE_MISMATCH` hanya berlaku bagi tamu |
-| 8.14 | **Tanpa langsung-masuk (straight-in): join tidak menunggu dan tidak pernah menjawab `granted`** (9 November 2026; mencabut §8.11 dan tunggu-1-detik FR-05 di §4.1). Join selalu menjawab `queued` atau `rejoined` seketika; customer masuk lewat tick berikutnya (≤ 500 ms) dan tahu dari broadcast + `/me`. **Dihapus:** respons `granted: true` pada join; field `free_slots` dan `free_slots_at` pada `queue:{ev}` dan tulisannya di Lua (cabang `SCHEDULED` kembali tidak menulis apa pun; ctl **tetap** men-tick event `SCHEDULED` karena penemuan event berjalan tiap 30 detik dan event harus sudah dikenal saat dibuka); konfigurasi `JOIN_GRANT_WAIT_MS`, `JOIN_DIRECT_MAX`, `JOIN_FREE_SLOTS_MAX_AGE_SECONDS`. **Tetap:** salinan `grant_token`, `booking_id`, `booking_expires_at` ke `token:{qt}` oleh FINISH (dibaca `/me` agar customer yang menunggu tidak menyentuh Aurora); status `DIRECT` pada halaman utama ("Beli Tiket") hanyalah label tombol, tombolnya tetap memanggil join | Tunggu itu menahan satu Lambda hingga 1 detik per pendatang (hingga 500 sekaligus saat T0) dan menambah tiga konfigurasi, dua field Redis, penulisan tambahan di tiap tick, dan satu cabang respons yang harus ditangani klien, demi menghemat sekitar satu tick (≤ 500 ms) ruang tunggu. Tanpa itu, join murni baca-tulis Redis dengan latensi tetap, dan hanya ada satu jalur ke grant (stream/`/me`). **Dampak ke requirement (diputuskan, §10 #8):** FR-05 "Jika tidak ada antrian → langsung ke Detail Ticket Page" dipenuhi tanpa halaman antre yang terasa: bila ada tempat kosong, klien membuka stream dan menerima giliran dalam satu tick, lalu memanggil `/me` dan pindah ke Detail Ticket; layar antre tidak perlu ditampilkan sebelum pesan stream pertama. **Konsekuensi diterima:** pendatang pertama saat T0 menunggu ≤ ~0,5–1 detik lebih lama daripada rancangan §8.11, dan ada satu panggilan `/me` tambahan. Bentuk respons lain tidak berubah (kontrak v2.12.0) |
-| 8.15 | **E-tiket ke email pembeli; `holder_email` dihapus** (10 November 2026; mengubah FR-26 dan ADR-005 Bagian 12 "`contact_email`, `holder_email`, dan penerimaan T&C"). `POST /bookings` tidak lagi menerima `tickets[].holder_email`; seluruh e-tiket satu booking dikirim ke `contact_email`. Tiap tiket tetap memuat NIK pemegangnya (FR-27, ditampilkan tersamar) dan dapat dibuka lewat `eticket_url` di Success Page. Email `booking.expired` dan pemberitahuan kegagalan pembayaran juga hanya ke `contact_email`. Halaman pilih tiket (`GET /events/{event_id}/tickets`) mengembalikan `account {email, nik_masked}` milik customer login untuk mengisi form lebih dulu; tamu `null`. Kolom `booking_items.holder_email` dan `tickets.holder_email` dihapus/diisi `contact_email` pada build `POST /bookings` (05-booking B4) | Satu alamat per booking: form lebih sederhana (satu email), pembeli yang membayar menerima semua tiket dan meneruskannya. NIK tetap mengikat kursi (BR-02), jadi email tidak menentukan siapa yang boleh masuk. Ditolak: email per kursi (FR-26 lama) — beban input dan validasi per kursi untuk manfaat yang sudah dicakup tautan e-tiket |
-| 8.16 | **`terms_version` dihapus dari `POST /bookings`** (10 November 2026; mengubah ADR-005 Bagian 12 "penerimaan T&C"). Booking tidak lagi meminta atau mencatat versi syarat; `bookings.terms_version`, `bookings.terms_accepted_at`, config `TERMS_VERSION` dan error `TERMS_NOT_ACCEPTED` dihapus (migrasi 0009 menghapus constraint `bookings_terms_required` dan kedua kolom). Persetujuan PDP dan syarat dicatat saat registrasi (`consent_records`, immutable) | Catatan persetujuan yang berarti hukum ada di registrasi; salinan per booking tidak menambah bukti. Pembeli **tamu** tidak melewati registrasi, dan itu diterima: tamu tidak menyimpan NIK siapa pun (tidak ada Daftar NIK Teman; NIK kursi hanya disimpan sebagai hash di booking), sehingga tidak ada persetujuan pemrosesan data yang perlu dicatat |
-| 8.17 | **Grant milik akun login wajib disertai `Authorization: Bearer`** (10 November 2026; menjalankan "konjungsi kedua" ADR-005 Bagian 12, mengubah api-contracts §4 yang sebelumnya menyatakan `Authorization` tidak dikirim). Pada semua endpoint ber-grant (booking dan pembayaran) `pkg/grantauth` memeriksa, sesudah grant dan perangkat: grant punya `account_id` → `Authorization` wajib, token harus sah dan `sub` = `account_id` grant. Hilang atau akun lain → `401 UNAUTHORIZED`; kedaluwarsa → `401 TOKEN_EXPIRED`; tidak sah → `401 TOKEN_INVALID`. Grant tamu (`device_hash`) tidak berubah dan mengabaikan `Authorization`. `bookings.account_id` tetap berasal dari grant, bukan dari header | Grant yang bocor atau disalin tidak cukup untuk membeli atas nama akun; sesi hanya memeriksa, sehingga sesi yang mati menjadi error yang terlihat (klien me-refresh dan mengulang) dan bukan atribusi salah seperti pada v2.3. Biaya: service booking dan pembayaran memegang `JWT_SECRET` untuk memverifikasi access token, sama seperti queue |
-| 8.18 | **`FULL_BOOKED` menerima pendatang baru; halaman utama hanya mengirim `queue_state`** (11 November 2026; mengubah ADR-005 Bagian 5 "Dua sumbu, dua field" dan keputusan join 6 November). Join tidak lagi menolak dengan `409 FULL_BOOKED`: saat semua kursi di-hold, customer baru tetap mendapat nomor dan menunggu kursi yang kembali, sama seperti yang sudah mengantri; `QUEUE_FULL` tetap membatasi panjang antrian. `GET /events` dan `GET /events/{id}` kini mengirim **satu** sumbu, `queue_state` ∈ `SCHEDULED \| OPEN \| FULL_QUEUE \| FULL_BOOKED \| CLOSED` (urutan penurunan sama dengan gerbang join: `CLOSED`, `FULL_BOOKED`, `FULL_QUEUE`, `OPEN`), dan `display` hanya `{enabled}` (true untuk `OPEN` dan `FULL_BOOKED`). Dihapus dari halaman utama: `status` (`AVAILABLE`/`SELLING_OUT_FAST`/`SOLD_OUT`), `queue_depth`, `queue_capacity`, `min_price`, `max_price`, `display.action`, `display.label_key`, `display.badge_key`, dan nilai `DIRECT`. `data.queue_state` pada error join memakai nama yang sama (`SCHEDULED`, `FULL_QUEUE`). Daftar event tanpa parameter `filter` (halaman dipotong di database, Redis dibaca hanya untuk event di halaman itu), diurutkan tanggal terbaru dulu dan memuat event lampau | Customer yang menunggu kursi kembali tidak punya alasan ditolak: pendatang baru dan yang lama sama-sama dilayani menurut nomor, dan penolakan hanya mengusir mereka ke antrian lain. `DIRECT` bergantung pada `free_slots` yang dicabut §8.14. Satu sumbu cukup: frontend memilih teks dari `queue_state`, dan yang perlu diputuskan server hanya apakah tombol aktif. **Ditolak:** tetap mengirim `status` stok di daftar — stok per kategori sudah ada di detail event, dan `SOLD_OUT` pada daftar memberi arti yang sama dengan `FULL_BOOKED`. Perubahan di `requirements.md` FR-03a..e dan api-contracts v2.22.0 |
-| 8.19 | **Rekonsiliasi stok: koreksi "kursi hilang" hanya bila penghitung Redis tidak bergerak; `PENDING_CANCELLATION` ikut menghitung kursi** (11 November 2026; mengubah ADR-005 Bagian 6 "Rekonsiliasi stok"). (a) Status yang memegang kursi untuk stok yang diharapkan: `HELD`, `AWAITING_PAYMENT`, **`PENDING_CANCELLATION`** dan `CONFIRMED` (ADR-005 hanya menyebut tiga dan melewatkan masa tenggang 30 detik). (b) Aturan "dua tick berturut-turut" tidak cukup untuk koreksi ke atas: hold yang sedang berjalan menurunkan Redis **sebelum** Aurora commit, dan pada puncak sale selalu ada hold berjalan (sekitar laju × lama hold, mis. 15 sekaligus), sehingga selisih −15, −14, −15 adalah penjualan itu sendiri; mengembalikannya akan menjual kursi dua kali (booking tidak punya cek kapasitas di Aurora). Yang membedakan keduanya: hold yang berjalan **menggerakkan penghitung Redis**. Kursi dikembalikan hanya bila penghitung bernilai **sama persis** pada dua tick berturut-turut dan pada kedua sisi pembacaan Aurora yang baru, sebesar selisih **terkecil**. Di bawah beban tetap, kebocoran sungguhan diperbaiki saat sale tenang; lebih lambat tetapi aman (jual kurang, tidak pernah jual lebih). (c) Selisih ke arah sebaliknya (Redis di atas yang diharapkan) tidak mungkin berasal dari penjualan berjalan: cukup dua tick, dan koreksinya mengurangi kursi. Kunci stok yang hilang atau tidak terbaca dipulihkan segera (`SET NX`; nilai non-integer ditimpa); kategori diambil dari Aurora, bukan dari kunci Redis yang ada; kunci `nik:used` dipulihkan hanya bila hilang pada dua run berturut-turut dan klaimnya masih ada, dan kunci tanpa klaim tidak pernah dihapus | Rincian di `be-rusuh-war-ticketing/docs/05-booking/04-stock-reconciliation.md`; tidak ada perubahan kontrak. **Ditolak:** koreksi setelah dua tick tanpa syarat penghitung diam (menjual lebih saat hold berjalan terus-menerus), dan menghapus kunci `nik:used` tanpa klaim (bisa hold yang belum commit) |
-| 8.20 | **Cookie `queue_token` dihapus; token antrian hanya lewat header `X-Queue-Token`** (13 November 2026; mengubah ADR-005 §1 "Autentikasi stream", Bagian 12 dan §8.9). `POST …/queue/join` dan `GET …/queue/me` **tidak** mengirim `Set-Cookie` (tidak saat sukses, tidak saat `401` token milik orang lain, tidak saat nisan `CONFIRMED`, tidak saat pemulihan lewat `Authorization`) dan **tidak membaca** cookie. Web dan mobile menyimpan `data.queue_token` dari body join **per event** dan mengirimnya sebagai `X-Queue-Token`. Stream SSE di web memakai klien SSE berbasis `fetch` (bisa menyetel header), atau polling `GET …/queue/serving`. Klien menghapus tokennya sendiri pada `CONFIRMED` dan pada `401` token milik orang lain. Env `COOKIE_DOMAIN` tidak lagi dipakai service queue (service user tetap memakainya untuk `access_token`). sse-server tidak diubah. Kontrak v2.28.0 | Cookie menimbulkan bug saat customer join antrian **event lain**. Satu pembawa token untuk web dan mobile menghapus perbedaan perilaku keduanya, dan klien yang menyimpan token per `event_id` tidak pernah mengirim token event lain. **Konsekuensi diterima:** (1) web tidak bisa lagi memakai `EventSource` bawaan untuk stream; (2) customer login yang pulih di perangkat baru lewat `Authorization` saja tidak menerima `queue_token` dari `/me`, jadi untuk stream ia memanggil join (BR-07 mengembalikan `queue_token` yang sama) atau polling `/queue/serving`; (3) token di penyimpanan web dapat dibaca JavaScript (tidak `HttpOnly`); dampaknya terbatas karena token hanya membuktikan posisi antrian, dan token tamu terikat `device_hash` (§8.9). **Ditolak:** mempertahankan cookie dengan `Path` per event (masih bug di lapangan) |
-| 8.21 | **Join tidak memulihkan tempat yang sudah berakhir** (13 November 2026; mencabut keputusan 5 backend 2026-11-09 "join menjawab `rejoined: true` dengan `state: LAPSED`"). Bila booking dari `queue_token` yang dibawa, atau dari `acct:{ev}:{account_id}`, sudah `LAPSED`, `EXPIRED`, `ABANDONED` atau `CONFIRMED`, join memberi **tempat baru di belakang**: `ticket_no` dan `queue_token` baru, `acct` dipindah ke token baru lewat compare-and-set. Tempat yang masih hidup (belum ada booking, `GRANTED`, `SELECTING`, `HELD`, `AWAITING_PAYMENT`, `PENDING_CANCELLATION`) tetap dipulihkan. `token:{uuid}` lama **tidak** dihapus: `/queue/me` dengan token itu tetap menjawab `EXPIRED` / `CONFIRMED`, dan sweep admission-ctl tidak berubah. Metrik baru `JoinAfterEnded`. Kontrak v2.29.0 | Bug: customer yang kembali setelah kedaluwarsa mendapat tiket lama dan tidak bisa antre lagi. ADR-005 BR-07 sudah menyatakan EXPIRED / LAPSED / ABANDONED / CONFIRMED "boleh antre lagi"; "tanpa kesempatan kedua" (ADR-005 Bagian 7) berarti nomor lama **tidak di-grant lagi**, dan itu tetap: tempat baru ada di belakang semua yang menunggu, jadi FCFS tidak dilanggar. Pemeriksaan di join (bukan menghapus token di sweep) dipilih karena join sudah membaca baris booking di titik itu (tanpa query tambahan), mencakup celah crash antara tulisan Aurora dan Redis, dan tidak menyentuh admission-ctl. **Konsekuensi diterima:** customer yang `LAPSED` boleh antre lagi (di belakang, tetap lewat CAPTCHA dan rate limit). **Ditolak:** menghapus `token:` saat SELECTING (merusak pemulihan §3.3 dan BR-07) |
-| 8.8 | **`GET /bookings/{id}/tickets` dihapus** (menggantikan ADR-005 §9 langkah 5). `GET /bookings/{id}` saat `PAID` mengembalikan `tickets[].eticket_url` yang sudah membawa `?t={eticket_token}` (`pkg/eticket.Mint`, token yang sama dengan email) | Isi endpoint itu sama dengan `tickets[]` di `GET /bookings/{id}`. Satu-satunya nilai tambahnya, akses QR bagi tamu bila email gagal (NFR-10), kini diberikan tautan bertoken di Success Page. Satu endpoint, satu usecase dan satu handler lebih sedikit. booking-service menjadi penerbit ketiga token e-tiket (bersama notification); verifikasi tetap di user-service |
-
----
-
-## 9. Cakupan POC dan Jalur Produksi
-
-POC membangun semua yang diminta tender dan requirements v1.1. Tiga mekanisme ADR-005 berikut
-**ditunda ke produksi**: semuanya soal ketersediaan pada beban 300.000 nyata, bukan soal kebenaran,
-dan desain POC sudah menyisakan tempat untuknya.
-
-| Ditunda | Di POC | Konsekuensi | Untuk menambahkannya |
-|---|---|---|---|
-| **Leader lease + standby** `admission-ctl` (`ctl:leader`, `ctl:epoch`, ADR-005 §11) | **1 task**. ECS mengganti task yang mati (~30–60 detik). Deployment `minimumHealthyPercent 0` / `maximumPercent 100` agar tidak pernah ada dua task | Antrian membeku hingga ~1 menit saat crash; tidak ada yang hilang (pending grant, §2). Deteksi NFR-14 (indikator stale 30 detik, `CtlHeartbeatAge`) tetap. **Deviasi:** NFR-14 menyebut leader lease sebagai pemulihan; di POC pemulihannya restart ECS | Lease + epoch sesuai ADR-005 §11. Pagar CAS `now_serving` (§3.3) dan CAS sweep sudah membuat 2 task aman |
-| **qpersist + `queue_entries` + rebuild dari Aurora** (ADR-005 §12) | Redis Multi-AZ saja. Join tidak `RPUSH qpersist` | Kehilangan Redis **total** menghilangkan posisi antrian. Kursi yang dibayar dan di-hold aman di Aurora | `RPUSH qpersist` di join, drain di ctl, job rebuild |
-| **Sharded pub/sub** (`SPUBLISH`/`SSUBSCRIBE`) | `PUBLISH` klasik di balik satu interface | Lalu lintas pub/sub lintas node pada fan-out sangat besar | Ganti adapter |
-
----
-
-## 10. Yang Masih Terbuka
+## Yang masih terbuka
 
 | # | Butir | Pemilik |
 |---|---|---|
-| 1 | Nilai `MAX_CONCURRENT_SLOTS` (ADR-005 §17 #5), dari load test terhadap batas Dukcapil dan payment | Tim |
-| 2 | Petunjuk "kemungkinan habis" (§6.4) dan pesan jujur 300.000 : 10.000 (ADR-005 §17 #3) | Pemilik tender |
-| 3 | Ramp slow-start saat T0 (batas grant baru per tick agar hilir yang masih dingin tidak dibanjiri) | Tim |
-| 4 | Pengacakan pre-queue saat T0 (praktik umum industri; **mengubah NFR-05** "FCFS") | Pemilik tender |
-| 5 | Jitter reconnect SSE (`retry:` acak + backoff klien) setelah task mati | Tim |
-| 6 | Metrik antrian: tingkat no-show, persentil waktu-hingga-grant, `avg_basket`, `conversion`, rasio celah | Tim |
-| 7 | Pembagi 3 vs rata-rata keranjang (§3.5), setelah data `avg_basket` tersedia | Tim |
-| 8 | ~~Wording FR-05~~ **Diputuskan (9 November 2026, Erma):** FR-05 tetap, customer langsung masuk ke halaman tiket tetapi sempat berada di antrian sekitar satu tick (≤ 500 ms); wording `requirements.md` tidak berubah | Selesai |
+| 1 | Nilai `MAX_CONCURRENT_SLOTS` dari load test terhadap batas Dukcapil dan payment gateway | Tim |
+| 2 | Petunjuk "tiket kemungkinan habis sebelum giliran Anda" di ruang tunggu | Pemilik tender |
+| 3 | Pembatasan laju giliran saat sale baru dibuka | Tim |
+| 4 | Pengacakan pra-antrian saat sale dibuka (mengubah FCFS, NFR-05) | Pemilik tender |
 
 ---
 
 ## Referensi
 
-- ADR-005 — Keputusan Arsitektur Final *(diamandemen oleh dokumen ini)*
-- `architecture/high-level-design.md` v2.1.0
-- `be-rusuh-war-ticketing/docs/04-queue/` — rencana per endpoint, terutama `05-admission-controller.md` (§3.5 `rate_per_min`) dan `README.md` §8 (estimasi waktu tunggu)
-- `requirement/requirements.md` v1.1 — FR-05, FR-08, FR-09, FR-13, NFR-02, NFR-05, BR-03, §5
+- ADR-005 — arsitektur yang diamandemen
+- `api/api-contracts.md` §2, §3 — perilaku event dan antrian
+- `be-rusuh-war-ticketing/docs/04-queue/` — rencana implementasi per endpoint
+- `requirement/requirements.md` — FR-03a–e, FR-05, FR-08, FR-09, NFR-02, NFR-05

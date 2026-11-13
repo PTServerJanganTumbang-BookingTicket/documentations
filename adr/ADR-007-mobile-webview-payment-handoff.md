@@ -1,6 +1,6 @@
 # ADR-007: Serah-Terima Pembayaran dari Aplikasi Mobile ke WebView
 
-**Status**: Proposed — menunggu review tim
+**Status**: Accepted (13 November 2026)
 **Tanggal**: 12 November 2026
 **Decider**: SJT Team
 **Amends**: ADR-005 §12 "Empat kredensial, empat slot" (kredensial kelima: payment session); api-contracts §4.4, §5 (v2.25–v2.26)
