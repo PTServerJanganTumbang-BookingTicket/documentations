@@ -64,8 +64,6 @@ customer sees is what is true.
 
 ## 2. System Context
 
-### 2.1 Overview
-
 ```mermaid
 flowchart TB
     subgraph Customers
@@ -97,65 +95,7 @@ flowchart TB
     APP --> SES
 ```
 
-### 2.2 Services
-
 REST calls go through API Gateway to the Lambda services; the queue stream goes through the ALB to `sse-server`.
-
-```mermaid
-flowchart LR
-    subgraph Customers
-        WEB[Web · Next.js]
-        MOB[Mobile · Expo / React Native]
-    end
-
-    subgraph AWS["Rusuh Booking System (AWS)"]
-        subgraph REST["REST: API Gateway HTTP API"]
-            APIGW[API Gateway]
-            EV[events]
-            QU[queue]
-            BK[booking]
-            NV[nik-verify]
-            PA[payment-api]
-            US[user]
-        end
-        subgraph STREAM["Stream: Application Load Balancer"]
-            ALB[ALB]
-            SSE[sse-server · ECS]
-        end
-        subgraph WORKERS["Background"]
-            CTL[admission-ctl · ECS]
-            OP[outbox-publisher]
-            NO[notification]
-        end
-        R[(ElastiCache Redis)]
-        DB[(Aurora PostgreSQL)]
-        SQS[[SQS + DLQ]]
-        CW[CloudWatch<br/>dashboards · alarms]
-    end
-
-    DUK[Dukcapil API]
-    MID[Midtrans Core API<br/>VA · GoPay]
-    CAP[Cloudflare Turnstile]
-    SES[Amazon SES]
-
-    WEB & MOB --> APIGW
-    WEB & MOB -->|SSE| ALB
-    MOB -->|WebView: web payment page| WEB
-    APIGW --> EV & QU & BK & NV & PA & US
-    ALB --> SSE
-    QU -->|fail-open| CAP
-    BK -->|invoke| NV
-    NV -->|fail-closed| DUK
-    PA -->|charge · cancel · status| MID
-    MID -->|webhook| APIGW
-    CTL -->|pub/sub via Redis| SSE
-    CTL -->|invoke: overdue payments| PA
-    EV & QU & BK & NV & PA & US & CTL --> R
-    EV & QU & BK & NV & PA & US & CTL --> DB
-    OP & NO -->|lease · dedupe| R
-    DB -->|outbox rows| OP --> SQS --> NO --> SES
-    REST & STREAM & WORKERS -.-> CW
-```
 
 ---
 
